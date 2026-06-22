@@ -107,17 +107,22 @@ Output format (English-only JSON):
 主管家用一行发起完整审查，单一入口、内部原子完成审查执行与持久化，对外只暴露 verdict + reportPath + evidencePaths。调用方不感知内部分步，无需手动分别执行。
 
 ```bash
-# 一行发起审查，结果确认后直接生成报告
-PROMPT_FILE=$(mktemp /tmp/3rd-review-prompt-XXXXXX)
-echo "$PROMPT" > "$PROMPT_FILE"
-RESULT=$(bash packages/core/agenthub/harness/review-dispatch-adapter.sh review \
-  --prompt-file="$PROMPT_FILE" \
+# 步骤 A（前台，秒级）：准备 prompt + result 文件
+PROMPT_FILE=$(mktemp /tmp/3rd-review-prompt-XXXXXX); echo "$PROMPT" > "$PROMPT_FILE"
+RESULT_FILE=$(mktemp /tmp/3rd-review-result-XXXXXX.json)
+
+# 步骤 B（用 run_in_background:true 发起，必须只含这一条命令——
+#   禁止拼尾随命令、禁止用 RESULT=$(...) 捕获，否则会掩盖真实退出码，详见 SKILL.md 红旗自检 / execution-steps.md）：
+bash <path-to>/review-dispatch-adapter.sh review \
+  --prompt-file="$PROMPT_FILE" --result-file="$RESULT_FILE" \
   --checkpoint-id="<checkpoint-id>" --round="<round>" \
   --task-dir=<TASK_DIR> --workflow=<workflow-id> \
-  --reviewer-role="reviewer" --reviewer-runtime-id="<runtime-id>" --reviewer-provider="<provider>")
+  --reviewer-role="reviewer" --reviewer-runtime-id="<runtime-id>" --reviewer-provider="<provider>"
+
+# 步骤 C（命令退出唤起后，前台）：三条件校验通过后再从 RESULT_FILE 读裁决，最后清理 PROMPT_FILE
+VERDICT=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).verdict)" "$RESULT_FILE")
+REPORT_PATH=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).reportPath)" "$RESULT_FILE")
 rm -f "$PROMPT_FILE"
-VERDICT=$(echo "$RESULT" | node -e "const d=require('fs').readFileSync('/dev/stdin','utf8');console.log(JSON.parse(d).verdict)")
-REPORT_PATH=$(echo "$RESULT" | node -e "const d=require('fs').readFileSync('/dev/stdin','utf8');console.log(JSON.parse(d).reportPath)")
 ```
 
 - `review-dispatch-adapter.sh review` → 原子封装：exec（provider 命令 + AJV 校验）→ persist（落盘 + 报告）→ 输出 `{"verdict":"...","reportPath":"...","evidencePaths":[...]}` JSON

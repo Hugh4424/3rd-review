@@ -189,8 +189,8 @@ while :; do
 
   # pass 必带三字段校验（FR-GUARD-007）：reviewSnapshot / riskDisposition / worktreeInventory。
   # 缺任一即 fail-fast —— 一个空 pass 不得被当作通过（README/SKILL 的信任承诺由此兑现）。
-  # 客观字段（reviewSnapshot/worktreeInventory）standalone 不替 runner 补，runner 必须自带；
-  # 主观字段（riskDisposition）任何形态都不补（补=伪造）。
+  # standalone 路径一律不补，runner 必须自带三字段（gated 平台路径才有条件补，区别见
+  # references/pass-evidence-contract.md）。riskDisposition 任何路径都不补（补=伪造）。
   if [ "$VERDICT_VAL" = "pass" ]; then
     MISSING_FIELDS="$(python3 -c "
 import json, sys
@@ -255,12 +255,14 @@ lines.append("")
 if findings:
     for f in findings:
         sev = f.get("severity", "")
-        issue = f.get("issue", "")
-        loc = f.get("file", "")
+        # Accept both finding shapes: {issue,file,line,recommendation} and {title,detail}.
+        issue = f.get("issue") or f.get("title", "")
+        loc = f.get("file") or f.get("location", "")
         line_no = f.get("line", "")
-        rec = f.get("recommendation", "")
+        rec = f.get("recommendation") or f.get("detail", "")
         # 三段式：位置 + 问题 + 建议
-        lines.append(f"- [{sev}] 位置: {loc}{(':'+str(line_no)) if line_no else ''} | 问题: {issue} | 建议: {rec}")
+        loc_str = f" 位置: {loc}{(':'+str(line_no)) if line_no else ''} |" if loc else ""
+        lines.append(f"- [{sev}]{loc_str} 问题: {issue} | 建议: {rec}")
 else:
     lines.append("（无 findings）")
 lines.append("")
@@ -279,7 +281,7 @@ if verdict != "pass":
     lines.append(f"降级理由：{downgrade_reason or '(未提供，需补充)'}")
     if blocking:
         for f in blocking:
-            lines.append(f"- 必须修复：{f.get('issue','')}")
+            lines.append(f"- 必须修复：{f.get('issue') or f.get('title','')}")
     else:
         lines.append("- 见上方 Findings")
 else:

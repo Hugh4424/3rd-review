@@ -6,7 +6,16 @@
 
 **Get a *second* AI to check your AI's work — so "looks good ✅" actually means something.**
 
+[![test](https://github.com/Hugh4424/3rd-review/actions/workflows/test.yml/badge.svg)](https://github.com/Hugh4424/3rd-review/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 [English](./README.md) · [简体中文](./README.zh-CN.md)
+
+<br>
+
+<img src="./assets/showcase-review.png" alt="3rd-review catching a command injection an AI author called 'looks fine'" width="680">
+
+<sub>A real run on [`examples/sample.diff`](./examples/sample.diff): code an AI author would wave through as "just tars a folder" — the independent reviewer caught a command injection and a path traversal in one pass.</sub>
 
 </div>
 
@@ -52,10 +61,14 @@ A *different* engine does the review — OpenAI's `codex`, Google's `gemini`, or
 **2. Point it at what you want reviewed.** `--input` is the file or diff, `--output-root` is where the report lands, `--review-runner` is who does the reviewing:
 
 ```bash
+# Smoke-test it on the bundled example (the command-injection diff from the screenshot):
 ./standalone.sh \
-  --input=my-change.diff \
+  --input=examples/sample.diff \
   --output-root=./reviews \
-  --review-runner="$PWD/examples/codex-runner.sh"
+  --review-runner="$PWD/examples/codex-runner.sh" \
+  --max-revise-rounds=1
+
+# …then point --input at your own file or diff.
 ```
 
 **3. Read the answer — it's the exit code:**
@@ -129,7 +142,7 @@ This tool is the scar tissue from running a real AI dev pipeline. A few bruises 
 
 **The router is a pure function.** [`scripts/route-review.mjs`](./scripts/route-review.mjs) reads a single data table ([`config/route-rules.json`](./config/route-rules.json)) and decides the review tier from content type + scope + risk keywords. Same input, same output, no hidden state — that's why it's easy to test and trust.
 
-**The runner contract.** A review runner is called as `<runner> --prompt-file=… --result-file=… --review-request-id=…` and must write a JSON verdict to `--result-file`: at minimum `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces the presence** of three evidence fields — `reviewSnapshot[]` (which files, with hashes), `riskDisposition[]` (per high-risk item: what was checked + why it's not blocking), and `worktreeInventory`. A pass missing any of them fails fast to escalation. Note what this does and doesn't do: it checks the fields are *present and well-formed* (e.g. `reviewSnapshot` is a non-empty array, `riskDisposition` is an array — empty is valid when there are no high-risk items); it does **not** judge whether the reviewer covered every risk correctly. And `riskDisposition` is never auto-filled — backfilling a subjective judgement would be forgery.
+**The runner contract.** A review runner is called as `<runner> --prompt-file=… --result-file=… --review-request-id=…` and must write a JSON verdict to `--result-file`: at minimum `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces the presence** of three evidence fields — `reviewSnapshot[]`, `riskDisposition[]`, and `worktreeInventory` — and fails fast to escalation if any is missing. It checks they're present and well-formed, not whether the reviewer covered every risk correctly; and `riskDisposition` is never auto-filled (backfilling a judgement would be forgery). Full spec — including the standalone-vs-platform backfill rules — in [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md).
 
 **The four non-negotiable rails** (no tier can bypass them): ≥80% coverage of changed lines each round; high-risk dimensions always get full review; a reduced-scope review that fails any rail falls back to full scope immediately; and the final verdict must always come from an independent context.
 

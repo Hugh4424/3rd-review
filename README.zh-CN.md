@@ -6,7 +6,16 @@
 
 **让另一个 AI 来查你的 AI 写的活——这样「没问题 ✅」才真的算数。**
 
+[![test](https://github.com/Hugh4424/3rd-review/actions/workflows/test.yml/badge.svg)](https://github.com/Hugh4424/3rd-review/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 [English](./README.md) · [简体中文](./README.zh-CN.md)
+
+<br>
+
+<img src="./assets/showcase-review.png" alt="3rd-review 抓出 AI 作者觉得「没问题」的命令注入" width="680">
+
+<sub>对 [`examples/sample.diff`](./examples/sample.diff) 的真实一次运行：一段 AI 作者会当成「不就是打个 tar 包」放过的代码——独立审查员一轮就抓出了命令注入和路径穿越。</sub>
 
 </div>
 
@@ -52,10 +61,14 @@
 **2. 把要审的东西指给它。** `--input` 是要审的文件或 diff，`--output-root` 是报告放哪，`--review-runner` 是谁来审：
 
 ```bash
+# 先拿仓库自带的示例冒个烟（就是截图里那个命令注入 diff）：
 ./standalone.sh \
-  --input=my-change.diff \
+  --input=examples/sample.diff \
   --output-root=./reviews \
-  --review-runner="$PWD/examples/codex-runner.sh"
+  --review-runner="$PWD/examples/codex-runner.sh" \
+  --max-revise-rounds=1
+
+# …然后把 --input 换成你自己的文件或 diff。
 ```
 
 **3. 看结果——就看退出码：**
@@ -129,7 +142,7 @@
 
 **路由器是个纯函数。** [`scripts/route-review.mjs`](./scripts/route-review.mjs) 读一张数据表（[`config/route-rules.json`](./config/route-rules.json)），按内容类型 + 改动量 + 风险关键词决定审查档位。同入同出、没有藏着的状态——所以好测、可信。
 
-**runner 契约。** 审查 runner 被这样调用：`<runner> --prompt-file=… --result-file=… --review-request-id=…`，必须往 `--result-file` 写一个 JSON 裁决，至少包含 `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`。裁决是 `pass` 时，standalone 会**强制要求**三个证据字段必须存在——`reviewSnapshot[]`（审了哪些文件，带哈希）、`riskDisposition[]`（每个高风险项：审了啥 + 为啥不阻断）、`worktreeInventory`。缺任一 → 这个 pass 直接 fail-fast 升级人工。注意它做什么、不做什么：它只校验字段*存在且格式合法*（比如 `reviewSnapshot` 是非空数组、`riskDisposition` 是数组——没有高风险项时空数组合法），它**不**判断审查员有没有把每个风险都覆盖对。另外 `riskDisposition` 绝不自动补——替主观判断回填等于伪造。
+**runner 契约。** 审查 runner 被这样调用：`<runner> --prompt-file=… --result-file=… --review-request-id=…`，必须往 `--result-file` 写一个 JSON 裁决，至少包含 `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`。裁决是 `pass` 时，standalone 会**强制要求**三个证据字段必须存在——`reviewSnapshot[]`、`riskDisposition[]`、`worktreeInventory`——缺任一就直接 fail-fast 升级人工。它只校验字段*存在且格式合法*，不判断审查员有没有把风险覆盖对；`riskDisposition` 绝不自动补（替主观判断回填等于伪造）。完整规范——含 standalone 与平台两路径的补填差异——见 [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md)。
 
 **四条不可谈判的硬护栏**（任何档位都绕不过）：每轮覆盖改动行 ≥80%；高风险维度永远全审；缩范围审查只要有一条护栏不达标就立即回退全量；最终裁决永远必须来自独立上下文。
 
