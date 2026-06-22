@@ -2,9 +2,9 @@
 
 # 🔍 3rd-review
 
-### Independent, cross-source code review that an AI agent can't fake its way past.
+### The review your AI can't rubber-stamp.
 
-*Claude reviewing Claude always passes. That pass is worthless. This fixes it.*
+**Get a *second* AI to check your AI's work — so "looks good ✅" actually means something.**
 
 [English](./README.md) · [简体中文](./README.zh-CN.md)
 
@@ -12,186 +12,156 @@
 
 ---
 
-## The problem in one sentence
+## ✨ The problem, in 10 seconds
 
-When an AI agent reviews its own work, it inherits its own blind spots — so it almost always says "looks good." A green checkmark from the same model that wrote the code is **theater, not a quality gate.**
+You ask an AI to write some code. Then you ask the *same* AI to review it.
 
-`3rd-review` makes review *independent by construction*: a **different** engine (e.g. `codex`, `gemini`) — or at minimum a fresh, context-isolated sub-agent — produces the verdict. The author never grades their own paper.
+> **You:** Review the code you just wrote.
+> **AI:** ✅ Looks good, no issues!
 
-> Real case from our logs: a change that the author had **already self-reviewed as `pass`** took a cross-source reviewer **6 rounds** to actually clear — findings went `5 → 2 → 1 → 1 → 1 → 0`, exposing a CI that failed *open*, a push path that bypassed the gate, and a schema that didn't even match. `verdict=pass` from a self-review meant *nothing*.
+Of course it does. It's grading its own homework — and it has the exact same blind spots it had when writing. That green checkmark is **theater.**
+
+`3rd-review` fixes this with one simple rule:
+
+> **The thing that writes the code is never the thing that approves it.**
+
+A *different* engine does the review — OpenAI's `codex`, Google's `gemini`, or at the very least a fresh AI session that can't see the original conversation. An independent second opinion, automatically, every time.
+
+**A true story from running this on our own pipeline:** an AI marked its own change `pass`. We ran it past an *independent* reviewer instead. It took **6 rounds** to genuinely pass — and along the way it caught a CI check that was secretly letting failures through, a shortcut that skipped the safety gate, and a data format that didn't even match. The original "pass" was worth nothing.
 
 ---
 
-## Why you'd want this
+## 🎯 What you get
 
-| You have… | Without 3rd-review | With 3rd-review |
+| Your situation | What usually happens | With 3rd-review |
 |---|---|---|
-| An agent that writes + reviews its own code | Self-pass, blind spots inherited | Verdict from an **independent** engine |
-| Big mechanical diffs | One reviewer reads everything, burns tokens | Heavy parts fan out to **sub-reviewers** |
-| Small doc tweaks | Full third-party review, overkill | Auto-downgrades to a cheap *isolated* same-source review |
-| A reviewer that keeps nitpicking forever | Endless revise loop | **Drift-aware** escalation to a human |
-| An agent that hand-writes a fake review JSON | Gate waves it through | **Tamper-evident** exec proof catches it |
+| AI writes *and* reviews its own work | It approves itself, blind spots and all | A **different** AI gives the verdict |
+| A huge, boring diff to review | One reviewer slogs through it all | The grunt work is **split across helpers** |
+| A tiny doc typo fix | Full heavyweight review, total overkill | Auto-switches to a quick, cheap check |
+| A reviewer that nitpicks forever | You're stuck in an endless loop | It notices the stalling and **calls a human** |
+| An AI that fakes a "pass" to look done | Nobody notices | Built-in checks **catch the fake** |
 
 ---
 
-## The core idea: review is a *cost gradient*, not a single hammer
+## 🚀 Quick start
 
-The biggest design insight — learned the hard way — is that **a sub-agent is not "stronger" review. It's *cheaper* review.** Independence is the floor; cost is the dial.
+`3rd-review` runs your code/diff past an independent reviewer and hands back a simple verdict: **pass**, **needs fixes**, or **needs a human**.
 
-So every review is routed to one of three tiers, picked automatically from content type, scope, and risk:
+**1. You need a "reviewer" — the AI that does the actual checking.** We ship a ready-made one that uses OpenAI's `codex`. (Just need `codex` and `python3` installed.)
 
-```
-        more independent / more expensive
-  ▲
-  │  R1  cross-source + sub-reviewers   ← large diffs, lots of mechanical reading
-  │      (external engine drives, sub-agents read the bulk in parallel)
-  │
-  │  R2  cross-source, single reviewer  ← medium code / plans / designs
-  │      (one external engine, e.g. codex)
-  │
-  │  R6  same-source clean sub-agent    ← docs-only, tiny changes, or no external CLI
-  ▼      (fresh isolated context — still independent, just same model)
-
-        cheaper / lighter
-```
-
-**Hard floor — never downgraded, no matter what:** anything touching `auth` / `migration` / `delete` keywords + real code diff + changes to critical process rules is *forced* to the heaviest tier on the first round. Risk only ever pushes routing **up**.
-
-The routing logic lives in a **pure function** (`scripts/route-review.mjs`) reading a **single data table** (`config/route-rules.json`) — same input, same output, no hidden host state. The thin SKILL.md shell never restates the thresholds, because prose that duplicates code always drifts out of sync with it.
-
----
-
-## Two ways to run it
-
-```
-                    ┌─────────────────────────────┐
-   bound to a       │  gated adapter (in-platform)│   verdict persisted to task dir,
-   live task?  yes ─►  review-dispatch-adapter.sh  │   checked by downstream gates
-                    └─────────────────────────────┘
-        │ no
-        ▼
-   ┌──────────────────────┐
-   │  standalone.sh        │   clean room: review any code/docs,
-   │  (off-platform)       │   no gate, no journal, exit-code contract
-   └──────────────────────┘
-```
-
-The **standalone** entrypoint is the one most people want — point it at a file or a diff and get an independent verdict back.
-
-> **Prerequisite (read this before your first run):** `standalone.sh` needs a *review runner* — the command that actually drives the reviewing engine. Inside the agenthub platform this is wired up automatically via `review-dispatch-adapter.sh`. In a plain GitHub checkout that adapter isn't shipped, so you **must** pass your own runner with `--review-runner`, otherwise the run escalates to a human on the spot.
->
-> **What a runner must output:** it receives `--prompt-file` / `--result-file` / `--review-request-id` and must write a JSON verdict to `--result-file`, at minimum `{"verdict": "pass" | "revise_required" | "escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces** the three evidence fields — `reviewSnapshot[]`, `riskDisposition[]`, `worktreeInventory` — and *fails the pass to escalation if any is missing.* A ready-to-use runner that wraps `codex` lives in [`examples/codex-runner.sh`](./examples/codex-runner.sh).
+**2. Point it at what you want reviewed.** `--input` is the file or diff, `--output-root` is where the report lands, `--review-runner` is who does the reviewing:
 
 ```bash
-# Standalone checkout: point at the example codex-backed runner (or your own).
 ./standalone.sh \
   --input=my-change.diff \
   --output-root=./reviews \
   --review-runner="$PWD/examples/codex-runner.sh"
-
-# Exit-code contract:
-#   0 = pass            2 = escalate_to_human
-#   1 = revise_required other = execution error
 ```
 
-Both entrypoints share **one** review strategy and **one** set of decision scripts. Only the environment differences (gate vs. no-gate, journal vs. no-journal) live in the two thin adapters. Note: `review-dispatch-adapter.sh` is the **in-platform** adapter used inside agenthub — it is not part of this standalone repo.
+**3. Read the answer — it's the exit code:**
+
+| Exit code | Meaning |
+|---|---|
+| `0` | ✅ **Pass** — independently approved |
+| `2` | 🙋 **Needs a human** — couldn't settle it (this is also what you get when fixes keep being needed and the rounds run out) |
+| other | ⚠️ Something errored |
+
+The full report — what was checked, what was found — lands at `./reviews/tasks/<id>/reviews/report.md`.
+
+> Under the hood there's also a `1` ("needs fixes") verdict, but `standalone.sh` doesn't stop there: when the reviewer asks for fixes, it loops and re-reviews, and only stops — with exit `2` — once a human is genuinely needed (by default after 3 rounds without resolution).
+
+> **Want a different reviewer** (Gemini, a local model, your own setup)? Copy [`examples/codex-runner.sh`](./examples/codex-runner.sh) and swap out the one line that calls `codex`. Any command that reads a prompt and returns a verdict works.
 
 ---
 
-## What makes the verdict trustworthy
+## 🛡️ Why you can actually trust the "pass"
 
-A `pass` is not the finish line, and it's not free to claim. Three things keep it honest:
+A green light is easy to fake. Three guardrails make this one mean something:
 
-**1. Independence is non-negotiable.** The final verdict *must* come from an isolated context. The main agent grading its own work is the exact failure this whole tool exists to prevent.
+- **The reviewer is never the author.** The final call always comes from a separate, independent AI. The whole point is that nobody approves their own work.
 
-**2. A `pass` must carry evidence.** Every `pass` ships three fields:
-- `reviewSnapshot[]` — `path / gitHead / mtime / hash` for every file reviewed (objective coverage proof).
-- `worktreeInventory` — `included / unrelated / excluded` paths (objective).
-- `riskDisposition[]` — for each high-risk item: `risk / checkedSource / decision / whyNotBlocking`. **Subjective** — the reviewer *must* produce it; backfilling a subjective judgement would be forgery, so nothing ever does.
+- **A "pass" has to show its receipts.** The reviewer can't just say "looks good" — it has to attach proof of *what* it checked: which files, which risky bits it looked at and why it decided they were fine. **No receipts → no pass.** (And it can't fake the judgement part — if it tries to leave that blank, the pass is rejected.)
 
-In **standalone** mode none of the three are backfilled: the runner must produce them, and a `pass` missing any of them fails fast to escalation. (Inside the agenthub platform the persistence layer *may* backfill the two *objective* fields from the verifier read-set / `git status` — but never `riskDisposition`.)
-
-**3. Tamper-evident execution proof.** Each genuine review run stamps an `_execNonce` + `reviewRecordHash` into an append-only ledger. The gate cross-checks them, and a consumed nonce can't be replayed. *(Honest about its own limits: in a single-process shared shell this is **tamper-evident, not tamper-proof** — a truly malicious agent with disk access could forge the ledger. Real anti-forgery needs process isolation. We don't pretend otherwise.)*
+- **Fakes don't slip through.** A hand-written "pass" with no receipts is rejected outright. And in the full platform setup, every real review leaves a tamper-evident fingerprint that a faked one won't have. *(Honest about the limits: the standalone version leans on the independent reviewer plus the evidence-receipts rule above; the cryptographic fingerprint lives in the platform's gated path. And even that isn't bulletproof against a truly malicious program with full disk access — that needs stronger isolation. This stops accidents and lazy fakes, not a determined attacker.)*
 
 ---
 
-## Hard rails that no routing tier can bypass
+## 🧠 The clever bit: review as a dial, not a hammer
 
-1. **Minimum regression coverage** — every round covers ≥80% of changed lines in the phase.
-2. **High-risk dimensions get full review** — never sampled, never downgraded.
-3. **Narrow scope fails to full scope** — if any rail isn't met under a reduced-scope review, fall back to full scope *immediately*.
-4. **Independence guarantee** — final verdict must come from an independent context. No self-review, ever.
+Not every change deserves the same scrutiny. A one-word typo and a database migration shouldn't get the same review — that's either overkill or dangerous.
 
----
+So 3rd-review **automatically picks how hard to review**, based on what changed:
 
-## The escalation problem nobody warns you about
+```
+   harder / more thorough / costs more
+        ▲
+        │   Big code change   →  independent AI + helpers split the work
+        │   Medium change     →  one independent AI reviews it
+        │   Tiny / docs only  →  a quick, cheap isolated check
+        ▼
+   lighter / faster / cheaper
+```
 
-We didn't cap review rounds with a fixed number, and we learned *why* the hard way.
+**The one rule that never bends:** anything touching login, data migrations, or deletions gets the **heaviest** review, no matter how small it looks. Risk only ever makes the review *stronger*, never weaker.
 
-Naïve circuit-breakers fail to **target drift**: when an agent's blocking finding hops domain every round — compile error → path → scope → provenance → contract → schema — a "same blocking finding repeated N times" breaker *never trips*. The salami-slicing revise loop slips right through the design gap.
-
-> Measured: one checkpoint ran **13 rounds, 0 passes, ~80 minutes burned.** And a too-eager downgrade rule that re-escalated to the most expensive tier the moment a cheap round found ≥1 blocking finding caused a strict **R6 ↔ R1 sawtooth — 46% of rounds still ran the most expensive mode.**
-
-So escalation is **drift-aware**: it triggers on a repeated *unresolved* finding *accumulating toward a threshold*, recognizes salami-slicing where the bar moves every round, and degrades by **finding count + severity** — not by a fixed cap or a keyword allow/deny list. *Total cost = cost-per-round × rounds; runaway round-count burns more than an expensive single round, so fix the loop before you optimize the round.*
-
----
-
-## Things we got wrong first (so you don't have to)
-
-This tool is the residue of a lot of bruises. A few that shaped the design:
-
-- **"Off-platform review kept silently picking the cheap same-source tier."** Root cause was three-layered: the shell conflated *"which entrypoint"* with *"which review method"* (they're **orthogonal**); the agent fed a *prose description* instead of a real diff (correctly classified as a tiny text record → cheap tier); and the environment probe never actually checked whether `codex` was installed. **Lesson baked in: always probe `command -v codex` first, and always feed a *real diff* — never "please review my XYZ plan" in natural language.**
-
-- **The expensive part of a review wasn't the finding — it was the re-reading.** We profiled one real `codex` pass round: **343s, 1.25M tokens, 44 commands.** Of 24 file reads, **9 were re-reading fixed protocol files that never change within a task** (CLAUDE.md, contracts, schemas — 220–260 lines each, re-read every round). A zero-finding `pass` round cost the same as a `revise` round, because protocol re-reading was decoupled from whether there was anything to find. **Lesson: judge ROI by profiling the actual session, never by gut feel.**
-
-- **A "stronger means more sub-agents" instinct.** Wrong. Hand all context to one external reviewer and the sub-agents save nothing. The win only lands when each sub-agent reads its *own* assigned files and returns a summary.
+> 💡 The insight that took us longest to learn: splitting work across helper AIs isn't about making the review *stronger* — it's about making it *cheaper* on big jobs. Independence is the floor you never give up; cost is the dial you turn.
 
 ---
 
-## Verifying
+## 🩹 Hard lessons baked in (so you skip the pain)
+
+This tool is the scar tissue from running a real AI dev pipeline. A few bruises that shaped it:
+
+- **The endless-nitpick trap.** One review got stuck for **13 rounds and ~80 minutes** without ever passing — the AI just kept finding a *new* small problem each round (first a typo, then a path, then a naming thing...). A naive "stop after the same complaint 3 times" rule never triggers, because the complaint keeps *changing*. So 3rd-review watches for this stalling pattern and hands off to a human instead of looping forever.
+
+- **The slow review was slow for a dumb reason.** We measured one review: **343 seconds, over a million tokens.** Turned out most of it wasn't *reviewing* — it was the AI re-reading the same unchanging rulebook files every single round. Lesson: measure before you optimize; the bottleneck is rarely where you guess.
+
+- **"Just feed it a description" doesn't work.** If you hand the reviewer a summary like *"please review my plan to do X"* instead of the actual code diff, it quietly does a shallow check. Always give it the **real diff**.
+
+---
+
+## ⚙️ For the engineers
+
+<details>
+<summary>Click to expand: the technical details</summary>
+
+**Two entrypoints, one brain.** `standalone.sh` is the off-platform one (what most people use — clean room, no gate, exit-code contract). `review-dispatch-adapter.sh` is the in-platform adapter used inside the agenthub system (persists verdicts, checked by downstream gates) — *not* shipped in this repo. Both share the same routing logic and decision scripts.
+
+**The router is a pure function.** [`scripts/route-review.mjs`](./scripts/route-review.mjs) reads a single data table ([`config/route-rules.json`](./config/route-rules.json)) and decides the review tier from content type + scope + risk keywords. Same input, same output, no hidden state — that's why it's easy to test and trust.
+
+**The runner contract.** A review runner is called as `<runner> --prompt-file=… --result-file=… --review-request-id=…` and must write a JSON verdict to `--result-file`: at minimum `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces the presence** of three evidence fields — `reviewSnapshot[]` (which files, with hashes), `riskDisposition[]` (per high-risk item: what was checked + why it's not blocking), and `worktreeInventory`. A pass missing any of them fails fast to escalation. Note what this does and doesn't do: it checks the fields are *present and well-formed* (e.g. `reviewSnapshot` is a non-empty array, `riskDisposition` is an array — empty is valid when there are no high-risk items); it does **not** judge whether the reviewer covered every risk correctly. And `riskDisposition` is never auto-filled — backfilling a subjective judgement would be forgery.
+
+**The four non-negotiable rails** (no tier can bypass them): ≥80% coverage of changed lines each round; high-risk dimensions always get full review; a reduced-scope review that fails any rail falls back to full scope immediately; and the final verdict must always come from an independent context.
+
+**Verifying:**
 
 ```bash
-npm test          # routing core (pure-function) + the standalone path, zero deps
+npm test    # routing core (pure-function) + the standalone path, zero deps
 ```
 
-`npm test` runs the **portable** suite — the pure-function router tests (`route-review`, `cost-compare`, `verdict-core-hash`, all `node:assert`, no dependencies) and the two standalone integration tests (bash, with a built-in stub runner). All green out of the box on a fresh checkout.
+`npm test` runs the portable suite — pure-function router tests (`route-review`, `cost-compare`, `verdict-core-hash`, all `node:assert`) plus the two standalone integration tests. Green out of the box. *(The other `*.test.mjs` / `*.test.ts` files are coupled to the agenthub monorepo and only run there; they're shipped as reference, not run by `npm test`.)*
 
-> The other `*.test.mjs` / `*.test.ts` files in the repo are **agenthub-monorepo-coupled** — they reference `../../../harness`, `packages/core/agenthub`, or `git checkout`, and only run inside the agenthub monorepo, not in this standalone checkout. They're shipped as reference, not run by `npm test`.
-
----
-
-## Repository layout
+**Repository layout:**
 
 ```
-SKILL.md                  # the thin shell the main agent reads (skeleton only)
-standalone.sh             # off-platform entrypoint (the one you probably want)
-scripts/
-  route-review.mjs        # pure-function router — the brain
-  verdict-core-hash.mjs   # tamper-evident hashing
-  ...                     # cost compare, replay diff, report render, ...
-config/
-  route-rules.json        # the single source of truth for thresholds
-references/               # detailed rules, loaded on-demand by sub-agents/scripts
-golden/                   # golden input→expected fixtures for the router
-__fixtures__/             # finding-classification + pass-coverage fixtures
+SKILL.md                  # the thin shell the orchestrating AI reads
+standalone.sh             # off-platform entrypoint (start here)
+examples/codex-runner.sh  # a working, copy-me review runner (wraps codex)
+scripts/route-review.mjs   # pure-function router — the brain
+scripts/verdict-core-hash.mjs  # tamper-evident hashing
+config/route-rules.json    # the single source of truth for thresholds
+references/                # detailed rules, loaded on demand
+golden/  __fixtures__/     # test fixtures
 ```
 
-The architecture is deliberate: **the main agent reads only the thin shell.** Every detailed rule lives in `references/` and is pulled in on demand by the sub-agents and scripts that actually need it — so the orchestrating context never bloats.
-
----
-
-## Design philosophy, in four lines
-
-- **Independence is the floor, cost is the dial.** A cheap review is fine; a self-review is not.
-- **Risk only routes up.** When in doubt, review harder.
-- **Code owns the thresholds; prose owns the intent.** Prose that restates code drifts from it.
-- **A `pass` is a claim that must carry evidence** — snapshot, risk disposition, inventory, and a nonce that can't be replayed.
+</details>
 
 ---
 
 <div align="center">
 
-*Built from the scar tissue of a real multi-agent development pipeline.*
-*Honest about what it can and can't guarantee.*
+**Independence is the floor. Cost is the dial. A pass must show its receipts.**
+
+*Built from the scar tissue of a real multi-agent pipeline — and honest about what it can't guarantee.*
 
 </div>
