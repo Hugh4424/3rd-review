@@ -1,33 +1,35 @@
-# 步骤 4：审查员独立审查 — prompt 拼装 + Runtime Preferences + DISPATCH MODE OVERRIDE + 厚封装调用面
+# Step 4: Reviewer Independent Review — Prompt Assembly + Runtime Preferences + DISPATCH MODE OVERRIDE + Thick-Wrapper Invocation Surface
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，审查员/脚本按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell. The main session does not read it; reviewers/scripts read it on demand.
+>
+> Note: `review-dispatch-adapter.sh` and `review-persist.sh` mentioned throughout are agenthub platform components (not present in the standalone repo); in standalone mode their role is filled by `./standalone.sh` + the injected `--review-runner`.
 
-## provenance 枚举要求（输出契约）
+## provenance Enumeration Requirements (Output Contract)
 
-审查员产出 JSON 的 `provenance` 字段必须使用 verdict schema 枚举值：`"single-context"` / `"independent-subagent"` / `"independent-session"`。无 CLI 降级走干净子代理审查时，子代理路径必须使用 `"independent-subagent"`；任何不在枚举内的值会被 schema 校验拒绝。降级形态的完整行为约束见 `references/delta-package-rules.md` 的「无 CLI 降级形态（FR-REVIEW-003）」节。
+The `provenance` field in the reviewer's output JSON MUST use the verdict schema enum values: `"single-context"` / `"independent-subagent"` / `"independent-session"`. When falling back to a clean sub-agent review due to no CLI, the sub-agent path MUST use `"independent-subagent"`; any value not in the enum will be rejected by schema validation. The complete behavioral constraints for fallback forms are in `references/delta-package-rules.md`, section "No-CLI Fallback Form (FR-REVIEW-003)".
 
-### 步骤 4：审查员独立审查
+### Step 4: Reviewer Independent Review
 
-拼装 prompt：Verifier Instructions（短入口 + 路径清单） + Runtime Preferences（模型/思考强度配置） + Inline Package（phase-scoped Design Sources） + Delta Package（diff + hunk context，非大文件全文） + Source Manifest + Current Worktree Inventory + Preflight Signals + Required Read Set + Standards Sources（路径清单） + reviewRequestId。第 2+ 轮额外附带前轮 findings 完整 JSON 作闭合核对（见 Delta Package 规则）。
+Assemble the prompt: Verifier Instructions (short entry point + path list) + Runtime Preferences (model/thinking-intensity config) + Inline Package (phase-scoped Design Sources) + Delta Package (diff + hunk context, not full large-file text) + Source Manifest + Current Worktree Inventory + Preflight Signals + Required Read Set + Standards Sources (path list) + reviewRequestId. Round 2+ additionally attaches the previous round's complete findings JSON for closure verification (see Delta Package rules).
 
-**每一轮都是完整独立审查**：每轮（含 round 2+）都是对本 checkpoint 完整责任域的 COMPLETE, INDEPENDENT review。Delta Package 用 diff + hunk context 替代大文件全文内联：小文件（≤24KB）可全文内联；大文件（>80KB）禁止默认全文内联，只传 diff + hunk 上下文 + Required Read Set。这不缩小审查范围——见下方 Full-review rule。
+**Every round is a complete, independent review**: Each round (including round 2+) is a COMPLETE, INDEPENDENT review of this checkpoint's full responsibility domain. The Delta Package replaces large file full-text inline with diff + hunk context: small files (≤24KB) may be inlined in full; large files (>80KB) are forbidden from default full-text inline — only diff + hunk context + Required Read Set are passed. This does not narrow the review scope — see Full-review rule below.
 
-#### 4a. Runtime Preferences（运行配置）
+#### 4a. Runtime Preferences (Runtime Configuration)
 
-在写入 `PROMPT_FILE` 前，必须解析本轮运行配置并把 JSON 摘要追加进 prompt。解析优先级：
+Before writing to `PROMPT_FILE`, you must resolve the runtime configuration for this round and append the JSON summary to the prompt. Resolution priority:
 
-1. adapter 显式参数：`--model` / `--effort` / `--config-file`
-2. 用户配置：`$AGENTHUB_REVIEW_DISPATCH_CONFIG` 或 `~/.agenthub/review-dispatch-config.json`
-3. repo 临时默认配置：`packages/core/agenthub/config/review-dispatch-default.json`
+1. Adapter explicit parameters: `--model` / `--effort` / `--config-file`
+2. User config: `$AGENTHUB_REVIEW_DISPATCH_CONFIG` or `~/.agenthub/review-dispatch-config.json`
+3. Repo temporary default config: `packages/core/agenthub/config/review-dispatch-default.json` (agenthub platform path; not in the standalone repo)
 
-解析命令：
+Resolution command:
 
 ```bash
-RUNTIME_CONFIG_JSON=$(node packages/core/agenthub/skills/3rd-review/scripts/resolve-review-runtime-config.mjs \
+RUNTIME_CONFIG_JSON=$(node scripts/resolve-review-runtime-config.mjs \
   --role=reviewer --round="<round>")
 ```
 
-prompt 中追加：
+Append to the prompt:
 
 ```text
 ## Runtime Preferences
@@ -43,7 +45,7 @@ The final reviewer MUST produce finalVerifierReadSet itself as the actually
 inspected source targets for this verdict.
 ```
 
-在 prompt 末尾追加 DISPATCH MODE OVERRIDE。**此段覆盖所有 verifier prompt 中的文件写入、index 追加、skill 调用规则**：
+Append the DISPATCH MODE OVERRIDE at the end of the prompt. **This section overrides all file-write, index-append, and skill-invocation rules in the verifier prompts above**:
 
 ```
 ## DISPATCH MODE OVERRIDE
@@ -61,12 +63,12 @@ The following overrides ALL conflicting rules from the verifier prompts above:
 
 **Required skills ARE available** in your skills directory. Execute them in read-only verifier mode. Depending on checkpoint kind these include: `plan-ceo-review`, `plan-design-review`, `speckit-analyze`, `plan-eng-review`, `qa-only`, `verify-change`, `review` (see the checkpoint→required-skills mapping in `references/execution-steps.md`).
   - Try the Skill tool first when available.
-  - If Skill tool execution fails, read the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`, `packages/core/agenthub/skills/<name>/SKILL.md`.
+  - If Skill tool execution fails, read the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`.
   - Apply the lens's checklist/dimensions to the review sources.
   - Record key findings in skillResults with status="executed" and evidence strings (in English). If SKILL.md fallback was used, set mode to include `skill-file fallback`. Evidence MUST contain three elements: (1) where executed (session location or SKILL.md fallback path); (2) specific input/checkpoint checked; (3) conclusion/finding. Hollow summaries ("ran skill, no issues") are rejected (FR-REVIEW-006/007).
   - If a skill is not applicable to this review, set status="not_applicable" with reason in evidence
 
-**Review rules**: (1) Read >=80% of modified code lines from each changed file. (2) Every finding must cite file + line + code snippet. (3) Blocking findings must describe the online-triggered symptom. (4) First round must list ALL blocking issues at once — 首轮请列全所有 blocking，避免挤牙膏式返修。Surface every blocking finding in round 1; do NOT hold back issues for later rounds. (5) When uncertain, bias towards revise_required. (6) EVERY finding MUST carry a `blockerClass` field, one of: `delivery_quality` (real delivery-quality defect, MAY be blocking) / `process_evidence` (process/evidence/format issue, MUST NOT be blocking — downgrade to important/minor) / `output_contract` (output-contract issue, severity per impact). Missing `blockerClass` makes the report fail-fast (FR-CLASS-001). `process_evidence` + `blocking` is a forbidden combination (FR-CLASS-002). (7) 后续轮（round≥2）新增的 blocking 必须标注漏查原因 `missedInPreviousRoundReason`（为何上轮未发现）。In round 2+, any NEW blocking finding that did not appear in the previous round MUST include a `missedInPreviousRoundReason` field explaining why it was missed (e.g., source not read, scope misunderstanding, new evidence surfaced). Omitting this field on a new-in-round-N blocking finding is itself a protocol violation.
+**Review rules**: (1) Read >=80% of modified code lines from each changed file. (2) Every finding must cite file + line + code snippet. (3) Blocking findings must describe the online-triggered symptom. (4) First round must list ALL blocking issues at once — Surface every blocking finding in round 1; do NOT hold back issues for later rounds. (5) When uncertain, bias towards revise_required. (6) EVERY finding MUST carry a `blockerClass` field, one of: `delivery_quality` (real delivery-quality defect, MAY be blocking) / `process_evidence` (process/evidence/format issue, MUST NOT be blocking — downgrade to important/minor) / `output_contract` (output-contract issue, severity per impact). Missing `blockerClass` makes the report fail-fast (FR-CLASS-001). `process_evidence` + `blocking` is a forbidden combination (FR-CLASS-002). (7) In round 2+, any NEW blocking finding that did not appear in the previous round MUST include a `missedInPreviousRoundReason` field explaining why it was missed (e.g., source not read, scope misunderstanding, new evidence surfaced). Omitting this field on a new-in-round-N blocking finding is itself a protocol violation.
 
 **Delegated review is mandatory**: The prompt includes a `Delegated Review Bundle` generated by `review-dispatch-adapter.sh` before you were started. You MUST read the bundle, independently verify high-risk items, and use it as evidence input only. You remain the only final verdict owner. If the bundle is missing, return `escalate_to_human` with a finding explaining that delegated precheck was not executed.
 
@@ -96,55 +98,55 @@ The sampling fallback ONLY reduces redundant reading effort on 低危 coverageAc
 
 **No spawning narrowed subtasks**: Do NOT spawn sub-agents with task descriptions that pre-state "the revision summary" or limit scope to "verify whether prior finding X is closed". Any sub-agent you spawn must receive the checkpoint responsibility scope, Source Manifest, Required Read Set, and full-review mandate, not a narrowed confirmation task.
 
-**Non-code review skill execution**: For design/plan/test-acceptance reviews, the reviewer MUST attempt to execute required skills. The execution order: (1) Try `Skill("<name>")` to invoke the skill directly. (2) If that fails (common in headless/read-only environments where skills require AskUserQuestion or file output), fall back by reading the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`, `packages/core/agenthub/skills/<name>/SKILL.md`. Extract the review dimensions/lens from SKILL.md and apply those dimensions independently to the review sources. (3) Record results in `skillResults`: status=`executed` if either direct Skill execution or SKILL.md fallback succeeded, mode includes `skill-file fallback` when fallback was used, and status=`failed` only if both approaches failed. This fallback pattern works for ANY skill without per-skill configuration. Skill results are input to your review, not final verdict — only findings matching the checkpoint's reviewer contract blocking list can be marked blocking; non-matching findings MUST be downgraded to important/minor. If a required skill is unavailable and its SKILL.md cannot be read at all → escalate_to_human.
+**Non-code review skill execution**: For design/plan/test-acceptance reviews, the reviewer MUST attempt to execute required skills. The execution order: (1) Try `Skill("<name>")` to invoke the skill directly. (2) If that fails (common in headless/read-only environments where skills require AskUserQuestion or file output), fall back by reading the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`. Extract the review dimensions/lens from SKILL.md and apply those dimensions independently to the review sources. (3) Record results in `skillResults`: status=`executed` if either direct Skill execution or SKILL.md fallback succeeded, mode includes `skill-file fallback` when fallback was used, and status=`failed` only if both approaches failed. This fallback pattern works for ANY skill without per-skill configuration. Skill results are input to your review, not final verdict — only findings matching the checkpoint's reviewer contract blocking list can be marked blocking; non-matching findings MUST be downgraded to important/minor. If a required skill is unavailable and its SKILL.md cannot be read at all → escalate_to_human.
 
 Output format (English-only JSON):
 {"reviewRequestId":"<id>","verdict":"pass|revise_required|escalate_to_human","reviewSnapshot":[{"path":"...","gitHead":"...","mtime":"...","hash":"..."}],"riskDisposition":[{"risk":"...","checkedSource":"...","decision":"not_blocking|blocking","whyNotBlocking":"..."}],"worktreeInventory":{"included":[{"path":"...","reason":"..."}],"unrelated":[{"path":"...","reason":"..."}],"excluded":[{"path":"...","reason":"..."}]},"skillResults":[...],"verificationResults":[{"command":"<command or evidence read>","exitCode":0,"evidence":"<path or host fact>"}],"findings":[{"severity":"blocking|important|minor","blockerClass":"delivery_quality|process_evidence|output_contract","file":"...","line":0,"issue":"...","impact":"...","recommendation":"..."}]}
 ```
 
-### 厚封装调用面（推荐入口）
+### Thick-Wrapper Invocation Surface (Recommended Entry Point)
 
-主管家用一行发起完整审查，单一入口、内部原子完成审查执行与持久化，对外只暴露 verdict + reportPath + evidencePaths。调用方不感知内部分步，无需手动分别执行。
+The orchestrator launches a complete review with a single line — one entry point, atomically completing review execution and persistence internally, exposing only `verdict` + `reportPath` + `evidencePaths` to the caller. The caller does not need to be aware of internal steps or manually execute them separately.
 
 ```bash
-# 步骤 A（前台，秒级）：准备 prompt + result 文件
+# Step A (foreground, seconds): prepare prompt + result files
 PROMPT_FILE=$(mktemp /tmp/3rd-review-prompt-XXXXXX); echo "$PROMPT" > "$PROMPT_FILE"
 RESULT_FILE=$(mktemp /tmp/3rd-review-result-XXXXXX.json)
 
-# 步骤 B（用 run_in_background:true 发起，必须只含这一条命令——
-#   禁止拼尾随命令、禁止用 RESULT=$(...) 捕获，否则会掩盖真实退出码，详见 SKILL.md 红旗自检 / execution-steps.md）：
+# Step B (launch with run_in_background:true — MUST contain only this one command;
+#   do NOT chain trailing commands, do NOT capture with RESULT=$(...),
+#   as these mask the real exit code — see SKILL.md red-flag checklist / execution-steps.md):
 bash <path-to>/review-dispatch-adapter.sh review \
   --prompt-file="$PROMPT_FILE" --result-file="$RESULT_FILE" \
   --checkpoint-id="<checkpoint-id>" --round="<round>" \
   --task-dir=<TASK_DIR> --workflow=<workflow-id> \
   --reviewer-role="reviewer" --reviewer-runtime-id="<runtime-id>" --reviewer-provider="<provider>"
 
-# 步骤 C（命令退出唤起后，前台）：三条件校验通过后再从 RESULT_FILE 读裁决，最后清理 PROMPT_FILE
+# Step C (foreground, after command exits): read verdict from RESULT_FILE only after all three conditions pass, then clean up PROMPT_FILE
 VERDICT=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).verdict)" "$RESULT_FILE")
 REPORT_PATH=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).reportPath)" "$RESULT_FILE")
 rm -f "$PROMPT_FILE"
 ```
 
-- `review-dispatch-adapter.sh review` → 原子封装：exec（provider 命令 + AJV 校验）→ persist（落盘 + 报告）→ 输出 `{"verdict":"...","reportPath":"...","evidencePaths":[...]}` JSON
-- 内部分步面（厚封装已代办，仅诊断时直调）：`exec` 用 `--result-file` 把审查员 stdout 捕获到结果文件（`RESULT_FILE=$(mktemp ...)`），再由 `review-persist.sh` 读该 RESULT_FILE 落盘并生成报告。厚封装对外只暴露 `--prompt-file`，`--result-file` / `RESULT_FILE` 由 adapter 内部管理。
-- 执行失败时输出 `{"verdict":"failed","checkpoint":"...","round":N,"error":"..."}` 并 exit 0，主流程不中断
-- 超时/retry 由 adapter 内部处理（`REVIEW_TIMEOUT_SECONDS` 环境变量可覆盖，默认 600s）；host Bash 工具外层 timeout 推荐 1500000ms
+- `review-dispatch-adapter.sh review` → atomic wrapper: exec (provider command + AJV validation) → persist (write to disk + generate report) → output `{"verdict":"...","reportPath":"...","evidencePaths":[...]}` JSON
+- Internal step surface (already handled by the thick wrapper; only call directly for diagnostics): `exec` uses `--result-file` to capture reviewer stdout to a result file (`RESULT_FILE=$(mktemp ...)`), then `review-persist.sh` reads that RESULT_FILE to write to disk and generate a report. The thick wrapper only exposes `--prompt-file` externally; `--result-file` / `RESULT_FILE` are managed internally by the adapter.
+- On execution failure, outputs `{"verdict":"failed","checkpoint":"...","round":N,"error":"..."}` and exits 0, so the main flow is not interrupted
+- Timeout/retry is handled internally by the adapter (`REVIEW_TIMEOUT_SECONDS` env var can override, default 600s); the outer host Bash tool timeout is recommended at 1500000ms
 
-**关键变更**：review-persist.sh 不再自动执行 stage_advance。verdict 分流后由主 agent 执行后续动作：
+**Key change**: review-persist.sh no longer automatically executes stage_advance. After verdict routing, the main agent executes subsequent actions:
 
 - reviewer_output(verdict=pass) → state.currentStatus = `post_review_required`
 - reviewer_output(verdict=revise_required) → state.currentStatus = `review_intake_required`
 - reviewer_output(verdict=escalate_to_human) → state.currentStatus = `escalated`
 
-`pass` 只表示审查通过；它不是完成态。pass 后必须先处于 `post_review_required`，完成 post-pass 留存和 `post_review_pass` 后才能 `stage_advance`。
+`pass` only means the review passed; it is not a completion state. After pass, the system must first be in `post_review_required`, complete post-pass retention and `post_review_pass`, before `stage_advance` can be called.
 
-3. 审查实现元数据落盘路径契约：
+3. Review implementation metadata persistence path contract:
 
-- Markdown：`<task-dir>/reports/<checkpoint-id>-<N>.md`
-- Raw JSON：`<task-dir>/reviews/<checkpoint-id>/round-<N>.json`（含 `_codexMeta`）
-- Metrics JSON：`<task-dir>/reviews/<checkpoint-id>/round-<N>.metrics.json`
+- Markdown: `<task-dir>/reports/<checkpoint-id>-<N>.md`
+- Raw JSON: `<task-dir>/reviews/<checkpoint-id>/round-<N>.json` (contains `_codexMeta`)
+- Metrics JSON: `<task-dir>/reviews/<checkpoint-id>/round-<N>.metrics.json`
 
-渲染规则由 `render-views.ts` 保证；`subreviewer_meta` 未记录时报告显示”子代理明细：未记录”，不得伪造拆分值。
+Rendering rules are enforced by `render-views.ts`; when `subreviewer_meta` is not recorded, the report displays "Sub-agent details: not recorded" — do not fabricate split values.
 
 ---
-

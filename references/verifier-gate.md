@@ -1,12 +1,12 @@
-# 审查员验证门禁（防绕过，FR-REVIEW-012）
+# Reviewer Verification Gate (bypass-resistant, FR-REVIEW-012)
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，审查员/脚本/gate 按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell; the main session does not read it. Reviewers/scripts/gate read on demand.
 
-## 审查员验证门禁（防绕过）
+## Reviewer Verification Gate (bypass-resistant)
 
-reviewer_output gate 通过 reviewer-proof 注册表核查审查执行证据。**已知架构限制（FR-REVIEW-012）**：codex / claude 两条路径均为全局目录扫描，主 agent 自身会话即可满足绑定，防不住 orchestrator 造假。因此：
+The reviewer_output gate cross-checks review execution evidence against the reviewer-proof registry. **Known architectural limitation (FR-REVIEW-012)**: both the codex and claude paths use global directory scanning; the main agent's own session can satisfy the binding, so orchestrator fabrication cannot be prevented. Therefore:
 
-- **Path 1+2（codex / claude，已注册验证器）**：verification 失败为非阻断诊断（`console.warn`，workflow 继续）。
-- **Path 3（unknown provider，无注册验证器）**：保留 `exit 2` fail-closed——真实 config error，非防伪漏洞。
+- **Path 1+2 (codex / claude, registered verifiers)**: verification failure is a non-blocking diagnostic (`console.warn`; workflow continues).
+- **Path 3 (unknown provider, no registered verifier)**: `exit 2` fail-closed is retained — this is a genuine config error, not a tamper-proofing gap.
 
-唯一真正的机器防伪强制是 AJV schema（约束 3）。详见防伪声明小节和 `workflow-gate.ts:2937`。
+The only genuine machine-enforced tamper-proof mechanism is the AJV schema (constraint 3). See the tamper-proof disclaimer section and `workflow-gate.ts:2937` (agenthub platform path; not in the standalone repo).

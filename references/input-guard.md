@@ -1,11 +1,11 @@
-# 输入护栏（D17）
+# Input Guard (D17)
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，审查员/脚本按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell. The main session does not read it; reviewers / scripts read it on demand.
 
-审查启动前必须判断输入充分性，缺类要反馈、推断要回显确认，不允许在信息不足时静默开审：
+Input sufficiency must be assessed before a review starts. Missing categories must be flagged and inferences must be echoed back for confirmation. Silent review initiation under insufficient information is not permitted:
 
-1. **充分性判断**：审查输入是否包含判断所需的最小集合（被审对象原文/diff、上下文、变更意图）。code-review 至少要有 diff 或 changed-file 清单；design/plan 至少要有被审文档。
-2. **缺类反馈**：缺哪一类就明确指出缺什么（例如"缺 diff，无法做代码审查"），不靠猜测补全。
-3. **推断回显确认**：当从输入推断审查类型/范围（如从文件后缀推断 contentType）时，把推断结论回显给调用方，由调用方确认而非默默采用。
-4. 输入不足且无法补全 → `escalate_to_human`，stderr 说明缺什么 + 下一步。
-5. 审查发现导致丢弃任何原始需求台账条目时，必须登记丢弃理由，理由缺失对裁决有强制阻断力。
+1. **Sufficiency check**: Determine whether the review input contains the minimum set required for a verdict (the subject under review in full or as a diff, context, and change intent). A code-review requires at least a diff or a list of changed files; a design/plan review requires at least the document under review.
+2. **Missing-category feedback**: For each missing category, explicitly state what is absent (e.g. "diff missing — cannot perform code review"). Do not fill gaps by guessing.
+3. **Inference echo-back**: When the review type or scope is inferred from the input (e.g. contentType inferred from file extension), echo the inference back to the caller for confirmation rather than adopting it silently.
+4. **Insufficient and unresolvable input** → `escalate_to_human`; stderr must explain what is missing and what the next step is.
+5. **When a review finding causes any original requirements-ledger entry to be discarded**, the discard reason must be logged. A missing reason has mandatory blocking force on the verdict.

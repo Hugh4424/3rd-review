@@ -1,8 +1,8 @@
-# 脱平台使用场景（D12）
+# Off-Platform Usage (D12)
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，standalone 入口/子代理按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell. The main session does not read it; the standalone entry point / sub-agents read it on demand.
 
-本技能的核心能力是**独立、对抗式的代码/文档审查**，不绑定 agenthub 工作流。两种使用场景共享同一套审查策略（SKILL.md + references/）与判定脚本，只有环境差异收进两个薄适配入口：
+The core capability of this skill is **independent, adversarial code/document review**, not tied to the agenthub workflow. Both usage modes share the same review strategy (SKILL.md + references/) and verdict scripts; only the environmental differences are captured in two thin adapter entry points:
 
-- **agenthub 内（gated）**：主 agent 经 `checkpoint_request` 触发，走 `review-dispatch-adapter.sh`，落盘进 task 目录，受 gate 校验。
-- **脱平台（standalone）**：像找一位同事在干净环境里审查你的代码或文档——无 gate、无 journal、无 reviewRequestId 绑定。入口是 `./standalone.sh`（独立开源仓的根目录；agenthub monorepo 内对应 `skills/3rd-review/standalone.sh`）（RD-4），产物落 `<output-root>/tasks/<name>/`，裁决 JSON 标记 `provenance: "single-context"`（standalone 裁决不可拷回 agenthub 充当 gated 裁决——会被 `reviewer_output` 防伪 assert 拒绝）。
+- **Inside agenthub (gated)**: The main agent is triggered via `checkpoint_request`, routed through `review-dispatch-adapter.sh` (agenthub platform path; not in the standalone repo), persisted into the task directory, and validated by the gate.
+- **Off-platform (standalone)**: Like asking a colleague to review your code or documentation in a clean environment — no gate, no journal, no reviewRequestId binding. Entry point is `./standalone.sh` (root of the standalone open-source repo; inside the agenthub monorepo this corresponds to `skills/3rd-review/standalone.sh`) (RD-4). Output lands in `<output-root>/tasks/<name>/`; the verdict JSON is marked `provenance: "single-context"` (a standalone verdict must not be copied back into agenthub to serve as a gated verdict — it will be rejected by the `reviewer_output` anti-spoofing assert).

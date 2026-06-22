@@ -1,104 +1,104 @@
-# Delta Package 构造规则 + 缩范围护栏补偿 + 两层结构
+# Delta Package Construction Rules + Scope-Reduction Guard Rail Compensation + Two-Layer Structure
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，审查员/脚本按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell. The main session does not read it; reviewers/scripts read it on demand.
 
-## Delta Package 构造规则
+## Delta Package Construction Rules
 
-**核心原则：每一轮都是完整独立审查，但完整审查不等于全文内联。** prompt 默认只内联当前 phase 关键原文、git diff、风险片段、Source Manifest 和 Required Read Set；审查方必须按 read set 读原文，必要时从 manifest 自读完整源文件；required source 不可读 → `escalate_to_human`。
+**Core principle: every round is a complete, self-contained review — but a complete review does not mean full inline content.** The prompt inlines only the current phase's key source text, git diff, risk segments, Source Manifest, and Required Read Set by default. The reviewer must read source text per the read set, and may read the full source file directly from the manifest when needed. If a required source cannot be read → `escalate_to_human`.
 
-- **被审对象（完整可访问，按需内联）**：design/plan 内联关键结构，完整文档进 Source Manifest；code-review 内联当前 phase tasks 段、该 phase FR 段、plan phase 段、git diff、hunk 上下文，完整文件路径进 Source Manifest；test-acceptance 内联报告结论/风险段/验收摘要，完整报告进 Source Manifest。
-- **git diff（代码审查必传，替代大文件全文内联）**：第 1 轮传全部 diff；第 2+ 轮传 `git diff --stat` + 本轮 `git diff`。小文件（≤24KB）可全文内联；中等文件（24KB-80KB）内联 diff + 每个 hunk 前后 80-120 行；大文件（>80KB）禁止默认全文内联，只传 diff + hunk 上下文 + Required Read Set。无法生成 hunk 上下文/定位 changed lines/读取 manifest 文件 → 回退完整包；仍不可用 → `escalate_to_human`。
-- **前轮 findings 闭合核对（仅第 2+ 轮，附加项）**：
-  - 从 `reviews.jsonl` 的 `findingsSummary` 快速索引定位到对应 checkpoint + round，回读完整 raw JSON（`reviews/<checkpoint>/round-<round>.json`）
-  - 禁止仅用 `findingsSummary`（丢失完整上下文）
-  - **禁止在审查包里写"revision summary / 我改了哪些地方"** —— 不得向审查方预告修复内容，闭合与否由审查方独立判断
-  - 闭合核对是在完整审查**之外**追加的检查，不缩小审查范围
+- **Subject under review (fully accessible, inlined on demand)**: design/plan — inline key structure, put the full document into the Source Manifest; code-review — inline the current phase's tasks section, that phase's FR section, plan phase section, git diff, and hunk context, put full file paths into the Source Manifest; test-acceptance — inline the report conclusion/risk section/acceptance summary, put the full report into the Source Manifest.
+- **git diff (mandatory for code review; replaces full inline of large files)**: Round 1 — pass the full diff; Round 2+ — pass `git diff --stat` + the current round's `git diff`. Small files (≤24 KB) may be fully inlined; medium files (24 KB–80 KB) — inline diff + 80–120 lines of context around each hunk; large files (>80 KB) — full inline is forbidden by default, pass only diff + hunk context + Required Read Set. If hunk context cannot be generated / changed lines cannot be located / manifest files cannot be read → fall back to the full package; if still unavailable → `escalate_to_human`.
+- **Previous-round finding closure check (Round 2+ only; additive step)**:
+  - Use the `findingsSummary` quick index in `reviews.jsonl` to locate the corresponding checkpoint + round, then read the full raw JSON (`reviews/<checkpoint>/round-<round>.json`).
+  - Using only `findingsSummary` is forbidden (full context is lost).
+  - **Writing a "revision summary / what I changed" inside the review package is forbidden** — the reviewer must not be pre-informed of fix content; whether a finding is closed is determined independently by the reviewer.
+  - The closure check is an additive check performed on top of the complete review; it does not narrow the review scope.
 
-## 无 CLI 降级形态（FR-REVIEW-003）
+## No-CLI Fallback Mode (FR-REVIEW-003)
 
-当 R6 因 `no_external_cli` 触发同源子代理审查时，须满足以下降级要求（route-review.mjs 只产判定，不产以下行为约束，故此节保留）：
+When R6 triggers a same-source sub-agent review due to `no_external_cli`, the following fallback requirements must be met (route-review.mjs only produces a verdict, not the behavioral constraints below, so this section is retained):
 
-**触发条件**：`ENV_PROBE_RESULT=no_external_cli`（两个 CLI 均探测失败）
+**Trigger condition**: `ENV_PROBE_RESULT=no_external_cli` (both CLIs failed the probe)
 
-**降级要求**：
-1. **独立上下文**：通过 `Agent(subagent_type=...)` 或等效机制派发，子代理不继承主 agent 的历史对话上下文
-2. **走审查合同**：子代理必须接收完整的 reviewer-contract + verifier prompt，不裸派"请审查这段代码"
-3. **硬护栏不降级**：降级只影响审查员来源（外部 CLI → 内部子代理），不影响审查深度——硬护栏层全部保留（FR-REVIEW-004/005 约束不变）
-4. **输出格式不变**：结果 JSON 与外部 CLI 路径一致；`provenance` 字段须使用 verdict schema 枚举值（`"single-context"` / `"independent-subagent"` / `"independent-session"`），子代理路径使用 `"independent-subagent"`
-5. **验证方式**：`jq -e .verdict reviews/<cp>/round-N.json` 仍 exit 0；`jq -r .provenance reviews/<cp>/round-N.json` 应输出 `independent-subagent`
+**Fallback requirements**:
+1. **Independent context**: dispatched via `Agent(subagent_type=...)` or an equivalent mechanism; the sub-agent must not inherit the main agent's conversation history.
+2. **Follow the review contract**: the sub-agent must receive the complete reviewer-contract + verifier prompt; bare "please review this code" dispatch is not allowed.
+3. **Hard rails do not downgrade**: the fallback only affects the reviewer source (external CLI → internal sub-agent); it does not affect review depth — the hard rail layer is fully preserved (FR-REVIEW-004/005 constraints unchanged).
+4. **Output format unchanged**: the result JSON is identical to the external-CLI path; the `provenance` field must use the verdict schema enum values (`"single-context"` / `"independent-subagent"` / `"independent-session"`); the sub-agent path uses `"independent-subagent"`.
+5. **Verification method**: `jq -e .verdict reviews/<cp>/round-N.json` still exits 0; `jq -r .provenance reviews/<cp>/round-N.json` should output `independent-subagent`.
 
-**禁止做法**：
-- 不得直接用主 agent 自审（自审等于无审）
-- 不得因降级省略 required skills 执行
-- 不得输出不同格式绕过 gate schema 验证
+**Prohibited actions**:
+- The main agent must not self-review (self-review equals no review).
+- Required skills must not be skipped due to the fallback.
+- A different output format must not be used to bypass gate schema validation.
 
-## 两层结构：硬护栏层 vs 形态选择层
+## Two-Layer Structure: Hard Rail Layer vs. Mode Selection Layer
 
-审查框架分为两层，两层职责不同，不可混淆：
+The review framework has two layers with distinct responsibilities that must not be conflated.
 
-### 硬护栏层（不可变，不可绕过）
+### Hard Rail Layer (immutable; cannot be bypassed)
 
-以下约束在任何形态下均有效，任何方式选择不得绕过：
+The following constraints are in effect under any mode and cannot be bypassed by any mode selection:
 
-1. **最低回归覆盖**：每轮审查必须覆盖本 phase 全部 changed files 的 ≥80% 改动行
-2. **强制审高风险维度**：被审对象中被标记为 high-risk 的部分必须被完整审查，不可降级为"抽查"
-3. **失败回退全量**：缩范围审查（sampling / coverage exception）若任一护栏不满足 → 立即回退全量审查（`fallback_full_scope`），不得继续以缩范围方式通过
-4. **独立性保证**：最终 verdict 必须由独立上下文产出，不允许主 agent 自审自判
+1. **Minimum regression coverage**: every round must cover ≥80% of changed lines across all changed files in the current phase.
+2. **Mandatory review of high-risk dimensions**: any part of the subject marked high-risk must be reviewed completely and cannot be downgraded to spot-checking.
+3. **Failure falls back to full scope**: if a scoped review (sampling / coverage exception) fails to satisfy any guard rail → immediately fall back to a full-scope review (`fallback_full_scope`); the review must not be passed in scoped form.
+4. **Independence guarantee**: the final verdict must be produced in an independent context; the main agent is not allowed to self-review and self-judge.
 
-护栏失败触发词：`fallback_full_scope` / `回退全量`（关键词，gate 可扫描）
+Guard rail failure trigger words: `fallback_full_scope` / `回退全量` (keywords; the gate may scan for these)
 
-### 形态选择层（自适应，可调整）
+### Mode Selection Layer (adaptive; adjustable)
 
-形态由三步评估的结果决定，包括但不限于：
+The mode is determined by the result of a three-step evaluation and includes, but is not limited to:
 
-- 外部 CLI 审查 vs 主 agent 子代理审查
-- 单次全量 vs 分 lens 并行
-- 首轮全审 vs 后轮 diff-focused
+- External CLI review vs. main-agent sub-agent review
+- Single full-scope pass vs. parallel multi-lens passes
+- First-round full review vs. subsequent rounds diff-focused
 
-注：delegated precheck 是硬护栏（见 execution-steps.md 步骤 3.5），不属于可调形态。
+Note: delegated precheck is a hard rail (see `references/execution-steps.md` step 3.5); it is not an adjustable mode.
 
-形态选择不影响硬护栏层的有效性。
+Mode selection does not affect the validity of the hard rail layer.
 
-## 缩范围护栏补偿机制
+## Scope-Reduction Guard Rail Compensation Mechanism
 
-当审查包因成本/规模原因需缩小范围时，必须满足以下补偿条件才允许继续，否则回退全量：
+When a review package needs to reduce scope due to cost or scale, the following compensation conditions must be satisfied before proceeding; otherwise fall back to full scope:
 
-1. **最低回归覆盖**：缩范围后仍覆盖 ≥80% 改动行（按 git diff 行数计算）
-2. **高风险维度必审**：spec 中标记 `high-risk` 的所有维度必须完整出现在审查包中
-3. **任一不满足 → 回退全量**：立即终止缩范围，重新构造完整审查包
+1. **Minimum regression coverage**: after scope reduction, ≥80% of changed lines must still be covered (calculated by git diff line count).
+2. **High-risk dimensions must be reviewed**: all dimensions marked `high-risk` in the spec must appear completely in the review package.
+3. **Any condition not met → fall back to full scope**: immediately terminate scope reduction and reconstruct the complete review package.
 
-**与 Delegated Trust 的优先级**：DISPATCH OVERRIDE 中的 sampling fallback（Delegated Trust exception）只对 bundle `coverageAccepted` 列出的低风险源减少冗余重读；它不降低本轮责任域的 ≥80% 地板。高风险维度、candidate finding、forbidden/core 边界源不适用 sampling fallback。
+**Priority vs. Delegated Trust**: the sampling fallback in DISPATCH OVERRIDE (Delegated Trust exception) only reduces redundant re-reads for low-risk sources listed in the bundle's `coverageAccepted`; it does not lower the ≥80% floor for the current round's responsibility domain. High-risk dimensions, candidate findings, and forbidden/core boundary sources are not eligible for the sampling fallback.
 
-## 动态 lens 调度（FR-LENS-001/002/003）
+## Dynamic Lens Dispatch (FR-LENS-001/002/003)
 
-`inferAutomaticLensPlan` 根据审查包内容动态选择 lens，不默认启用全部 7 个。
+`inferAutomaticLensPlan` dynamically selects lenses based on review package content; it does not enable all 7 by default.
 
-### 配置驱动（FR-LENS-002）
+### Configuration-Driven (FR-LENS-002)
 
-触发 lens 的内容匹配模式（正则/关键词列表）统一存放在 `config/route-rules.json` 的 `lensTriggers` 节，不在代码内写死。可配置项：
+Content matching patterns (regex/keyword lists) that trigger lenses are stored exclusively in the `lensTriggers` section of `config/route-rules.json` and are not hardcoded in the source. Configurable items:
 
-- `uiKeywords` — 匹配 UI/browser 信号，触发 `browser-qa-auditor`
-- `evidenceKeywords` — 匹配 apply/evidence、GREEN/RED 等，触发 `evidence-freshness-auditor`
-- `mechanicalRiskKeywords` — 匹配机械风险标记，触发 `mechanical-grep-auditor`
-- `sourceManifestKeywords` — 匹配 Source Manifest、Delta Package、diff --git 等，触发 `source-manifest-auditor`
-- `requiredSkillKeywords` — 匹配 required skill、qa-only 等，触发 `required-skill-auditor`
-- `fullFallbackOnHighRisk` (boolean) — 高风险内容时强制触发全量 lens
-- `fullFallbackOnNoMatch` (boolean) — 无内容匹配时激活回退 lens（`input-contract-auditor`）
+- `uiKeywords` — matches UI/browser signals, triggers `browser-qa-auditor`
+- `evidenceKeywords` — matches apply/evidence, GREEN/RED, etc., triggers `evidence-freshness-auditor`
+- `mechanicalRiskKeywords` — matches mechanical risk markers, triggers `mechanical-grep-auditor`
+- `sourceManifestKeywords` — matches Source Manifest, Delta Package, diff --git, etc., triggers `source-manifest-auditor`
+- `requiredSkillKeywords` — matches required skill, qa-only, etc., triggers `required-skill-auditor`
+- `fullFallbackOnHighRisk` (boolean) — forces full lens activation on high-risk content
+- `fullFallbackOnNoMatch` (boolean) — activates the fallback lens (`input-contract-auditor`) when no content matches
 
-Checkpoint 前缀逻辑（`isPlan`/`isDesign`/`isTestAcceptance` 等）保留在代码中，不外化到配置。
+Checkpoint prefix logic (`isPlan` / `isDesign` / `isTestAcceptance`, etc.) is retained in code and is not externalized to configuration.
 
-### 强信号 v4 抑制（不可更改）
+### Strong-Signal v4 Suppression (non-negotiable)
 
-以下抑制逻辑硬编码在 `inferAutomaticLensPlan` 中，不受 `lensTriggers` 控制，防止审查硬卡死：
+The following suppression logic is hardcoded in `inferAutomaticLensPlan` and is not controlled by `lensTriggers`; it prevents hard review deadlocks:
 
-- **plan checkpoint** 抑制弱文本 evidence 信号 → 不触发 `evidence-freshness-auditor`（plan 无 apply/evidence 目录）
-- **design checkpoint** 抑制 "acceptance criteria" 等弱文本 → 不触发 `acceptance-evidence-auditor`（design 无 apply/evidence）
+- **plan checkpoint** suppresses weak textual evidence signals → does not trigger `evidence-freshness-auditor` (plan has no apply/evidence directory)
+- **design checkpoint** suppresses "acceptance criteria" and similar weak text → does not trigger `acceptance-evidence-auditor` (design has no apply/evidence)
 
-这两条是已知硬卡死问题的修复，改动需通过 T014-e/T014-f 测试验证。
+These two items are fixes for known hard-deadlock issues; changes must be validated by T014-e/T014-f tests.
 
-### 全量回退（FR-LENS-003）
+### Full Fallback (FR-LENS-003)
 
-两类情况强制扩大 lens 覆盖：
+Two situations force expanded lens coverage:
 
-1. **高风险内容**（`fullFallbackOnHighRisk=true`）：检测到 `scope.riskKeywords`（auth.go、secret、migration 等）时，强制追加 `required-skill-auditor` 等核心 lens，确保全量覆盖。
-2. **无匹配内容**（`fullFallbackOnNoMatch=true`）：没有任何内容信号命中时，回退到 `input-contract-auditor`，检查审查包基础合规性。
+1. **High-risk content** (`fullFallbackOnHighRisk=true`): when `scope.riskKeywords` (auth.go, secret, migration, etc.) are detected, core lenses such as `required-skill-auditor` are forcibly appended to ensure full coverage.
+2. **No matching content** (`fullFallbackOnNoMatch=true`): when no content signal matches, fall back to `input-contract-auditor` to check the review package's basic compliance.

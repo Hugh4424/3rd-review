@@ -1,89 +1,92 @@
-# 步骤 6：按 verdict 分流 + post-pass 动作 + 轮次升级规则
+# Step 6: verdict Dispatch + post-pass Actions + Round Escalation Rules
 
-> 本文件由 3rd-review SKILL.md 薄壳引用，主会话不读，审查员/脚本按需读。
+> This file is referenced by the 3rd-review SKILL.md thin shell; the main session does not read it. Reviewers/scripts read on demand.
 
-### 步骤 6：按 verdict 分流
+### Step 6: verdict Dispatch
 
-> review-persist.sh（步骤 5）已原子执行：review_dispatched journal → reviewer_output gate → index 重建。无需手动重复。
+> review-persist.sh (step 5) has already executed atomically: review_dispatched journal → reviewer_output gate → index rebuild. No manual repetition needed.
 
-#### 6a. verdict = pass → post-pass 留存动作
+#### 6a. verdict = pass → post-pass retention actions
 
-主 agent 必须按顺序执行以下步骤（不可跳过）：
+The main agent must execute the following steps in order (none may be skipped):
 
-> **post-pass 留存已由 host 自动完成（FR-EVID-001/002）**：pass verdict 时 host 在 reviewer_output gate 自动写 `workflow_feedback_captured` + `stage_summary_end` 两类 journal 事件，**agent 不再需要手工跑 `/skill capture-workflow-feedback`、`/skill stage-summary end`，也不要手工 append-journal-once 这两类事件**（手写 host 事件反而冲突）。
-> - `workflow-issues.jsonl` ledger 仍按 gate 路径校验：常态无发现合法（`issues_count: 0`），有真发现时正常追加 ledger entry；host 自动 feedback journal 不替代 ledger 内容本身。深度工作流问题分析确需深挖时再派子代理调 `capture-workflow-feedback`。
+> **post-pass retention is completed automatically by the host (FR-EVID-001/002)**: on a pass verdict, the host automatically writes `workflow_feedback_captured` + `stage_summary_end` journal events at the reviewer_output gate. **The agent no longer needs to manually run `/skill capture-workflow-feedback` or `/skill stage-summary end`, and must not manually append-journal-once for these two event types** (manually writing host events causes conflicts instead).
+> - The `workflow-issues.jsonl` ledger is still validated via the gate path: zero findings in normal operation is legitimate (`issues_count: 0`); when genuine findings exist, append ledger entries normally. The host's automatic feedback journal does not replace the ledger content itself. Only spawn a sub-agent to call `capture-workflow-feedback` when deep workflow-issue analysis is genuinely needed.
 
 **Step 6a-2: post_review_pass gate**
 ```bash
 bash packages/core/agenthub/harness/gate.sh post_review_pass <workflow-id> \
   --checkpoint-id="<checkpoint-id>" --round=<N> --task-dir=<TASK_DIR>
 ```
-→ gate 检查 host 自动写的 `workflow_feedback_captured`/`stage_summary_end` 两类 journal 全部就绪。任一失败 → exit 2
+(agenthub platform path; not in the standalone repo)
+
+→ gate checks that both `workflow_feedback_captured` and `stage_summary_end` journal entries written automatically by the host are present. If either is missing → exit 2
 
 **Step 6a-3: stage_advance**
 ```bash
 bash packages/core/agenthub/harness/gate.sh stage_advance <workflow-id> \
   --task-dir=<TASK_DIR> [--last-phase=true]
 ```
-→ 推进到下一 phase/stage。gate 要求 currentStatus=ready_to_advance（post_review_pass 成功后写入）
+(agenthub platform path; not in the standalone repo)
 
-#### 6b. verdict = revise_required → 修复循环
+→ advances to the next phase/stage. gate requires currentStatus=ready_to_advance (written after post_review_pass succeeds)
 
-主 agent 必须按顺序执行：
+#### 6b. verdict = revise_required → fix loop
 
-1. `/superpowers-receiving-code-review` — 先消化审查报告，不允许直接修代码
-2. 生成 `apply/phase-N-review-intake.md`，必须包含 Findings、Root Cause、Fix Plan、Scope Check、Evidence Plan、Re-review Plan
-3. 追加 `review-fixes.jsonl` 的 `status=planned` 记录，绑定 checkpoint、sourceRequestId、sourceRound、sourceReport
-4. `gate.sh review_intake_complete` — 通过后才进入 `revising`
-5. 生成 `apply/phase-N-revise-plan.md`
-6. `/superpowers-test-driven-development` — RED/GREEN 重采
-7. 追加 `<!-- revision-record -->` 段到上轮 reports/*.md 末尾
-8. 更新 `review-fixes.jsonl` 为完整修复记录
-9. `gate.sh phase_pre_review` — 确认修复质量
-10. 回到步骤 2（checkpoint_request 下一轮）
+The main agent must execute in order:
 
-非首轮 checkpoint_request 会检查以上步骤全部完成（skill calls + phase_pre_review + evidence 重采 + revise-plan + revision-record + review-fixes AJV 校验 + hash 验证），共 8 项 gate 检查。
+1. `/superpowers-receiving-code-review` — digest the review report first; jumping directly to code fixes is not allowed
+2. Generate `apply/phase-N-review-intake.md`, which must include: Findings, Root Cause, Fix Plan, Scope Check, Evidence Plan, Re-review Plan
+3. Append a `status=planned` record to `review-fixes.jsonl`, binding checkpoint, sourceRequestId, sourceRound, sourceReport
+4. `gate.sh review_intake_complete` — only after passing may the agent enter `revising`
+5. Generate `apply/phase-N-revise-plan.md`
+6. `/superpowers-test-driven-development` — RED/GREEN re-collection
+7. Append a `<!-- revision-record -->` section to the end of the previous round's reports/*.md
+8. Update `review-fixes.jsonl` to the complete fix record
+9. `gate.sh phase_pre_review` — confirm fix quality
+10. Return to step 2 (checkpoint_request next round)
 
-#### 动态升级规则（FR-REVIEW-011）
+For non-first-round checkpoint_requests, all of the above steps are checked (skill calls + phase_pre_review + evidence re-collection + revise-plan + revision-record + review-fixes AJV validation + hash verification) — 8 gate checks in total.
 
-审查轮次**不设固定上限**。审查器技能层根据以下规则动态决定路径：
+#### Dynamic Escalation Rules (FR-REVIEW-011)
 
-1. **每轮先查根因**：不允许在没有明确根因分析的情况下直接修代码。每轮修复前必须生成 `apply/phase-N-review-intake.md` 含 Root Cause 段。
+Review rounds have **no fixed upper limit**. The reviewer skill layer dynamically determines the path using the following rules:
 
-2. **连续 4 轮同一问题 → escalate_to_human**：
-   - 判定依据：连续 4 轮审查报告中，同一 finding（相同文件、相同类别、相同核心描述）重复出现且仍为 blocking
-   - 输出：`escalate_to_human`，同时说明"连续 N 轮同一 finding 未解决，需人工介入"
-   - **此判定在审查器技能层做出**，不依赖 workflow engine 底层计数器，不在 production 代码中加固定 round 计数器
+1. **Root cause first every round**: fixing code without an explicit root-cause analysis is not allowed. Before each round of fixes, `apply/phase-N-review-intake.md` containing a Root Cause section must be generated.
 
-3. **切换审查形态不等于松护栏**：
-   - 后续轮次若为流程/证据问题（非代码逻辑问题），可切换到干净子代理降级形态推进
-   - 切换方式**仍受硬护栏约束**（FR-REVIEW-004/005 不变）：高风险维度照审、回归覆盖不降
-   - 切方式 ≠ 降标准，任何形态下 blocking finding 的定义和门槛保持一致
+2. **Same issue for 4 consecutive rounds → escalate_to_human**:
+   - Determination criterion: the same finding (same file, same category, same core description) appears in 4 consecutive review reports and remains blocking
+   - Output: `escalate_to_human`, with an explanation that "the same finding has been unresolved for N consecutive rounds; human intervention required"
+   - **This determination is made at the reviewer skill layer**, not dependent on a workflow-engine-level counter; no fixed round counter is hardcoded in production code
 
-4. **根因先于修复**：每轮先彻底理解上一轮的 blocking finding，再执行修复。禁止在未搞清根因时用表面补丁掩盖问题。
+3. **Switching review form is not the same as relaxing guardrails**:
+   - In later rounds, if issues are process/evidence problems (not code logic problems), switching to a clean sub-agent degraded form to advance is acceptable
+   - The switch **is still subject to hard-rail constraints** (FR-REVIEW-004/005 unchanged): high-risk dimensions are still reviewed in full, regression coverage does not decrease
+   - Switching form ≠ lowering the standard; the definition and threshold for a blocking finding remain consistent across all forms
 
-**交叉引用**：切换到子代理降级形态时，硬护栏层（FR-REVIEW-004）全部保留，护栏约束见上方"硬护栏层"定义。
+4. **Root cause before fix**: fully understand the previous round's blocking findings before executing fixes. Patching over problems with surface fixes before the root cause is understood is prohibited.
 
-#### 降级路由规则（FR-DEG-001/002/003）
+**Cross-reference**: when switching to the sub-agent degraded form, all hard-rail layers (FR-REVIEW-004) are retained; see the "hard rail layer" definition above for guardrail constraints.
 
-`applyPostRoundDegradation` 在 CLI `--history` 路径下自动应用。规则如下（阈值与新领域判据均来自 `route-rules.json` `degradation` 节，不写死）：
+#### Degradation Routing Rules (FR-DEG-001/002/003)
 
-| 上轮状态 | 本轮 finding 情况 | 结果 |
+`applyPostRoundDegradation` is applied automatically on the CLI `--history` path. Rules are as follows (thresholds and new-domain criteria all come from the `degradation` section of `route-rules.json`; nothing is hardcoded):
+
+| Previous-round state | Current-round finding situation | Result |
 |---|---|---|
-| 任意 | finding 数 ≤ `maxFindingsForDowngrade`（含单条 blocking） | 降级 → R6（同源子代理） |
-| 任意 | finding 数 > 阈值 且全为非 blocking | 降级 → R6 |
-| 已降级（R6） | 有 blocking 且属于**新领域**（FR-DEG-002） | 升回 R1（cross_source_with_subagent） |
-| 已降级（R6） | 有 blocking 但**非新领域**（FR-DEG-001 粘滞） | 留在 R6（不自动升回 R1） |
-| 未降级 | finding 数 > 阈值 且含 blocking | 维持 R1 |
+| Any | finding count ≤ `maxFindingsForDowngrade` (including a single blocking finding) | Downgrade → R6 (same-source sub-agent) |
+| Any | finding count > threshold and all non-blocking | Downgrade → R6 |
+| Already downgraded (R6) | Has blocking and belongs to a **new domain** (FR-DEG-002) | Upgrade back to R1 (cross_source_with_subagent) |
+| Already downgraded (R6) | Has blocking but **not a new domain** (FR-DEG-001 sticky) | Stay at R6 (no automatic upgrade back to R1) |
+| Not downgraded | finding count > threshold and contains blocking | Maintain R1 |
 
-**新领域判定（FR-DEG-003）**：finding 满足以下任一条件即认定为新领域：
-- `finding.domain` 在 `newDomainRules.domainLabels` 列表中，且上一轮（immediately previous round）未覆盖该 domain
-- `finding.lensType` 在 `newDomainRules.lensTypes` 列表中，且上一轮未覆盖该 lensType
-- `finding.codePath` 匹配 `newDomainRules.pathPrefixes` 中某个前缀，且上一轮未见该路径
+**New-domain determination (FR-DEG-003)**: a finding is classified as a new domain if any of the following conditions is met:
+- `finding.domain` is in the `newDomainRules.domainLabels` list, and the immediately previous round did not cover that domain
+- `finding.lensType` is in the `newDomainRules.lensTypes` list, and the previous round did not cover that lensType
+- `finding.codePath` matches a prefix in `newDomainRules.pathPrefixes`, and that path was not seen in the previous round
 
-降级后的 R6 决定必须携带 `cleanContextRequired: true`（FR-QUALITY-001）。
+A downgraded R6 decision must carry `cleanContextRequired: true` (FR-QUALITY-001).
 
-#### 6c. verdict = escalate_to_human → 停止
+#### 6c. verdict = escalate_to_human → stop
 
-主 agent 输出升级原因，等待人工介入。
-
+The main agent outputs the escalation reason and waits for human intervention.
