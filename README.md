@@ -28,7 +28,7 @@ When an AI agent reviews its own work, it inherits its own blind spots — so it
 |---|---|---|
 | An agent that writes + reviews its own code | Self-pass, blind spots inherited | Verdict from an **independent** engine |
 | Big mechanical diffs | One reviewer reads everything, burns tokens | Heavy parts fan out to **sub-reviewers** |
-| Small doc tweaks | Full third-party review, overkill | Auto-downgrades to cheap same-source pass |
+| Small doc tweaks | Full third-party review, overkill | Auto-downgrades to a cheap *isolated* same-source review |
 | A reviewer that keeps nitpicking forever | Endless revise loop | **Drift-aware** escalation to a human |
 | An agent that hand-writes a fake review JSON | Gate waves it through | **Tamper-evident** exec proof catches it |
 
@@ -76,18 +76,24 @@ The routing logic lives in a **pure function** (`scripts/route-review.mjs`) read
    └──────────────────────┘
 ```
 
-The **standalone** entrypoint is the one most people want — point it at a file or a diff and get an independent verdict back:
+The **standalone** entrypoint is the one most people want — point it at a file or a diff and get an independent verdict back.
+
+> **Prerequisite (read this before your first run):** `standalone.sh` needs a *review runner* — the command that actually drives the reviewing engine. Inside the agenthub platform this is wired up automatically via `review-dispatch-adapter.sh`. In a plain GitHub checkout that adapter isn't shipped, so you **must** pass your own runner with `--review-runner`, otherwise the run escalates to a human on the spot.
 
 ```bash
-# Review a diff or a file; verdict comes back as an exit code + a report on disk.
-./standalone.sh --input=my-change.diff --output-root=./reviews
+# Standalone checkout: pass your own review runner (any command that reads the
+# prompt and returns a verdict JSON — e.g. a codex/gemini wrapper).
+./standalone.sh \
+  --input=my-change.diff \
+  --output-root=./reviews \
+  --review-runner='your-review-runner-command'
 
 # Exit-code contract:
 #   0 = pass            2 = escalate_to_human
 #   1 = revise_required other = execution error
 ```
 
-Both entrypoints share **one** review strategy and **one** set of decision scripts. Only the environment differences (gate vs. no-gate, journal vs. no-journal) live in the two thin adapters.
+Both entrypoints share **one** review strategy and **one** set of decision scripts. Only the environment differences (gate vs. no-gate, journal vs. no-journal) live in the two thin adapters. Note: `review-dispatch-adapter.sh` is the **in-platform** adapter used inside agenthub — it is not part of this standalone repo.
 
 ---
 
@@ -97,10 +103,10 @@ A `pass` is not the finish line, and it's not free to claim. Three things keep i
 
 **1. Independence is non-negotiable.** The final verdict *must* come from an isolated context. The main agent grading its own work is the exact failure this whole tool exists to prevent.
 
-**2. A `pass` must carry evidence.** Every `pass` ships three fields the persistence layer will *not* fill in for you:
-- `reviewSnapshot[]` — `path / gitHead / mtime / hash` for every file reviewed (objective coverage proof).
-- `riskDisposition[]` — for each high-risk item: `risk / checkedSource / decision / whyNotBlocking` (subjective — the reviewer *must* produce this; missing it fails fast).
-- `worktreeInventory` — `included / unrelated / excluded` paths.
+**2. A `pass` must carry evidence.** Every `pass` ships three fields:
+- `reviewSnapshot[]` — `path / gitHead / mtime / hash` for every file reviewed (objective coverage proof; the persistence layer *may* backfill it from the verifier read-set).
+- `worktreeInventory` — `included / unrelated / excluded` paths (objective; may be backfilled from `git status`).
+- `riskDisposition[]` — for each high-risk item: `risk / checkedSource / decision / whyNotBlocking`. This one is **subjective and never backfilled** — the reviewer *must* produce it, and a `pass` that's missing it fails fast. Backfilling a subjective judgement would be forgery, so the pipeline refuses to.
 
 **3. Tamper-evident execution proof.** Each genuine review run stamps an `_execNonce` + `reviewRecordHash` into an append-only ledger. The gate cross-checks them, and a consumed nonce can't be replayed. *(Honest about its own limits: in a single-process shared shell this is **tamper-evident, not tamper-proof** — a truly malicious agent with disk access could forge the ledger. Real anti-forgery needs process isolation. We don't pretend otherwise.)*
 
