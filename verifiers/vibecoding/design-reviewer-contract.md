@@ -98,7 +98,7 @@ Round 2+:
 - Scope expansion ideas: "could also do X" suggestions from plan-ceo-review, placed in a minor finding with `scope_expansion: true`; does not affect verdict.
 - Risk reminders for user-approved scope.
 - Scenario wording could be more explicit; compatibility reservations are overly broad.
-- FR numbering non-standard (not `FR-<domain-abbrev>-NNN`), FR has no scenario, fewer than 8 user scenarios with no reasonable explanation.
+- FR numbering non-standard (not `FR-<domain-abbrev>-NNN`), FR has no scenario, insufficient user scenarios (complex needs <8, simple needs <3 key scenarios) with no reasonable explanation. Note: scenario count itself is minor; only a missing failure scenario or a missing boundary scenario (both are required) is escalated to blocking (see Exception Standard).
 - Module test boundaries are slightly coarse but do not block direction judgment or plan-phase decomposition.
 - Missing supplementary items in design-fidelity-component-contract: mark important per the rules below; do not block directly.
 
@@ -109,11 +109,11 @@ Round 2+:
 | Required Skills executed | Check plan-ceo-review/review output; for UI scope check plan-design-review output. Unable to execute required skill → escalate |
 | Problem statement clear | Read spec.md overview: one sentence states the user-perspective problem without embedding implementation approach |
 | Original requirement coverage | Cross-reference decision-log.md; map each entry to a FR or "won't do" statement |
-| Scenario coverage complete | Check ≥8 user/boundary/failure/permission scenarios; at least one Given/When/Then per FR |
+| Scenario coverage complete | Complex needs ≥8, simple needs ≥3 key user/boundary/failure/permission scenarios (**must include at least one failure scenario AND one boundary scenario**, missing either → blocking; insufficient count alone is minor); at least one Given/When/Then per FR |
 | FR numbering standard | grep `FR-[A-Z]+-[0-9]{3}`; flat `FR-001` numbering is prohibited |
 | Acceptance determinable | Success Criteria must be verifiable by command/operation/screenshot/log |
 | Non-goals explicit | Out-of-scope items must not appear in FRs; scope expansion is recorded as minor only |
-| Module test boundary | Each module has an independent test boundary sufficient to support plan-phase decomposition |
+| Module test boundary | For needs that enter apply / land in the repo (code·UI·flow·config), each affected module has an independent test boundary sufficient to support plan-phase decomposition; discussion-only / explanation-only tasks (Ch.5 marked "not applicable this round") are not required and are not penalized for missing test boundaries |
 | SPEC deviation | Apply SPEC deviation decision tree to classify: downgrade / evolution / requires human |
 | AgentHub boundary | Cross-check contract.md/CLAUDE.md for RuntimeAdapter/workflow/checkpoint/Knowledge responsibilities |
 | File placement | Check that repo artifacts and Knowledge artifacts have separated responsibilities |
@@ -122,6 +122,8 @@ Round 2+:
 | Checkpoint | Check for explicit checkpoints, artifacts, acceptance criteria; no reliance on file watching |
 | Four standard types each individually checkable (D7/D10, FR-REVIEW-005) | On the design side, delivery/exception criteria must exist as **hard line items the reviewer can check one by one** (test/code criteria are established in the plan phase). See table below for each item |
 | Business impact scope exhaustiveness (D12, FR-IMPACT-003) | Read the spec's "Impact Scope" section; independently verify that all existing features/user scenarios/business rules affected by this requirement are listed (cross-reference decision-log change intent). Any omission of affected functionality → blocking. This section must be business-level only; no file paths |
+| Over-specification review (KISS spec) | Check whether the spec's level of detail matches requirement complexity rather than template length. Use three spec-adapted tags (ponytail's stdlib/native are code-layer and inapplicable to a requirements spec, so dropped): `delete` (dead content: chapters/fields/scenarios no requirement asked for, written only to fill the template) / `yagni` (over-specification: entities, data lifecycle, or compatibility reservations written "for later" that this requirement does not touch) / `shrink` (verbose narrative: problem statement/background padded into a paragraph when one sentence suffices, scenarios padded to hit a count). Apply the spec Ladder per chapter (does this need to exist → already covered by decision-log/spec → would a shorter form do). Flag simplifiable spots as minor (non-blocking); but **simplification must not cut the five pillars** (FR / acceptance / impact scope / user-scenario core incl. failure & boundary scenarios / out-of-scope) — deleting pillar content for the sake of trimming → blocking. A spec already lean and accurate is explicitly cleared ("spec fits complexity, ready to proceed") |
+| On-demand chapter review rule | The review core is whether the invariant is satisfied, not whether chapters are filled out. Tier-B conditional chapters (background / module split / key entities / data lifecycle / compatibility reservation) marked "not applicable this round" when their invariant is untriggered is compliant — do not penalize for "short chapter / marked not applicable". Only an **actually-triggered invariant that is omitted or treated perfunctorily** is flagged. Tier-A hard-gate five chapters missing or perfunctory → blocking as usual |
 
 ## Four Standard Types — Inspection Dimensions (Design-Side Hard Checkable Items)
 
@@ -130,7 +132,7 @@ Round 2+:
 | Type | Hard Checkable Items | pass/fail Criterion |
 |----|---------------|----------------|
 | **Delivery Standard (done)** | Each FR's Success Criteria can be checked individually (verifiable by command/operation/screenshot/log/manual step), not a vague "looks correct" description | Each Success Criteria is objectively determinable → pass; any subjective or unverifiable acceptance criterion → blocking |
-| **Exception Standard (boundary)** | spec explicitly lists failure/boundary/permission scenarios (≥8 scenarios including failures and boundaries); each has a Given/When/Then | Key failure/boundary scenarios present and verifiable → pass; only happy path covered, missing failure/boundary scenarios → blocking |
+| **Exception Standard (boundary)** | spec explicitly lists failure/boundary/permission scenarios (complex needs ≥8 scenarios, simple needs ≥3 key scenarios, **regardless of simple or complex must include at least one failure AND one boundary scenario**); each has a Given/When/Then | Key failure/boundary scenarios present and verifiable → pass; only happy path covered, missing failure or boundary scenario → blocking (relaxed count does not exempt the "must have failure/boundary" hard floor) |
 
 ## Spec-Purity Blacklist
 
