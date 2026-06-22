@@ -1,187 +1,186 @@
-# Test Acceptance Review 审查合同
+# Test Acceptance Review Contract
 
-> 本文件定义 test-acceptance-reviewer 的检查维度。合同外发现只能标 `minor`，不能标 `blocking`。
+> This file defines the inspection dimensions for the test-acceptance-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
-## 三轴审查
+## Three-Axis Review
 
-每轮必须覆盖三轴，缺一不可：
+Every round must cover all three axes — none may be skipped:
 
-| 轴 | 含义 | 对照源 |
+| Axis | Meaning | Reference Source |
 |----|------|--------|
-| **Acceptance Coverage** | spec 验收章节 / plan-tasks 测试设计 / 用户问题是否全部验收 | spec.md（第 10 章 + 第 3 章）、plan.md、tasks.md、final-test-report.md |
-| **Evidence Authenticity** | 证据是否 fresh、原始、可复现 | final-test-report.md、apply/evidence/、qa-only |
-| **Workflow Closure** | verifier、Knowledge、workflow-issues、交付边界是否闭环 | verifier-report-index.md、reviews.jsonl、verify-change --light |
+| **Acceptance Coverage** | Whether all spec acceptance sections / plan-tasks test designs / user issues have been verified | spec.md (Chapter 10 + Chapter 3), plan.md, tasks.md, final-test-report.md |
+| **Evidence Authenticity** | Whether evidence is fresh, raw, and reproducible | final-test-report.md, apply/evidence/, qa-only |
+| **Workflow Closure** | Whether verifier, Knowledge, workflow-issues, and delivery boundaries are fully closed | verifier-report-index.md, reviews.jsonl, verify-change --light |
 
 ## Required Skill Execution
 
-审查员必须直接调用：
+The reviewer must invoke directly:
 
-- `qa-only`：真实用户视角验收，只报告问题，不修复；不得用 `qa` 替代。
-- `verify-change --light`：轻量确认 checkbox 全部勾选、verdict 闭环；index 当前阶段剩余 open finding **列出但不阻断**（前序阶段已裁决不重扫；`accepted`/`closed_inband` 视为已闭合）。
+- `qa-only`: Real user-perspective acceptance testing, report issues only, do not fix; must not substitute `qa` for `qa-only`.
+- `verify-change --light`: Lightweight confirmation that all checkboxes are checked and verdict is closed; list remaining open findings in the current-stage index **but do not block on them** (prior stages already adjudicated — do not re-scan; `accepted`/`closed_inband` count as closed).
 
-required skill 不可用且 SKILL.md 文件不可读、无法以 report-only lens 执行或输出缺关键结论 → `escalate_to_human`。pass/revise 输出必须含顶层 `skillResults`，逐项记录 executed / unavailable / failed。本仓库命名禁止 `openspec-*` 回流。
+If a required skill is unavailable AND the SKILL.md file is unreadable, cannot be executed with a report-only lens, or its output lacks key conclusions → `escalate_to_human`. pass/revise output must include a top-level `skillResults` field recording executed / unavailable / failed for each skill. The `openspec-*` naming convention is prohibited in this repo.
 
-**Skill 执行回退规则**：审查员必须先尝试 Skill 工具调用 required skill。如果 Skill 工具在 headless/read-only 环境下失败，必须回退——直接 Read 该 skill 的 SKILL.md 文件，从中提取审查维度和检查清单，独立应用到 acceptance sources。回退成功时记录 `status=executed`，并在 `mode` 或 `evidence` 标明 `skill-file fallback`。不得使用 `qa` 替代 `qa-only`，不得使用 `openspec-*` 名称。
+**Skill Execution Fallback Rule**: The reviewer must first attempt to invoke required skills via the Skill tool. If the Skill tool fails in a headless/read-only environment, the reviewer must fall back — Read the SKILL.md file for that skill directly, extract the review dimensions and checklists from it, and apply them independently to the acceptance sources. When fallback succeeds, record `status=executed` and note `skill-file fallback` in the `mode` or `evidence` field. Must not substitute `qa` for `qa-only`; must not use `openspec-*` naming.
 
-**三要素执行摘要要求（FR-REVIEW-006）**：每个必需技能的 `evidence` 字段必须包含三要素：（1）**在哪执行** — 会话位置/记录路径；（2）**具体输入/检查点** — 实际检查的内容；（3）**结论** — 发现了什么。禁止只写 "已执行"、"通过" 或无具体内容的占位符。
+**Three-Element Evidence Summary Requirement (FR-REVIEW-006)**: The `evidence` field of each required skill must contain three elements: (1) **Where executed** — session location / record path; (2) **Specific inputs / checkpoints** — what was actually inspected; (3) **Conclusion** — what was found. Placeholder text such as "executed", "passed", or any entry without specific content is prohibited.
 
-**实质内容最低门槛（FR-REVIEW-007）**：识别空洞摘要的判据如下。凡出现以下任意情形视为空洞，reviewer 必须降级为 `failed`：
-- evidence 仅含状态词，无检查位置
-- evidence 无具体检查点或输入描述
-- evidence 缺少结论内容
-- 空洞反例：`{"status":"executed","evidence":"ran verify-change, acceptance tests pass"}` — 缺在哪执行、无具体检查目标
-- 合规示例：`{"status":"executed","evidence":"(1) Skill tool in this session; (2) read final-test-report.md lines 1-45, checked FR-001/FR-002/FR-003 closure evidence; (3) FR-001/FR-002 closed with raw command output, FR-003 missing evidence — flagged blocking"}`
-不依赖执行位置路径的自动机器校验——判断由 reviewer 人工核查，不要求路径可访问。
+**Minimum Substance Threshold (FR-REVIEW-007)**: Criteria for identifying hollow summaries. Any of the following constitutes a hollow summary; the reviewer must downgrade to `failed`:
+- evidence contains only status words with no inspection location
+- evidence contains no specific checkpoints or input descriptions
+- evidence lacks a conclusion
+- Hollow example: `{"status":"executed","evidence":"ran verify-change, acceptance tests pass"}` — missing where it was executed, no specific inspection target
+- Compliant example: `{"status":"executed","evidence":"(1) Skill tool in this session; (2) read final-test-report.md lines 1-45, checked FR-001/FR-002/FR-003 closure evidence; (3) FR-001/FR-002 closed with raw command output, FR-003 missing evidence — flagged blocking"}`
+Automated machine validation against execution location paths is not required — judgment is by the reviewer's manual inspection; path accessibility is not required.
 
-## 总原则
+## General Principles
 
-审查重心在验收证据质量，而不是报告形式。先回答 5 个问题：
+The review focuses on the quality of acceptance evidence, not the format of the report. Answer these 5 questions first:
 
-1. **验收完整吗** — 每条验收标准都有客观证据吗？
-2. **证据新鲜吗** — final-test-report 是否当前 session 现跑？
-3. **Verifier 闭环了吗** — 最新 verdict 都是 pass 吗？fix_status 剩余 open/in_progress **列出但不据此判 blocking**（仅当前阶段，前序阶段已裁决不重扫；`accepted`/`closed_inband` 视为已闭合）。
-4. **Knowledge 完整吗** — apply/phase、final-test-report、verifier reports、progress 都齐吗？
-5. **交付边界清晰吗** — keep/exclude/split、生成物、治理改动是否分类完毕？
+1. **Is acceptance complete?** — Does every acceptance criterion have objective evidence?
+2. **Is the evidence fresh?** — Was final-test-report produced by running tests in the current session?
+3. **Is verifier closure complete?** — Are all latest verdicts pass? Remaining open/in_progress fix_status items **must be listed but must not be used as a basis for blocking** (current stage only; prior stages already adjudicated — do not re-scan; `accepted`/`closed_inband` count as closed).
+4. **Is Knowledge complete?** — Are apply/phase, final-test-report, verifier reports, and progress all present?
+5. **Are delivery boundaries clear?** — Have keep/exclude/split, artifacts, and governance changes all been classified?
 
-## 增量审查规则
+## Incremental Review Rules
 
-第 1 轮：全量审查，按本合同所有维度出 findings。
+Round 1: Full review against all dimensions in this contract.
 
-第 2+ 轮：
+Round 2+:
 
-1. 逐条核验前轮 blocking；未修复 → blocking。
-2. 只审本轮修改文件和受影响源。
-3. 如果触碰 RuntimeAdapter / checkpoint / workflow 边界、forbidden files、跨 package 接口 → 对该模块全量复审。
-4. 新 blocking 只能来自本轮新改动、前轮不可能发现的问题、架构/边界触碰；其余 late finding 标 `minor`。
-5. 每轮独立会话，只看 review package。
+1. Verify each prior-round blocking item one by one; unresolved → blocking.
+2. Review only files changed in this round and affected sources.
+3. If RuntimeAdapter / checkpoint / workflow boundaries, forbidden files, or cross-package interfaces are touched → full re-review of that module.
+4. New blocking findings may only come from changes introduced in this round, issues that could not have been detected in prior rounds, or architecture/boundary touches; all other late findings are marked `minor`.
+5. Each round is an independent session; review only the review package.
 
-## 首轮必查项
+## Round-1 Mandatory Checks
 
-第 1 轮必须全部执行，不允许后续轮次才发现：
+All of the following must be executed in Round 1; discovering them in later rounds is not allowed:
 
-1. `workflow-issues.jsonl` 存在且已追加本 task 条目。
-2. `verifier-report-index.md` 的 `fix_status` 列：**列出当前阶段剩余 open 行（不据此判 blocking）**。只查该列，不扫描 summary。
-   - open 集 = `{ open, in_progress }`；已闭合（视为非 open）= `{ closed, fixed, escalated, accepted, closed_inband }`。
-   - 跨阶段收窄：只统计 stage 列 == 当前阶段（`currentStage`）的 open 行；前序阶段已裁决的 open 不重扫、不计入。
-   - reviewer 在报告里如实列出当前阶段剩余 open 清单（checkpoint:round），注明"用户知情下放行"，但**不把 open 作为 revise_required 的依据**。
-3. `spec 验收章节覆盖度核对`：spec.md 第 10 章每条 AC（含 Verification Method/AC ID）+ plan/tasks 每 phase 测试设计在 final-test-report 中都有证据。
-4. artifacts 用户问题闭环：intake 原始用户问题在 final-test-report 中有验收证据。
+1. `workflow-issues.jsonl` exists and has an entry appended for this task.
+2. `fix_status` column in `verifier-report-index.md`: **list remaining open rows for the current stage (do not block on them)**. Inspect this column only; do not scan the summary.
+   - Open set = `{ open, in_progress }`; closed (not considered open) = `{ closed, fixed, escalated, accepted, closed_inband }`.
+   - Cross-stage scoping: count only rows where the stage column equals the current stage (`currentStage`); prior-stage open items already adjudicated are not re-scanned and not counted.
+   - The reviewer must faithfully list the remaining open items for the current stage (checkpoint:round) in the report, noting "user acknowledged — allowed to proceed", but **must not use open items as grounds for revise_required**.
+3. `spec acceptance section coverage check`: every AC in spec.md Chapter 10 (including Verification Method / AC ID) + every per-phase test design in plan/tasks must have evidence in final-test-report.
+4. artifacts user issue closure: each original user issue from the intake must have acceptance evidence in final-test-report.
 
-第 2+ 轮发现首轮可检测 issue → 标 `late_finding: true`，通常只能 `minor`。
+Finding a Round-1-detectable issue in Round 2+ → mark `late_finding: true`; usually only `minor`.
 
-## 阻断/非阻断分类
+## Blocking / Non-Blocking Classification
 
-**阻断（必须出 revise_required）**：
+**Blocking (revise_required must be issued)**:
 
-- 审查员未真实调用 `qa-only` 或 `verify-change --light`。
-- 最终测试报告或 verifier reports 缺失。
-- final-test-report 引用“之前已经跑过”“上一轮 verdict 已通过”“逻辑上应该没变”“同 Phase X 一致”等历史结果。
-- final-test-report 未按 `<!-- round-N -->` 分段保留 raw output，或覆盖旧轮次。
-- spec 验收章节（第 10 章 AC）或 plan/tasks 测试设计有条目未覆盖，或 spec 验收标准无客观证据。
-- artifacts 原始用户问题未全部验证已解决。
-- 验收命令非全绿、typecheck 有错误、项目相关 test/build 未执行且无替代检查。
-- 出现 skipped、only、todo 或临时关闭测试。
-- 证据缺 evidence JSON 文件路径、真实 exit_code、时间/session/commit 特征，或有 `...` / `（省略）` / `（同上）`。
-- 多步验收证据缺任意一步原始输出，或用“上文已有”替代。
-- ~~verifier-report-index 有 open/in_progress finding~~ **（已降级，移至非阻断）**：剩余 open/in_progress finding 不再阻断；列出当前阶段清单如实呈现（用户已决定 open 降级为知情确认），`accepted`/`closed_inband` 视为已闭合，前序阶段 open 不重扫。
-- design/plan/code 最新 review 未通过，或 revise_required 无修复记录。
-- 涉及 UI/browser/user flow 但未用 `isolated-browser-qa` 或缺截图/trace。
-- 浏览器 QA 截图 hash 重复，或 final-test-report 与 close/summary 记录的 QA 工具名称矛盾。
-- 前端 change 缺「视觉对比验收」段。
-- 使用 design-fidelity-component-contract 时，设计合同不存在、非 latest，或 component 实现无法对齐合同。
-- 交付 out-of-scope、遗漏 spec 目标、差异未解释，或当前 change 无法独立讲成完整 user story。
-- 约束同步未完成，或全 change 自洽性未验证。
+- The reviewer did not genuinely invoke `qa-only` or `verify-change --light`.
+- Final test report or verifier reports are missing.
+- final-test-report references historical results such as "already ran before", "last-round verdict already passed", "logically should not have changed", or "same as Phase X".
+- final-test-report does not preserve raw output in `<!-- round-N -->` segments, or overwrites previous rounds.
+- Any item in the spec acceptance section (Chapter 10 AC) or plan/tasks test design is uncovered, or a spec acceptance criterion has no objective evidence.
+- Not all original user issues from artifacts have been verified as resolved.
+- Acceptance commands are not all green, typecheck has errors, or project-related test/build was not executed and there is no alternative check.
+- skipped, only, todo, or temporarily disabled tests are present.
+- Evidence is missing an evidence JSON file path, a genuine exit_code, or time/session/commit characteristics; or evidence contains `...` / `(omitted)` / `(same as above)`.
+- Multi-step acceptance evidence is missing the raw output of any step, or a step uses "as shown above" as a substitute.
+- ~~verifier-report-index has open/in_progress findings~~ **(downgraded, moved to non-blocking)**: remaining open/in_progress findings no longer block; the reviewer lists the current-stage open items as-is (user has decided open items are downgraded to acknowledged), `accepted`/`closed_inband` count as closed, prior-stage open items are not re-scanned.
+- The latest review of design/plan/code has not passed, or there is no fix record for a revise_required.
+- UI/browser/user flow is in scope but `isolated-browser-qa` was not used, or screenshots/traces are missing.
+- Browser QA screenshot hashes are duplicated, or the browser QA tool name recorded in final-test-report contradicts that in close/summary.
+- A frontend change is missing a "visual comparison acceptance" section.
+- When using design-fidelity-component-contract: the design contract does not exist or is not the latest, or the component implementation cannot be aligned to the contract.
+- Delivery is out-of-scope, spec goals are omitted, differences are unexplained, or the current change cannot be told as a complete, independent user story.
+- Constraint synchronization is incomplete, or the full-change self-consistency has not been verified.
 
-**验收指标三软门（FR-ORACLE-001/002/003）**：
+**Acceptance Indicator Soft Gates (FR-ORACLE-001/002/003)**:
 
-- **FR-ORACLE-001 分母检查**：spec 验收章节（第 10 章）中的每个验收指标，是否写明分母（即 "X/Y 中的 Y 是多少"）？任一指标缺分母（如只写"覆盖率 80%"而不写"共 N 条 AC 中至少 M 条"）→ revise_required。
-- **FR-ORACLE-002 反向断言成对**：每条行为断言是否同时声明正向（X 必须发生）和反向（Y 必须不发生）？任一断言只有正向、缺反向一侧 → revise_required。
-- **FR-ORACLE-003 验收来源核验**：spec 验收章节 / plan-tasks 测试设计每条 AC 是否标明来源？实现者自填的来源（如 "手工测量"、"本次新建"）是否有独立确认（非同一人自证）？来源缺失或未独立确认 → revise_required。
+- **FR-ORACLE-001 Denominator Check**: For each acceptance metric in the spec acceptance section (Chapter 10), is the denominator stated (i.e., "what is the Y in X/Y")? If any metric lacks a denominator (e.g., writing only "coverage 80%" without stating "at least M of N total ACs") → revise_required.
+- **FR-ORACLE-002 Paired Reverse Assertions**: For each behavioral assertion, is both the positive side (X must happen) and the negative side (Y must not happen) declared? If any assertion has only the positive side and is missing the negative side → revise_required.
+- **FR-ORACLE-003 Acceptance Source Verification**: Does every AC in the spec acceptance section / plan-tasks test design have a stated source? For sources filled in by the implementer (e.g., "manually measured", "created in this iteration"), is there independent confirmation (not self-attested by the same person)? If the source is missing or not independently confirmed → revise_required.
 
-**非阻断（应出 pass，可标 important/minor）**：
+**Non-Blocking (pass may be issued; may mark important/minor)**:
 
-- 浏览器 QA 截图路径可更清晰。
-- 测试报告措辞可更精确。
-- 非约束性配置提醒。
-- E2E fixture 非合同派生但不影响当前交付时标 important；影响验收可信度时升级 blocking。
+- Browser QA screenshot paths could be clearer.
+- Test report wording could be more precise.
+- Non-binding configuration reminders.
+- E2E fixtures not contract-derived but not affecting current delivery → mark important; if they affect acceptance credibility → escalate to blocking.
 
-## 检查维度
+## Inspection Dimensions
 
-| 维度 | 验证方法 |
+| Dimension | Verification Method |
 |------|---------|
-| Required Skills 已执行 | 检查 qa-only 与 verify-change --light 输出；无法执行 required skill → escalate |
-| 验收矩阵 | 逐条对照 spec Success Criteria 与 final-test-report 证据 |
-| spec 验收章节核对 | spec 第 10 章每条 AC + plan/tasks 每 phase 测试设计在 final-test-report 中有命令/截图/报告证据 |
-| 用户问题闭环 | intake artifacts 每个原始问题都有验收证据 |
-| Fresh verification | final-test-report 当前 session 现跑，禁止历史引用 |
-| round raw output | 检查 `<!-- round-N -->` 分段，不覆盖旧轮次 |
-| 命令全绿 | 执行/核验 `pnpm test`、`make test`、项目指定命令 |
-| typecheck 通过 | 执行/核验 `pnpm typecheck` 或项目指定 typecheck |
-| 测试可信度 | 检查 skipped/only/todo、临时关闭、docs-only 替代检查 |
-| 证据真实性 | evidence JSON 文件存在、provenance hash 匹配、exit_code/timestamp 合理 |
-| verifier 闭环 | reviews.jsonl 与 index 结构一致；fix_status 列剩余 open/in_progress **列出但不阻断**（仅当前阶段，前序阶段不重扫）；`accepted`/`closed_inband` 视为已闭合 |
-| workflow-issues | 文件存在且追加本 task stage 条目 |
-| Knowledge close | task.md、AGENTS.md、progress.md、apply/phase、test/final-test-report、verifier reports 完整 |
-| 浏览器 QA | UI scope 时 isolated-browser-qa、截图/trace、截图 hash 唯一、工具来源一致 |
-| 视觉对比 | 前端 change 必有「视觉对比验收」段 |
-| 设计合同验收 | design-contract/ui-contract latest，component 实现与合同一致 |
-| Scope 与风险 | out-of-scope、遗漏目标、未解释差异、是否暂不 archive |
-| 三轮升级 | 连续 3 轮 revise_required 需 BrainInbox 根因沉淀 |
-| FR 逐条核验（FR-ACCEPT-002） | 对照 plan/spec 的**每一条**功能需求逐条核对是否实现，**禁止抽样**：抽查若干条即下 pass 视为审查不充分；任一 FR 未核到 → blocking |
-| 原始需求逐条完整解决（FR-ACCEPT-003） | 对照 intake 原始需求台账/decision-log，**逐条**核验每条原始需求是否被**完整解决**（不止"有 FR 映射"，而是实现确已落地满足该需求）；任一条未完整解决或未核到 → blocking |
-| dogfood 豁免理由核验（FR-DOG-002） | 若判定某产物为纯库/纯文档/纯配置而豁免 dogfood 真跑，reviewer 输出中必须明确标注豁免理由（为何属纯库/纯文档/纯配置，且不含 behavior-shaping 逻辑）；未标豁免理由 → revise_required |
+| Required Skills executed | Check qa-only and verify-change --light output; if required skill cannot be executed → escalate |
+| Acceptance matrix | Compare spec Success Criteria against final-test-report evidence item by item |
+| spec acceptance section check | Every AC in spec Chapter 10 + every per-phase test design in plan/tasks has command/screenshot/report evidence in final-test-report |
+| User issue closure | Every original issue in intake artifacts has acceptance evidence |
+| Fresh verification | final-test-report produced by running tests in current session; historical references prohibited |
+| round raw output | Check `<!-- round-N -->` segments; must not overwrite previous rounds |
+| Commands all green | Execute or verify `pnpm test`, `make test`, project-specified commands |
+| typecheck passes | Execute or verify `pnpm typecheck` or project-specified typecheck |
+| Test credibility | Check for skipped/only/todo, temporarily disabled tests, docs-only substitute checks |
+| Evidence authenticity | evidence JSON file exists, provenance hash matches, exit_code/timestamp are reasonable |
+| verifier closure | reviews.jsonl and index structure consistent; remaining open/in_progress fix_status items in `fix_status` column **listed but not blocking** (current stage only; prior stages not re-scanned); `accepted`/`closed_inband` count as closed |
+| workflow-issues | File exists and has this task's stage entry appended |
+| Knowledge close | task.md, AGENTS.md, progress.md, apply/phase, test/final-test-report, verifier reports all present |
+| Browser QA | For UI scope: isolated-browser-qa, screenshots/traces, screenshot hashes unique, tool source consistent |
+| Visual comparison | Frontend changes must have a "visual comparison acceptance" section |
+| Design contract acceptance | design-contract/ui-contract is latest; component implementation is consistent with the contract |
+| Scope and risk | out-of-scope, missed goals, unexplained differences, whether to defer archive |
+| Three-round escalation | 3 consecutive rounds of revise_required require a documented root-cause analysis filed in the project's designated knowledge/retrospective location |
+| FR line-by-line verification (FR-ACCEPT-002) | Compare every functional requirement in plan/spec one by one; **sampling is prohibited**: issuing pass after spot-checking a few FRs is insufficient review; any FR not verified → blocking |
+| Original requirements fully resolved (FR-ACCEPT-003) | Compare against the intake original-requirements ledger/decision-log and verify **one by one** that each original requirement has been **completely resolved** (not merely "has an FR mapping" but confirmed that the implementation satisfies the requirement); any item not completely resolved or not verified → blocking |
+| dogfood exemption justification (FR-DOG-002) | If a deliverable is deemed a pure library / pure documentation / pure configuration and therefore exempt from dogfood live-running, the reviewer's output must explicitly state the exemption reason (why it qualifies as pure library/documentation/configuration and contains no behavior-shaping logic); missing exemption reason → revise_required |
 
-## Fresh verification 真假鉴别
+## Fresh Verification: Genuine vs. Fake
 
-- final-test-report 必须是当前 session 的原始输出。
-- 看到历史引用字样直接 `revise_required`。
-- 每个 `<!-- round-N -->` 段应包含当前 session 唯一特征：session_id、实际时间戳或当前 commit hash。
-- 连续 3 轮同一验证项证据问题 → finding 标 `repeat: true`，并 `escalate_to_human`。
+- final-test-report must be raw output from the current session.
+- Any historical-reference wording found → immediately `revise_required`.
+- Each `<!-- round-N -->` segment should contain a unique characteristic of the current session: session_id, actual timestamp, or current commit hash.
+- 3 consecutive rounds with evidence issues on the same verification item → mark the finding `repeat: true` and `escalate_to_human`.
 
-## 浏览器验收规则
+## Browser Acceptance Rules
 
-UI/browser/user-flow change 必查：
+For UI/browser/user-flow changes, the following are mandatory:
 
-- 必须使用 `isolated-browser-qa`，不得只做人工口头验收。
-- 必须有截图或 trace。
-- 执行截图 hash 唯一性检查：重复 hash → blocking。
-- final-test-report 与 close/summary 的浏览器 QA 工具名称必须一致。
-- 无法验证时不能 pass，必须写 missing/blocking。
+- Must use `isolated-browser-qa`; manual verbal acceptance alone is not sufficient.
+- Must have screenshots or traces.
+- Execute screenshot hash uniqueness check: duplicate hashes → blocking.
+- The browser QA tool name in final-test-report must be consistent with that in close/summary.
+- If verification is not possible, pass must not be issued; missing/blocking must be written.
 
-## Knowledge close 与交付边界
+## Knowledge Close and Delivery Boundaries
 
-- 检查 `task.md`、`AGENTS.md`、`progress.md`、`apply/phase-*.md`、`test/final-test-report.md`、`reports/*.md`。
-- pass 后仍不等于交付完成；必须写 `close/summary.md` 并等待用户明确“进行交付”或等价表达，才能 archive/merge/删分支/七项验证。
-- 如果出现过同一 phase 连续 3 轮 revise_required，`/Users/Hugh/Hugh/Knowledge/BrainInbox/` 必须有根因分析，不是流水账。
+- Check `task.md`, `AGENTS.md`, `progress.md`, `apply/phase-*.md`, `test/final-test-report.md`, `reports/*.md`.
+- pass does not mean delivery is complete; `close/summary.md` must be written and the user must explicitly say "proceed with delivery" or an equivalent expression before archive/merge/branch deletion/seven-item verification.
 
-## 验证方法
+## Verification Methods
 
-1. **Skill 对照**：逐条核验 qa-only/verify-change --light 的 findings 是否进入 verdict；未真实调用 required skill → escalate。
-2. **执行命令**：对 test/typecheck/build/fresh check 直接运行或核验原始输出。
-3. **读文件 + grep**：检查 verifier-report-index、reviews.jsonl、workflow-issues、final-test-report、baseline。
-4. **列级检查**：verifier-report-index 只看 `fix_status` 列，列出当前阶段剩余 open/in_progress（列出不阻断，前序阶段不重扫；`accepted`/`closed_inband` 视为已闭合）。
-5. **目录检查**：截图、trace、Knowledge artifacts 必须存在且非空。
-6. **交叉比对**：spec AC、baseline、用户问题、final evidence 逐条映射。
+1. **Skill cross-check**: Verify one by one whether qa-only/verify-change --light findings are reflected in the verdict; if required skill was not genuinely invoked → escalate.
+2. **Execute commands**: Run or verify raw output for test/typecheck/build/fresh check.
+3. **Read files + grep**: Inspect verifier-report-index, reviews.jsonl, workflow-issues, final-test-report, baseline.
+4. **Column-level inspection**: In verifier-report-index, inspect only the `fix_status` column; list remaining open/in_progress items for the current stage (list but do not block; prior stages not re-scanned; `accepted`/`closed_inband` count as closed).
+5. **Directory inspection**: Screenshots, traces, Knowledge artifacts must exist and be non-empty.
+6. **Cross-reference**: Map spec ACs, baseline, user issues, and final evidence item by item.
 
-## 证据真实性维度（FR-REV-002）
+## Evidence Authenticity Dimension (FR-REV-002)
 
-- 证据文件位于 `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`，gate 已验证 provenance
-- 审查时 Read evidence JSON 确认 command、exit_code、timestamp 合理性
-- 禁止 `...` / `（省略）` / `（同上）`。
-- **Host-Verified Facts 优先**：当审查包包含 Host-Verified Facts 段时，reviewer 不重跑 evidence command。reviewer 继续读取 evidence JSON 确认 command/exit_code/timestamp 合理性，读取 stdout/stderr 检查占位符
-- Host-Verified Facts 与 reviewer 发现矛盾 → `escalate_to_human`（fail-closed）。
+- Evidence files are located at `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`; gate has verified provenance.
+- During review, Read the evidence JSON to confirm that command, exit_code, and timestamp are reasonable.
+- `...` / `(omitted)` / `(same as above)` are prohibited.
+- **Host-Verified Facts take priority**: When the review package contains a Host-Verified Facts section, the reviewer does not re-run evidence commands. The reviewer still reads the evidence JSON to confirm command/exit_code/timestamp reasonableness, and reads stdout/stderr to check for placeholders.
+- If Host-Verified Facts contradict reviewer findings → `escalate_to_human` (fail-closed).
 
-## 同 Finding 连续 2 轮升级规则（FR-REV-001）
+## Same-Finding Two-Round Escalation Rule (FR-REV-001)
 
-同一 blocking 连续 2 轮未闭合时，finding 必须包含：
+When the same blocking finding remains unclosed for 2 consecutive rounds, the finding must include:
 
-1. 根因。
-2. 扫描范围。
-3. 反例矩阵。
-4. Closure checklist。
+1. Root cause.
+2. Scan scope.
+3. Counterexample matrix.
+4. Closure checklist.
 
-第 3 轮仍未闭合 → `escalate_to_human`。
+If still unclosed in Round 3 → `escalate_to_human`.
 
-## 修订记录
+## Revision Record
 
-主 agent 在收到 `revise_required` 后、发起下一轮审查前，必须 append-only 记录失败根因、修改文件、修改摘要、验证命令和结果。reviewer 只读不写；缺修订记录时按证据缺失处理。
+After receiving `revise_required` and before initiating the next review round, the main agent must append-only record: failure root cause, modified files, modification summary, verification commands, and results. The reviewer reads only, does not write; a missing revision record is treated as missing evidence.

@@ -1,262 +1,262 @@
-# Intake Review 统一审查合同
+# Intake Review Unified Reviewer Contract
 
-> 本文件定义 intake 两审（方向/综合）的共享规则和各自维度。
-> 合同外发现只能标 `minor`，不能标 `blocking`。
-
----
-
-## 总则段（两审共享）
-
-### 范围
-
-本合同适用于 intake-direction-review、intake-detail-review 两份审查 prompt。各 prompt 引用本合同的对应节作为审查维度和阻断规则来源。范围四维维度（Real Pain / Complexity ROI / Risk Scope / Timing）内联在本合同范围节，不再有独立 scope 合同。
-
-### Finding 分类规则（MR-2）
-
-所有 finding 必须按以下四分类归入一级，再决定是否可标 blocking：
-
-| 分类 | 含义 | 可标 blocking？ |
-|------|------|:---:|
-| **问题改变** | 方向级——要解决的问题本身变了（真实痛点 vs agent 发明的问题） | ✅ 可 blocking |
-| **范围/优先级** | 方向级——该不该现在做、scope 边界是否合理 | ✅ 可 blocking |
-| **对需求的解释** | 方向级——原始需求的理解分歧 | ✅ 可 blocking |
-| **仅实现层** | 方案/实现细节争议，不改变方向判断 | ❌ 强制降非阻断 |
-
-**仅实现层处理规则**：
-- 发现仅实现层争议时，标 blocking 的必须降为 `important` 或 `minor`，不得用 blocking 阻碍推进。
-- 若认为实现层风险足够严重（如方案不可行导致需求无法交付），应 `escalate_to_human` 移交 Stage 1（Design），不在 intake 阶段以 blocking 卡死。
-
-### 增量审查规则
-
-第 1 轮：全量审查，按对应节所有维度出 findings。
-
-第 2+ 轮：
-1. 逐条核验前轮 blocking；未修复 → blocking。
-2. 如果上游决策或需求发生变化，对该变化做全量复审。
-3. 新 blocking 只能来自本轮新信息或前轮不可能发现的问题；其余 late finding 标 `minor`。
-
-### 同 Finding 连续 2 轮升级规则（FR-REV-001）
-
-同一 blocking 连续 2 轮未闭合时，finding 必须包含根因、扫描范围、反例矩阵、Closure checklist。
-第 3 轮仍未闭合 → `escalate_to_human`。
-
-### 修订记录规则
-
-主 agent 在收到 `revise_required` 后、发起下一轮审查前，必须 append-only 记录失败根因、修改文件、修改摘要、验证命令和结果。reviewer 只读不写；缺修订记录时按证据缺失处理。
-
-### Knowledge 路径规则
-
-- 正确 project root：`{{task_tracking_root}}`。
-- task 文件位于 `{{task_tracking_root}}/tasks/<task-id>/`。
-- 出现 `/Users/Hugh/Knowledge/Projects/multica-agenthub` → `escalate_to_human`。
+> This file defines the shared rules and dimension-specific rules for both intake reviews (direction / detail).
+> Findings outside the contract scope may only be marked `minor`; marking them `blocking` is not permitted.
 
 ---
 
-## 方向节（intake-direction-review 适用）
+## General Provisions (shared by both reviews)
 
-### 三轴审查
+### Scope
 
-每轮必须覆盖三轴，缺一不可：
+This contract applies to the intake-direction-review and intake-detail-review prompts. Each prompt references the corresponding section of this contract as its source of review dimensions and blocking rules. The four scope dimensions (Real Pain / Complexity ROI / Risk Scope / Timing) are inlined in this scope section; no separate scope contract exists.
 
-| 轴 | 含义 | 对照源 |
-|----|------|--------|
-| **Direction Fit** | 需求方向是否符合项目定位、约束和用户真实目标 | intake-original-context.md、contract.md、plan-ceo-review |
-| **Demand Reality** | 问题的真实性——是用户真实痛点还是 agent 发明的问题 | intake-original-context.md、review skill output |
-| **Premise Safety** | 方向级假设是否站得住——有没有"错了整件事就崩"的脆弱前提 | intake-original-context.md、plan-ceo-review |
+### Finding Classification Rules (MR-2)
 
-### Required Skill Execution（方向节）
+All findings must be categorized into one of the following four classes before deciding whether a `blocking` label is permitted:
 
-审查员必须直接调用：
+| Class | Meaning | May be marked blocking? |
+|-------|---------|:---:|
+| **Problem Change** | Direction-level — the problem being solved has changed (genuine pain vs. agent-invented problem) | ✅ Yes |
+| **Scope / Priority** | Direction-level — whether this should be done now, or whether the scope boundary is reasonable | ✅ Yes |
+| **Requirement Interpretation** | Direction-level — disagreement on how to read the original requirement | ✅ Yes |
+| **Implementation-Only** | Dispute over approach / implementation details that does not affect the direction decision | ❌ Must be downgraded to non-blocking |
 
-- `plan-ceo-review`：premise challenge、scope mode、existing leverage、implementation alternatives、dream state delta、risk review。
-- `review`：独立复审需求方向、用户痛点、方案前提假设。
+**Implementation-Only handling rules**:
+- When a finding is implementation-only, any `blocking` label must be downgraded to `important` or `minor`; blocking may not be used to stall progress.
+- If the reviewer believes the implementation risk is severe enough (e.g., the approach is infeasible and the requirement cannot be delivered), use `escalate_to_human` to hand off to Stage 1 (Design) — do not use `blocking` to hard-stop at the intake stage.
 
-required skill 不存在、不可运行、无法以 report-only 模式执行或输出缺关键结论 → `escalate_to_human`。
+### Incremental Review Rules
 
-### 总原则（方向节）
+Round 1: Full review — produce findings against all dimensions in the applicable section.
 
-方向审查的核心判断：**这个需求方向对吗？问题真实吗？值得做吗？**
+Round 2+:
+1. Verify each blocking finding from the previous round one by one; if unresolved → blocking.
+2. If upstream decisions or requirements have changed, perform a full re-review of those changes.
+3. New blocking findings may only arise from new information in this round or issues that could not have been found in the previous round; all other late findings must be marked `minor`.
 
-先回答 5 个问题：
-1. **方向对位** — 这个需求方向对准的是用户真实诉求，还是 agent 解读后的衍生品？
-2. **问题真实** — 用户说"痛"，是真的痛还是"听起来该痛"？有没有反例？
-3. **切口合理** — 目前规划的最小切口是否真的最小？有没有更简单的替代路径？
-4. **前提脆弱** — 方向里哪个假设一旦错，整件事就白做？
-5. **时机合适** — 现在做还是等某个前置依赖 ready？
+### Same-Finding Consecutive 2-Round Escalation Rule (FR-REV-001)
 
-### 阻断/非阻断分类（方向节）
+When the same blocking finding remains unclosed for 2 consecutive rounds, the finding must include: root cause, scan scope, counterexample matrix, and a Closure checklist.
+If still unclosed after round 3 → `escalate_to_human`.
 
-**阻断（必须出 revise_required）**：
-- 需求方向与用户原始诉求明显偏离（intake-original-context.md 中有明确矛盾）。
-- 需求解决的是 agent 发明的问题，不是用户的真实痛点。
-- 方向级假设被证伪（"一旦错了整件事就崩"的脆弱假设成立）。
-- 存在明显更优的替代路径，且当前路径有明显风险被故意忽略。
-- 用户已批准 scope 在 direction 层面被推翻：应降为风险提醒，不得阻断。
+### Revision Record Rules
 
-**非阻断（应出 pass，可标 important/minor）**：
-- 方向没有原则性错误，但切口可以更小。
-- 方向正确但前提假设不够明确。
-- 用户已批准的 scope 决策的风险提醒。
-- 场景优先级排列建议。
+After receiving `revise_required` and before initiating the next review round, the main agent must append-only record: failure root cause, modified files, change summary, verification commands and results. The reviewer is read-only; a missing revision record is treated as missing evidence.
 
-### 检查维度（方向节）
+### Knowledge Path Rules
 
-| 维度 | 验证方法 |
-|------|---------|
-| Required Skills 已执行 | 检查 plan-ceo-review/review 输出。无法执行 → escalate |
-| 方向与用户目标对齐 | 仅对照 intake-original-context.md，方向是否对准用户原始诉求（禁止读 decision-log.md） |
-| 问题真实性 | 检查痛点是否有原始证据（用户原文、数据、已知 bug），还是 agent 构造 |
-| 替代路径评估 | 是否考虑过其他方向？有没有"为什么不这样做"的记录 |
-| 脆弱前提 | 原始需求隐含的假设中是否有"不成立则全盘白做"的假设 |
-| 需求/方案分离 | 方向层是否锁在"问题"而非"方案"上 |
-| scope 边界 | 方向是否明确什么在 scope 内、什么明确不在 |
-| 时机判断 | 现在做还是等某个前置条件 ready |
-
-### 简洁性非阻断检查（方向节，见 FR-GOV-001）
-
-审查员**非阻断**检查给用户回复的简洁性（不得标 blocking，只能标 important/minor）：
-- **先结论后细节**：主 agent 的回复是否先给出结论再展开细节？
-- **大白话**：是否有术语堆砌、内部路径暴露？
-- **表格合理使用**：是否仅用于横向对比？
-- **artifact 结构**：摘要在前 + 详情在后？
-
-### 框架挑战职能（intake-direction-review 适用，纯盲审）
-
-框架挑战不评估方向的正确性，而是质疑"问题该不该这么解"——在**不知道拟定方向的前提下**，检查是否还有未被考虑的框架级替代。这是 intake-direction-review 的核心职能之一，内置于方向节审查中。
-
-| 维度 | 验证方法 |
-|------|---------|
-| 问题框架正确性 | 需求被定义的这个"问题空间"是否站得住？会不会其实完全不是这个问题？ |
-| 框架级替代 | 有没有完全不同于当前拟定方向的解题框架未被考虑？ |
-| 隐含约束质疑 | 当前方向依赖的约束条件是否真的成立？去掉约束会怎样？ |
-| 框架级风险 | 如果方向选错了，影响半径和回退成本是多少？ |
-
-框架质疑若成立 → 可标 blocking（方向节内处理，不走仅实现层降级）。
-**框架挑战的输入仅含原始需求，禁止包含任何拟定方向；审查包中发现拟定方向 → 立即 `escalate_to_human`。**
+- Correct project root: `{{task_tracking_root}}`.
+- Task files are located at `{{task_tracking_root}}/tasks/<task-id>/`.
+- If any artifact contains a user-specific absolute path (e.g. `/Users/<username>/...`) or a legacy project-specific literal path that does not belong in the current review context → `escalate_to_human`.
 
 ---
 
-## 细节节（intake-detail-review 适用）
+## Direction Section (applies to intake-direction-review)
 
-> **注**：intake-detail-review 是综合审查，一次覆盖盲点（Blindspot）、细节（Detail）、漂移（Drift）、范围（Scope）四个维度。本节定义各维度的规则；完整审查清单见 `intake-detail-reviewer.md`。
+### Three-Axis Review
 
-### 五轴审查
+Every round must cover all three axes without exception:
 
-每轮必须覆盖五轴，缺一不可：
+| Axis | Meaning | Reference Source |
+|------|---------|-----------------|
+| **Direction Fit** | Does the requirement direction align with the project's positioning, constraints, and the user's real goals | intake-original-context.md, contract.md, plan-ceo-review |
+| **Demand Reality** | Authenticity of the problem — is this a genuine user pain point or an agent-invented problem | intake-original-context.md, review skill output |
+| **Premise Safety** | Are the direction-level assumptions sound — are there fragile premises that would cause everything to collapse if wrong | intake-original-context.md, plan-ceo-review |
 
-| 轴 | 含义 | 对照源 |
-|----|------|--------|
-| **Source Accuracy** | 每条决策的来源类型（原文要求/衍生/新增）是否真实 | decision-log 第 3 节、intake 原始上下文 |
-| **Decision Consistency** | D1-D13（或现有决策）之间有无逻辑冲突 | decision-log 全篇 |
-| **Assumption Completeness** | 假设节有没有漏掉关键的脆弱假设 | decision-log 第 4 节、实际依赖 |
-| **Verifiability** | 验收标准是否可验证、不模糊 | decision-log 第 7 节 |
-| **Open Issue** | 开放问题哪些其实现在就该定 | decision-log 第 6 节 |
+### Required Skill Execution (Direction Section)
 
-### Required Skill Execution（细节节）
+The reviewer must directly invoke:
 
-审查员必须直接调用：
+- `plan-ceo-review`: premise challenge, scope mode, existing leverage, implementation alternatives, dream state delta, risk review.
+- `review`: independently re-review the requirement direction, user pain points, and solution premise assumptions.
 
-- `review`：独立复审——聚焦细节质量，不重复方向/盲点内容。
+If the required skill does not exist, cannot run, cannot execute in report-only mode, or its output is missing key conclusions → `escalate_to_human`.
 
-required skill 不存在、不可运行、无法以 report-only 模式执行或输出缺关键结论 → `escalate_to_human`。
+### General Principle (Direction Section)
 
-### 总原则（细节节）
+The core judgment of direction review: **Is this requirement direction correct? Is the problem real? Is it worth doing?**
 
-细节审查的核心判断：**决策记录本身经得起推敲吗？**
+Answer these 5 questions first:
+1. **Direction Alignment** — Does this requirement direction target the user's genuine need, or is it a derivative of the agent's interpretation?
+2. **Problem Reality** — When the user says something "hurts," is it actually painful or merely "sounds like it should hurt"? Are there counterexamples?
+3. **Entry Point Reasonableness** — Is the currently planned minimum footprint truly minimal? Is there a simpler alternative path?
+4. **Fragile Premise** — Which assumption in the direction, if wrong, would make the entire effort worthless?
+5. **Timing** — Do this now or wait for some prerequisite dependency to be ready?
 
-先回答 5 个问题：
-1. **诚实标记** — 每条决策的"来源类型"是诚实的还是美化的？有没有把"衍生"或"新增"伪装成"原文要求"？
-2. **逻辑自洽** — 各决策之间矛盾吗？D1 的后续连锁决策是否与 D1 意图一致？
-3. **假设全面** — 第 4 节假设覆盖了所有脆弱前提吗？有没有明显该写但没写的？
-4. **可验收性** — 第 7 节的每条验收标准是否可以被客观判断？有没有模糊措辞？
-5. **拖不得的问题** — 第 6 节哪些开放问题其实现在该定，不该留给实现期？
+### Blocking / Non-Blocking Classification (Direction Section)
 
-### 阻断/非阻断分类（细节节）
+**Blocking (must produce revise_required)**:
+- The requirement direction clearly deviates from the user's original intent (explicit contradiction found in intake-original-context.md).
+- The requirement solves an agent-invented problem, not a genuine user pain point.
+- A direction-level assumption is falsified ("fragile premise" that collapses the whole effort if wrong).
+- A clearly superior alternative path exists, and the current path's obvious risks are deliberately ignored.
+- A user-approved scope decision is overturned at the direction level: downgrade to a risk reminder; blocking is not permitted.
 
-**阻断（必须出 revise_required）**：
-- 来源类型造假：把"新增"或"衍生"伪装成"原文要求"。
-- 决策间存在逻辑矛盾，且放行后会导致方案不可实施。
-- 关键脆弱假设未写入且一旦崩塌会推翻当前方案。
-- 验收标准模糊/不可判定，无法支撑 gate 推进。
-- 明显该实现的开放问题被拖延且未注明理由。
-- 决策的版本锚点缺失或已过期。
+**Non-blocking (should produce pass, may mark important/minor)**:
+- No fundamental error in direction, but the entry point could be smaller.
+- Direction is correct but premises are not stated explicitly enough.
+- Risk reminders for scope decisions already approved by the user.
+- Suggestions for scenario prioritization.
 
-**非阻断（应出 pass，可标 important/minor）**：
-- 次要假设不够显式但不脆弱。
-- 验收标准措辞可更精确但不影响判断。
-- 开放问题优先级排序建议。
-- 决策记录格式建议（编号规范、措辞等）。
+### Review Dimensions (Direction Section)
 
-### 检查维度（细节节）
+| Dimension | Verification Method |
+|-----------|-------------------|
+| Required Skills executed | Check plan-ceo-review / review output. Cannot execute → escalate |
+| Direction aligned with user goals | Compare only against intake-original-context.md; does direction target the user's original intent (reading decision-log.md is prohibited) |
+| Problem authenticity | Check whether pain points have original evidence (user verbatim, data, known bugs), or are agent-constructed |
+| Alternative path evaluation | Were other directions considered? Is there a record of "why not do it this way instead" |
+| Fragile premises | Among assumptions implicit in the original requirement, are any "the whole effort is wasted if this is wrong" |
+| Requirement / solution separation | Is the direction layer locked on the "problem" rather than the "solution" |
+| Scope boundary | Does the direction clearly state what is in scope and what is explicitly out of scope |
+| Timing judgment | Do this now or wait for some prerequisite condition to be ready |
 
-| 维度 | 验证方法 |
-|------|---------|
-| Required Skills 已执行 | 检查 review skill 输出。无法执行 → escalate |
-| 来源类型诚实性 | 逐条比对该决策的原文出处：是否真的来自用户原文，还是 agent 衍生 |
-| 决策一致性 | 跨决策检查逻辑链条：Dn 与 Dn+1 是否兼容 |
-| 假设完整性 | 假设节是否包含"不成立则方案崩"的关键前提 |
-| 验收可测性 | 每条验收标准是否可运行命令/日志验证/人工可判定 |
-| 开放问题及时性 | 检查哪些开放问题应在本阶段定而不是留到实现 |
-| 版本锚点 | decision-log frontmatter version 是否存在且最新 |
+### Conciseness Non-Blocking Check (Direction Section, see FR-GOV-001)
 
-### 阻断/非阻断分类（盲点维度）
+The reviewer performs a **non-blocking** check of the conciseness of replies to users (may not be marked `blocking`; only `important` or `minor` is permitted):
+- **Conclusion first, details second**: Does the main agent's reply lead with the conclusion before expanding on details?
+- **Plain language**: Is there jargon pileup or exposure of internal paths?
+- **Appropriate table use**: Are tables used only for side-by-side comparisons?
+- **Artifact structure**: Summary first, details after?
 
-**阻断（必须出 revise_required）**：
-- 遗漏关键角色或用户群体，导致设计覆盖不完整。
-- 未被覆盖的失败模式在当前设计方案下会造成实质损失。
-- 方向决策依赖的默认前提被证伪或明确不可靠。
-- 存在虚假共识（多方都同意是因为互相确认而非独立判断）。
+### Framework Challenge Function (applies to intake-direction-review; fully blind review)
 
-**非阻断（应出 pass，可标 important/minor）**：
-- 场景覆盖不够细但不影响方向判断。
-- 建议补充的边界测试案例。
-- 长尾维护成本尚未估算但不影响 MVP。
-- 假设不够显式但不脆弱的。
+The framework challenge does not evaluate whether the direction is correct; instead it questions "should the problem be framed this way" — **without knowing the proposed direction**, it checks whether there are framework-level alternatives that have not been considered. This is one of the core functions of intake-direction-review, built into the direction section review.
 
-### 阻断/非阻断分类（漂移维度）
+| Dimension | Verification Method |
+|-----------|-------------------|
+| Problem frame correctness | Is the "problem space" in which this requirement is defined sound? Could it actually be an entirely different problem? |
+| Framework-level alternatives | Is there a completely different solution framework from the current proposed direction that has not been considered? |
+| Implicit constraint challenge | Do the constraints the current direction depends on actually hold? What happens if the constraint is removed? |
+| Framework-level risk | If the wrong direction is chosen, what is the blast radius and the rollback cost? |
 
-**阻断（必须出 revise_required）**：
-- 方向级偏移：拟定方向解决的不是用户真实提出的问题。
-- 原始需求中的核心关切在 decision-log 中被忽略或降级。
-- 未经用户确认就扩大了 scope（不在原文+未在 intake-original-context.md 原始需求台账得到认可）。
-
-**非阻断（应出 pass，可标 important/minor）**：
-- 方向与原始需求基本对准，但措辞有轻微解读偏差。
-- 次要需求优先级稍有调整且理由充分。
-
-### 阻断/非阻断分类（范围维度）
-
-**阻断（必须出 revise_required）**：
-- 痛点维标了「证据」却无任何用户原文/数据来源（伪证据，把主观伪装成客观）。
-- 裁决为「可以做」但风险与影响范围维明确为负面或"无法判断"，裁决与四维结论自相矛盾。
-- 丢弃台账有条目但缺丢弃理由或去向（沿用 FR-TWZ-008，理由缺失对裁决有强制阻断力）。
-- 痛点是 agent 发明的问题、原始上下文中无任何支撑（MR-2「问题改变」级）。
-
-**非阻断（应出 pass，可标 important/minor）**：
-- 四维结论正确但某维证据可以更扎实。
-- 裁决合理但推翻条件清单不够具体。
-- ROI 估算偏乐观但方向无误。
-- 仅实现层的复杂度争议（按 MR-2 强制降非阻断）。
-- 用户已批准的 scope 决策被推翻：应降为风险提醒，不得阻断。
-
-### 范围四维（scope 四维定义，内联）
-
-| 维度 | 含义 | 对照源 |
-|------|------|--------|
-| **Real Pain（真实痛点）** | 是用户真实痛点还是 agent 发明/推断的问题 | intake-original-context.md、decision-log.md |
-| **Complexity ROI（复杂度与 ROI）** | 改动量是否可估、ROI 是否成立（可量化 vs 靠猜） | decision-log.md、plan-ceo-review |
-| **Risk Scope（风险与影响范围）** | 改动边界是否清楚、受影响模块是否列得出 | decision-log.md、plan-ceo-review |
-| **Timing（时机）** | 现在做合不合适、有没有前置依赖或资源冲突 | decision-log.md、项目计划/阶段目标 |
-
-范围维度的五个核心判断问题：
-1. 痛点有用户原文/数据支撑，还是 agent 推断？
-2. 复杂度可估吗？ROI 是可量化还是靠猜？
-3. 改动边界列得出吗？有没有"无法判断影响范围"被当成"风险可控"？
-4. 现在做还是该缓？有没有前置依赖/资源冲突被忽略？
-5. 四选一裁决（可以做/可做但缓一缓/有风险需限制范围/不建议做）与四维结论是否一致？推翻条件清单有没有？
+If a framework challenge is valid → may be marked blocking (handled within the direction section; does not go through implementation-only downgrade).
+**The input for the framework challenge contains only the original requirement; including any proposed direction is prohibited. If a proposed direction is found in the review package → immediately `escalate_to_human`.**
 
 ---
 
-## 修订记录
+## Detail Section (applies to intake-detail-review)
 
-主 agent 在收到 `revise_required` 后、发起下一轮审查前，必须 append-only 记录失败根因、修改文件、修改摘要、验证命令和结果。reviewer 只读不写；缺修订记录时按证据缺失处理。
+> **Note**: intake-detail-review is a comprehensive review that covers four dimensions in a single pass: Blindspot, Detail, Drift, and Scope. This section defines the rules for each dimension; the complete review checklist is in `intake-detail-reviewer.md`.
+
+### Five-Axis Review
+
+Every round must cover all five axes without exception:
+
+| Axis | Meaning | Reference Source |
+|------|---------|-----------------|
+| **Source Accuracy** | Is the source type of each decision (verbatim requirement / derived / newly added) truthfully recorded | decision-log section 3, intake original context |
+| **Decision Consistency** | Are there logical contradictions among D1–D13 (or existing decisions) | decision-log full document |
+| **Assumption Completeness** | Are there critical fragile assumptions missing from the assumption section | decision-log section 4, actual dependencies |
+| **Verifiability** | Are acceptance criteria verifiable and unambiguous | decision-log section 7 |
+| **Open Issue** | Which open issues should actually be resolved now | decision-log section 6 |
+
+### Required Skill Execution (Detail Section)
+
+The reviewer must directly invoke:
+
+- `review`: independent re-review — focus on detail quality; do not repeat direction / blindspot content.
+
+If the required skill does not exist, cannot run, cannot execute in report-only mode, or its output is missing key conclusions → `escalate_to_human`.
+
+### General Principle (Detail Section)
+
+The core judgment of detail review: **Does the decision record itself hold up to scrutiny?**
+
+Answer these 5 questions first:
+1. **Honest labeling** — Is the "source type" of each decision honest or beautified? Is "derived" or "newly added" being disguised as "verbatim requirement"?
+2. **Internal consistency** — Do the decisions contradict each other? Are the downstream decisions from D1 consistent with D1's intent?
+3. **Assumption completeness** — Does section 4's assumptions cover all fragile premises? Are there any obvious ones missing?
+4. **Verifiability** — Can each acceptance criterion in section 7 be objectively evaluated? Is there vague language?
+5. **Issues that cannot wait** — Which open issues in section 6 should actually be resolved now rather than deferred to implementation?
+
+### Blocking / Non-Blocking Classification (Detail Section)
+
+**Blocking (must produce revise_required)**:
+- Source type falsification: disguising "newly added" or "derived" as "verbatim requirement."
+- Logical contradiction between decisions, and allowing them to proceed would make the plan unimplementable.
+- A critical fragile assumption is not recorded, and its collapse would invalidate the current plan.
+- Acceptance criteria are ambiguous / indeterminate and cannot support gate progression.
+- A clearly implementation-ready open issue is deferred without explanation.
+- Version anchors for decisions are missing or stale.
+
+**Non-blocking (should produce pass, may mark important/minor)**:
+- Secondary assumptions are not explicit enough but are not fragile.
+- Acceptance criterion wording could be more precise but does not affect judgment.
+- Suggestions for prioritizing open issues.
+- Decision record format suggestions (numbering conventions, wording, etc.).
+
+### Review Dimensions (Detail Section)
+
+| Dimension | Verification Method |
+|-----------|-------------------|
+| Required Skills executed | Check review skill output. Cannot execute → escalate |
+| Source type honesty | Compare each decision against its verbatim source: does it truly come from user verbatim, or is it agent-derived |
+| Decision consistency | Check the logical chain across decisions: is Dn compatible with Dn+1 |
+| Assumption completeness | Does the assumption section include critical premises whose failure would collapse the plan |
+| Acceptance testability | Can each acceptance criterion be verified by running a command / log check / manual judgment |
+| Open issue timeliness | Check which open issues should be resolved in this stage rather than deferred to implementation |
+| Version anchor | Does the decision-log frontmatter version exist and is it current |
+
+### Blocking / Non-Blocking Classification (Blindspot Dimension)
+
+**Blocking (must produce revise_required)**:
+- A critical stakeholder or user group is omitted, causing the design to have incomplete coverage.
+- An uncovered failure mode would cause real damage under the current design.
+- A default premise the direction decision depends on is falsified or explicitly unreliable.
+- False consensus exists (multiple parties agree because they are confirming each other rather than judging independently).
+
+**Non-blocking (should produce pass, may mark important/minor)**:
+- Scenario coverage is not granular enough but does not affect the direction decision.
+- Suggested boundary test cases to add.
+- Long-tail maintenance costs have not been estimated but do not affect the MVP.
+- Assumptions that are not explicit enough but are not fragile.
+
+### Blocking / Non-Blocking Classification (Drift Dimension)
+
+**Blocking (must produce revise_required)**:
+- Direction-level drift: the proposed direction solves a problem that the user did not actually raise.
+- A core concern from the original requirement is ignored or downgraded in the decision-log.
+- Scope was expanded without user confirmation (not in the original text and not acknowledged in intake-original-context.md's original requirement register).
+
+**Non-blocking (should produce pass, may mark important/minor)**:
+- Direction is broadly aligned with the original requirement but wording has a minor interpretive drift.
+- Priority of a secondary requirement is slightly adjusted with sufficient justification.
+
+### Blocking / Non-Blocking Classification (Scope Dimension)
+
+**Blocking (must produce revise_required)**:
+- A pain point dimension is labeled "evidence" yet has no user verbatim / data source (false evidence — disguising subjective as objective).
+- The verdict is "can do" but the risk-and-impact-scope dimension is clearly negative or "indeterminate," making the verdict self-contradictory with the four-dimension conclusions.
+- The discard register has an entry but is missing a discard reason or disposition (per FR-TWZ-008; missing reason has mandatory blocking force on the verdict).
+- The pain point is an agent-invented problem with no support in the original context (MR-2 "Problem Change" class).
+
+**Non-blocking (should produce pass, may mark important/minor)**:
+- The four-dimension conclusions are correct but evidence for a given dimension could be more solid.
+- The verdict is reasonable but the override-condition checklist is not specific enough.
+- ROI estimate is optimistic but direction is sound.
+- Implementation-only complexity disputes (must be downgraded to non-blocking per MR-2).
+- A user-approved scope decision is overturned: downgrade to a risk reminder; blocking is not permitted.
+
+### Scope Four Dimensions (inline definition)
+
+| Dimension | Meaning | Reference Source |
+|-----------|---------|-----------------|
+| **Real Pain** | Is this a genuine user pain point or an agent-invented / inferred problem | intake-original-context.md, decision-log.md |
+| **Complexity ROI** | Is the change volume estimable, and does the ROI hold (quantifiable vs. guesswork) | decision-log.md, plan-ceo-review |
+| **Risk Scope** | Is the change boundary clear, and can the affected modules be enumerated | decision-log.md, plan-ceo-review |
+| **Timing** | Is now the right time; are there prerequisite dependencies or resource conflicts | decision-log.md, project plan / phase goals |
+
+Five core judgment questions for the scope dimension:
+1. Is the pain point supported by user verbatim / data, or is it agent inference?
+2. Is complexity estimable? Is ROI quantifiable or guesswork?
+3. Can the change boundary be enumerated? Is "cannot determine impact scope" being treated as "risk is manageable"?
+4. Do this now or defer? Are there prerequisite dependencies / resource conflicts being ignored?
+5. Is the four-option verdict (can do / can do but defer / risky, needs scope limit / not recommended) consistent with the four-dimension conclusions? Is an override-condition checklist present?
+
+---
+
+## Revision Record
+
+After receiving `revise_required` and before initiating the next review round, the main agent must append-only record: failure root cause, modified files, change summary, verification commands and results. The reviewer is read-only; a missing revision record is treated as missing evidence.

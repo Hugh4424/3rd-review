@@ -45,7 +45,7 @@ from the entity being verified.
    by and inherits context from the same agent that is being reviewed. Flag
    `proof-independence blocking`.
 4. Look for specs where required-skill execution evidence is accepted without a
-   verifiable external record (e.g., "摘要写了就算通过" without corroborating
+   verifiable external record (e.g., "a summary write-up is sufficient for pass" without corroborating
    artifact). Flag `proof-independence important`.
 5. Look for specs where the same session or context window contains both the
    work product and the review attestation. Flag `proof-independence blocking`.
@@ -68,7 +68,7 @@ produced and what is expected.
 5. Look for specs that define a review output schema but defer binding
    validation to implementation without a hard gate. Flag `schema-drift
    important`.
-6. Look for specs with "逐项裁决" (item-by-item adjudication) patterns where
+6. Look for specs with "item-by-item adjudication" patterns where
    some items may be silently omitted without machine enforcement. Flag
    `schema-drift important`.
 

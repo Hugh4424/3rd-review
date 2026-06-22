@@ -1,150 +1,149 @@
-# Code Review 审查合同
+# Code Review Contract
 
-> 本文件定义了 code-reviewer 的检查维度。合同外的发现只能标 `minor`，不能标 `blocking`。
+> This file defines the inspection dimensions for the code-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
-## 三轴审查
+## Three-Axis Review
 
-每轮审查必须覆盖三个轴，缺一不可：
+Every review round must cover all three axes without exception:
 
-| 轴 | 含义 | 对照源 |
+| Axis | Meaning | Reference Source |
 |----|------|--------|
-| **Spec** | 实现是否符合设计文档 | Design Sources（spec.md / plan.md / tasks.md / 设计文档） |
-| **Standards** | 实现是否符合仓库规范 | Standards Sources（CLAUDE.md / 包级 CLAUDE.md / contract.md） |
-| **Structural Quality** | 实现是否让代码更难维护 | 代码 diff + 结构质量门槛（见下方） |
+| **Spec** | Does the implementation conform to the design documents? | Design Sources (spec.md / plan.md / tasks.md / design docs) |
+| **Standards** | Does the implementation conform to repository conventions? | Standards Sources (CLAUDE.md / package-level CLAUDE.md / contract.md) |
+| **Structural Quality** | Does the implementation make the codebase harder to maintain? | Code diff + Structural Quality Gate (see below) |
 
-## 总原则
+## General Principles
 
-审查重心在代码行为和质量而非证据格式。提 6 个问题：
-1. **做的对吗** — 逻辑有没有 bug？状态流转有没有遗漏 case？
-2. **越界了吗** — diff 是否在 Files allowlist 内？禁止修改文件被碰了吗？
-3. **测试够吗** — 新功能有行为测试吗？失败 case 覆盖了吗？
-4. **证据真吗** — apply/evidence/phase-N-RED/GREEN.json 的 exit_code/timestamp/provenance 是当前 session 现跑的吗？
-5. **有副作用吗** — 改动路径上有无没想到的影响？
-6. **设计对吗** — 实现是否与 Design Sources 一致？对照 spec.md/plan.md/tasks.md/设计文档逐条检查本 phase 负责的关键设计决策。agent type、工具调用方式、数据流路径必须与设计文档一致。
+The review focus is on code behavior and quality, not evidence formatting. Ask 6 questions:
+1. **Is it correct?** — Are there logic bugs? Are there missing cases in state transitions?
+2. **Is it in scope?** — Does the diff stay within the Files allowlist? Were any forbidden files touched?
+3. **Is testing sufficient?** — Do new features have behavioral tests? Are failure cases covered?
+4. **Is the evidence real?** — Are the exit_code/timestamp/provenance in apply/evidence/phase-N-RED/GREEN.json from a live run in the current session?
+5. **Are there side effects?** — Are there unintended impacts along the change path?
+6. **Is the design correct?** — Does the implementation align with Design Sources? Check each key design decision for the current phase against spec.md/plan.md/tasks.md/design docs line by line. Agent type, tool invocation method, and data flow path must match the design documents.
 
-**已自动化**：evidence 存在性（gate.sh phase_pre_review 检查 RED/GREEN 文件存在及内容质量）。
-**未自动化**：Files allowlist 由 guard.sh（PreToolUse hook）阻断危险文件编辑，但不检查 diff 范围与 tasks.md 一致——reviewer 仍需验证 diff 范围。
+**Already automated**: Evidence existence (gate.sh phase_pre_review (agenthub platform path; not in the standalone repo) checks RED/GREEN file presence and content quality).
+**Not automated**: The Files allowlist is enforced by guard.sh (agenthub platform path; not in the standalone repo) (PreToolUse hook) blocking dangerous file edits, but it does not verify that the diff scope is consistent with tasks.md — the reviewer must still validate diff scope.
 
-## 增量审查规则
+## Incremental Review Rules
 
-第 1 轮：全量审查，按本合同所有维度出 findings。
+Round 1: Full review, produce findings across all dimensions defined in this contract.
 
-第 2 轮起：
-1. **先验前轮**：逐条检查前轮 Required Revisions。任何一条未修复 → blocking。
-2. **增量扫描**：只审查本轮修改的文件（git diff --name-only）。未修改文件不重审。
-3. **回归检查**：执行 git diff --stat。如果本轮修改触及以下模块 → 对该模块做全量审查：
-   - RuntimeAdapter / checkpoint / workflow 边界
-   - forbidden files 清单中文件
-   - 跨 package 接口变更
-4. **新 finding 限制**：第 2+ 轮新 blocking finding 只能来自：
-   a) 本轮修改引入的新问题
-   b) 前轮不可能发现的问题
-   c) 架构边界触碰
-   其余新发现标 minor，不阻断 pass。
-5. **每轮独立会话**：每轮审查在独立会话/子代理中执行，只接收 delta package。
+Round 2 onwards:
+1. **Verify prior round first**: Check every item in the previous round's Required Revisions. Any unresolved item → blocking.
+2. **Incremental scan**: Only review files changed in this round (git diff --name-only). Unchanged files are not re-reviewed.
+3. **Regression check**: Run git diff --stat. If this round's changes touch any of the following modules → perform a full review of that module:
+   - RuntimeAdapter / checkpoint / workflow boundaries
+   - Files on the forbidden files list
+   - Cross-package interface changes
+4. **New finding restrictions**: In round 2+, new blocking findings may only come from:
+   a) New problems introduced by this round's changes
+   b) Problems that were impossible to detect in the prior round
+   c) Architecture boundary violations
+   All other new findings must be marked minor and must not block pass.
+5. **Independent session per round**: Each review round runs in an independent session/sub-agent and receives only the delta package.
 
-## 阻断/非阻断分类
+## Blocking / Non-Blocking Classification
 
-**阻断（必须出 revise_required）**：
-- 功能错误（逻辑 bug、状态流转错误、遗漏 case、吞错、半写入、竞态）
-- 测试失败（合约测试不通过、GREEN 证据不真实）
-- 越界改动（改动禁止修改文件、package boundary 违规、diff 超出 Files allowlist 且未标 precondition-fix）
-- 缺关键证据（无 RED 原始输出、无 GREEN 原始输出、无法判断功能是否成立）
-- 必调用 review discipline 未执行（被修改文件读取 <80%、finding 无 file/line）
-- 当前 phase 负责的 FR 未真实实现（task 勾选了但只有文件存在，缺少行为证据或测试覆盖）
+**Blocking (must produce revise_required)**:
+- Functional errors (logic bugs, incorrect state transitions, missing cases, swallowed errors, partial writes, race conditions)
+- Test failures (contract tests failing, GREEN evidence not genuine)
+- Out-of-scope changes (touching forbidden files, package boundary violations, diff exceeds Files allowlist without a `precondition-fix` label)
+- Missing critical evidence (no RED raw output, no GREEN raw output, cannot determine whether functionality is valid)
+- Required review discipline not executed (less than 80% of modified files read, findings lack file/line references)
+- FR items assigned to the current phase not genuinely implemented (task checked off but only the file exists, no behavioral evidence or test coverage)
 
-**非阻断（应出 pass）**：
-- 报告格式/可读性（review summary 措辞偏长、markdown 格式瑕疵）
-- 证据完整度（RED/GREEN 贴完整组 vs 仅贴单测、文件路径用相对而非绝对）
-- workflow-issues.jsonl 条目缺失
-- close/summary.md 统计口径/数字不一致
-- 无关的 minor 建议（代码风格偏好、非约束性架构建议）
+**Non-blocking (should produce pass)**:
+- Report format/readability (review summary wording too long, markdown formatting issues)
+- Evidence completeness (RED/GREEN includes full group vs. only a single test, file paths are relative instead of absolute)
+- workflow-issues.jsonl entries missing
+- close/summary.md statistics discrepancy or number inconsistency
+- Unrelated minor suggestions (code style preferences, non-binding architectural suggestions)
 
-## 检查维度
+## Inspection Dimensions
 
-| 维度 | 验证方法 |
+| Dimension | Verification Method |
 |------|---------|
-| Spec — 设计文档对齐 | 对照 Design Sources 逐条验证本 phase 负责的关键设计决策。agent type / 工具调用方式 / 数据流路径必须一致。发现偏离 → blocking |
-| Standards — 仓库规范 | 对照 Standards Sources（根 CLAUDE.md、包级 CLAUDE.md、contract.md）检查：① 是否触碰 forbidden files？② 通用模块是否混入业务逻辑？③ 命名/路径/包边界是否符合 CLAUDE.md 约定？ |
-| 当前 phase 交付完整性 | 检查 tasks.md 当前 phase 所有 task 已勾选，Files 清单覆盖实际 diff |
-| 测试通过 | 执行 `pnpm --filter @multica/core exec vitest run agenthub-contracts.test.ts` 验证 |
-| RED/GREEN 真实性 | 检查 apply/evidence/phase-N-RED.json/stdout/stderr 和 GREEN 对应的 capture 证据文件（gate 已验证 provenance） |
-| 无 shell diagnostics | 检查脚本运行输出不含 `integer expression expected` 等 bash 错误 |
-| diff 范围一致 | 检查 `git diff --name-only` 与 tasks.md Files 清单基本一致 |
-| 代码质量 | 检查不相关改动 (unrelated refactor)、硬编码路径、安全风险 |
-| 架构边界合规 | 检查是否触碰禁止修改文件、package boundary 规则 |
-| precondition-fix 标注 | 如果一个改动修正了其他 phase 的遗留问题才能让本 phase 测试通过，标注为 `precondition-fix` 而非 scope creep |
+| Spec — Design document alignment | Validate each key design decision for the current phase against Design Sources line by line. Agent type / tool invocation method / data flow path must match. Any deviation → blocking |
+| Standards — Repository conventions | Check against Standards Sources (root CLAUDE.md, package-level CLAUDE.md, contract.md): ① Are any forbidden files touched? ② Is business logic leaking into shared/general modules? ③ Do naming, paths, and package boundaries conform to CLAUDE.md conventions? |
+| Current phase delivery completeness | Verify all tasks in tasks.md for the current phase are checked off, and that the Files list covers the actual diff |
+| Tests passing | Run the project's test suite (e.g. `pnpm test` or equivalent for the project under review) and verify output |
+| RED/GREEN authenticity | Check apply/evidence/phase-N-RED.json/stdout/stderr and the corresponding GREEN capture evidence files (gate has verified provenance) |
+| No shell diagnostics | Verify that script output does not contain bash errors such as `integer expression expected` |
+| Diff scope consistency | Check that `git diff --name-only` is broadly consistent with the Files list in tasks.md |
+| Code quality | Check for unrelated refactors, hardcoded paths, and security risks |
+| Architecture boundary compliance | Check whether forbidden files or package boundary rules have been violated |
+| precondition-fix annotation | If a change fixes a leftover issue from another phase in order to make the current phase's tests pass, label it `precondition-fix` rather than scope creep |
 
 ## Structural Quality Gate
 
-以下默认 blocking（不只是建议，是准入条件）：
-- 在繁忙流程里新增特例分支，而不是抽 helper/adapter（例：在 stageExit 通用逻辑里硬编码 close-stage 专用检查）
-- feature-specific 逻辑泄漏到 shared/general path
-- 复制已有 canonical helper 或重新实现已有能力
-- 引入绝对路径、硬编码用户路径、环境绑定
-- 用 `any` / `unknown` / `as` cast 掩盖真实类型边界
-- 多步状态更新非原子，失败时可能半写入
-- 文件超过 1000 行后继续堆逻辑，且没有拆分理由
-- 新增 abstraction / wrapper 但没有降低复杂度（thin wrapper、pass-through helper）
+The following are blocking by default (not merely suggestions — they are admission criteria):
+- Adding a special-case branch inside a busy flow instead of extracting a helper/adapter (e.g., hardcoding a close-stage-specific check inside the general stageExit logic)
+- Feature-specific logic leaking into a shared/general path
+- Duplicating an existing canonical helper or re-implementing an existing capability
+- Introducing absolute paths, hardcoded user paths, or environment-bound references
+- Using `any` / `unknown` / `as` casts to mask real type boundaries
+- Multi-step state updates that are non-atomic and may result in partial writes on failure
+- Continuing to pile logic into a file that already exceeds 1000 lines without a justification for not splitting it
+- Adding an abstraction/wrapper that does not reduce complexity (thin wrapper, pass-through helper)
 
-## 验证方法
+## Verification Methods
 
-1. **执行命令**：对测试通过和 shell diagnostics 等维度，直接运行命令并检查输出。
-2. **读文件**：对 phase 交付完整性、diff 范围、代码质量等维度，Read 后逐项判断。
-3. **结构化验证**：对 RED/GREEN 真实性、precondition-fix 标注等维度，直接输出 `jq` 或其他命令结果。
+1. **Run commands**: For dimensions such as tests passing and shell diagnostics, run the command directly and inspect the output.
+2. **Read files**: For dimensions such as phase delivery completeness, diff scope, and code quality, Read the files and evaluate each item.
+3. **Structured verification**: For dimensions such as RED/GREEN authenticity and precondition-fix annotations, output `jq` or other command results directly.
 
-## 证据真实性维度（FR-REV-002）
+## Evidence Authenticity Dimension (FR-REV-002)
 
-- 证据文件位于 `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`，gate 已验证 provenance（evidence_captured hash）
-- 审查时 Read evidence JSON 确认 command、exit_code、timestamp 合理性
-- **禁止占位符**：evidence stdout/stderr 内容不可含 `...`、`（省略）`、`（同上）` 等截断标记
-- **Host-Verified Facts 优先**：当审查包包含 Host-Verified Facts 段时，reviewer 不重跑 evidence command（host 已验证 provenance 和 exit_code）。reviewer 继续读取 evidence JSON 确认 command/exit_code/timestamp 合理性，读取 stdout/stderr 检查占位符。Host-Verified Facts 与 reviewer 发现矛盾 → escalate_to_human（fail-closed）
+- Evidence files are located at `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`; gate has verified provenance (evidence_captured hash)
+- When reviewing, Read the evidence JSON and confirm that command, exit_code, and timestamp are reasonable
+- **No placeholders**: evidence stdout/stderr content must not contain truncation markers such as `...`, `(omitted)`, or `(same as above)`
+- **Host-Verified Facts take priority**: When the review package includes a Host-Verified Facts section, the reviewer does not re-run the evidence command (the host has already verified provenance and exit_code). The reviewer still reads the evidence JSON to confirm command/exit_code/timestamp reasonableness and reads stdout/stderr to check for placeholders. If Host-Verified Facts contradict the reviewer's findings → escalate_to_human (fail-closed)
 
-## FR 消费点扫描审查维度（返修颗粒度纪律强制）
+## FR Consumption Point Scan Review Dimension (Return-Revision Granularity Discipline Enforcement)
 
-当上一轮某 blocking finding 属于【必需输入缺失 / 兜底掩盖 / 校验漏字段 / FR 实现消费点漂移】类时，reviewer 必须读取本轮 `apply/phase-<N>-revise-plan.md`（或对应 `revise-plan-checklist`），核对其 `FR Consumption Scan` 段：
+When a blocking finding from the previous round falls into the category of [missing required input / suppressed fallback / validation field gap / FR implementation consumption point drift], the reviewer must read `apply/phase-<N>-revise-plan.md` (or the corresponding `revise-plan-checklist`) from the current round and verify the `FR Consumption Scan` section:
 
-1. **搜索词矩阵是否真覆盖**：搜索词集合至少覆盖该 FR 的 ID + 核心字段名 + 入口函数名 + 模板标题/锚点 + 测试名；每个词附 grep 命令 + 命中输出。只 grep FR 编号一条 = 不合格（消费点常以别名/字段名/schema key 出现，单条 grep 漏调用点 = 复现漂移）。
-2. **命中点是否分类**：每个命中点标注「消费点 / 非消费点 + 理由」；缺分类或理由废话 → revise_required。
-3. **测试映射是否成立**：每个消费点对应一条回归测试（表格）；未覆盖的消费点必须对应新增测试，或写明成立的阻断/豁免理由（不能只 prose 一句）。
-4. **豁免不可空勾绕过**：若 revise-plan 未填 FR Consumption Scan 却声称「本轮不涉及 FR 实现」，必须给出豁免理由 + 对应 finding ID + reviewer 可核对的文件:行号。reviewer 看到该 blocking 实际涉及 FR 实现、但 Scan 缺失或豁免理由不成立 → revise_required。
+1. **Does the search term matrix truly provide coverage?**: The search term set must cover at minimum the FR's ID + core field names + entry function names + template titles/anchors + test names; each term must include a grep command + matched output. Only grepping the FR ID alone is insufficient (consumption points frequently appear under aliases, field names, or schema keys — a single grep misses call sites and reproduces the drift).
+2. **Are hit points classified?**: Each hit point must be labeled "consumption point / non-consumption point + reason"; missing classification or a vacuous reason → revise_required.
+3. **Does the test mapping hold?**: Each consumption point must correspond to one regression test (in a table); uncovered consumption points must either have a corresponding new test or a valid and stated blocking/exemption reason (a single prose sentence is not sufficient).
+4. **Exemptions cannot bypass via empty checkbox**: If the revise-plan has no FR Consumption Scan but claims "this round does not involve FR implementation", a valid exemption reason + the corresponding finding ID + a file:line reference the reviewer can verify must be provided. If the reviewer determines that the blocking issue does involve FR implementation but the Scan is missing or the exemption reason is invalid → revise_required.
 
-判据：Scan 段缺失 / 半填 / 废话填充 / 豁免不成立 → revise_required。reviewer 点名一个消费点、下一轮又点名同入口同类的另一个 = 本纪律未执行，按未闭合升级处理。
+Criteria: Scan section missing / partially filled / filled with filler text / exemption invalid → revise_required. If the reviewer flags a consumption point in one round and flags another hit of the same entry point and same class in the next round, this discipline has not been executed and the finding is treated as unclosed and escalated.
 
-## 同 Finding 连续 2 轮升级规则（FR-REV-001）
+## Same Finding Consecutive 2-Round Escalation Rule (FR-REV-001)
 
-同一 blocking finding 连续 2 轮审查都未闭合时，reviewer 必须输出：
-1. **根因**：为什么这个问题反复出现
-2. **扫描范围**：所有可能受影响的文件/模块清单
-3. **反例矩阵**：每个受影响位置的正反例
-4. **Closure checklist**：agent 需逐项确认的修复清单
+When the same blocking finding remains unclosed across 2 consecutive review rounds, the reviewer must output:
+1. **Root cause**: Why this problem keeps recurring
+2. **Scan scope**: A list of all potentially affected files/modules
+3. **Counter-example matrix**: Positive and negative examples for each affected location
+4. **Closure checklist**: A per-item checklist the agent must confirm as fixed
 
-第 3 轮同一 finding 仍未闭合 → escalate_to_human。
+If the same finding remains unclosed in round 3 → escalate_to_human.
 
-## 实质审查维度
+## Substantive Review Dimensions
 
-形式检查中，evidence 存在性与内容质量已由 gate.sh phase_pre_review 自动化（FR-REV-003）。其余形式检查（chat 归档、截图、文件格式）gate 尚未覆盖，reviewer 按需检查。reviewer 重心在 4 个实质维度：
-1. 应不应该做 — 需求合理性
-2. 做得对不对 — 方案正确性
-3. 有没有风险 — 隐含风险
-4. 有没有遗漏 — 覆盖完整性
+Among the formal checks, evidence existence and content quality are already automated by gate.sh phase_pre_review (FR-REV-003). Other formal checks (chat archiving, screenshots, file format) are not yet covered by gate; the reviewer checks these as needed. The reviewer's focus is on 4 substantive dimensions:
+1. Should it be done at all — requirement reasonableness
+2. Is it done correctly — solution correctness
+3. Are there risks — hidden risks
+4. Is anything missing — coverage completeness
 
-## 修订记录
+## Revision Record
 
-审查报告正文（`<!-- revision-record -->` 以上）不可修改。
-主 agent 在收到 revise_required 后、发起下一轮审查前，在上一轮报告底部以 append-only 方式追加修订记录。reviewer 只读不写。
+The review report body (everything above `<!-- revision-record -->`) must not be modified. After receiving revise_required and before initiating the next review round, the main agent appends a revision record at the bottom of the previous round's report in append-only fashion. The reviewer reads only, never writes.
 
-追加格式（**gate 强制检查 sourceRequestId/sourceRound/resubmitRound 三元组，缺任何一项 BLOCK**）：
+Append format (**gate enforces the sourceRequestId/sourceRound/resubmitRound triplet — any missing field will BLOCK**):
 ```
 <!-- revision-record -->
 
 ## Revision Record
 ### Round N → N+1 (YYYY-MM-DDThh:mm:ss)
-- **失败根因**：<为什么该轮没通过>
-- **修改文件**：<文件列表>
-- **修改摘要**：<做了什么修改>
-- **验证命令和结果**：<命令 + 输出>
-- **sourceRequestId=<上轮 reviewRequestId>**
+- **Failure root cause**: <why this round did not pass>
+- **Modified files**: <list of files>
+- **Change summary**: <what was changed>
+- **Verification commands and results**: <command + output>
+- **sourceRequestId=<reviewRequestId from previous round>**
 - **sourceRound=<N>**
 - **resubmitRound=<N+1>**
 ```

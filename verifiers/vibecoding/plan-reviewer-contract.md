@@ -1,204 +1,204 @@
-# Plan Review 审查合同
+# Plan Review Contract
 
-> 本文件定义 plan-reviewer 的检查维度。合同外发现只能标 `minor`，不能标 `blocking`。
+> This file defines the inspection dimensions for the plan-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
-## 三轴审查
+## Three-Axis Review
 
-每轮必须覆盖三轴，缺一不可：
+Every round must cover all three axes — none may be skipped:
 
-| 轴 | 含义 | 对照源 |
-|----|------|--------|
-| **Traceability** | spec FR 是否完整映射到 task 和 verify | spec.md、plan.md、tasks.md、speckit-analyze |
-| **Executability** | phase 粒度、顺序、依赖、风险是否可执行 | tasks.md、plan-eng-review |
-| **Verification** | 测试、fresh evidence、gate、approval 是否客观 | tasks.md、review skill output、contract.md |
+| Axis | Meaning | Reference source |
+|------|---------|-----------------|
+| **Traceability** | Whether spec FRs are fully mapped to tasks and verifications | spec.md, plan.md, tasks.md, speckit-analyze |
+| **Executability** | Whether phase granularity, ordering, dependencies, and risks are executable | tasks.md, plan-eng-review |
+| **Verification** | Whether tests, fresh evidence, gates, and approvals are objective | tasks.md, review skill output, contract.md |
 
 ## Required Skill Execution
 
-审查员必须直接调用：
+The reviewer must directly invoke:
 
-- `speckit-analyze`：跨 artifact 一致性，覆盖 duplication、ambiguity、underspecification、constitution alignment、coverage gaps、inconsistency。
-- `plan-eng-review`：工程计划审查，覆盖架构、数据流、边界、失败模式、测试策略、性能、worktree/并行策略。
-- `review`：独立复审 diff/scope drift、TODO/文档过期、结构风险、对抗性检查。
+- `speckit-analyze`: cross-artifact consistency, covering duplication, ambiguity, underspecification, constitution alignment, coverage gaps, inconsistency.
+- `plan-eng-review`: engineering plan review, covering architecture, data flow, boundaries, failure modes, test strategy, performance, worktree/parallelism strategy.
+- `review`: independent re-review of diff/scope drift, TODO/stale documentation, structural risks, adversarial checks.
 
-required skill 不可用且 SKILL.md 文件不可读、无法以 report-only lens 执行或输出缺关键结论 → `escalate_to_human`。pass/revise 输出必须含顶层 `skillResults`，逐项记录 executed / unavailable / failed。
+If a required skill is unavailable and the SKILL.md file is unreadable, cannot be executed in report-only lens, or the output lacks key conclusions → `escalate_to_human`. pass/revise output must include a top-level `skillResults` that records executed / unavailable / failed for each skill.
 
-**Skill 执行回退规则**：审查员必须先尝试 Skill 工具调用 required skill。如果 Skill 工具在 headless/read-only 环境下失败，必须回退——直接 Read 该 skill 的 SKILL.md 文件，从中提取审查维度和检查清单，独立应用到 plan sources。回退成功时记录 `status=executed`，并在 `mode` 或 `evidence` 标明 `skill-file fallback`。
+**Skill execution fallback rule**: The reviewer must first attempt to invoke required skills via the Skill tool. If the Skill tool fails in a headless/read-only environment, the reviewer must fall back — directly Read that skill's SKILL.md file, extract the review dimensions and checklists from it, and apply them independently to the plan sources. When fallback succeeds, record `status=executed` and note `skill-file fallback` in the `mode` or `evidence` field.
 
-**三要素执行摘要要求（FR-REVIEW-006）**：每个必需技能的 `evidence` 字段必须包含三要素：（1）**在哪执行** — 会话位置/记录路径；（2）**具体输入/检查点** — 实际检查的内容（如具体文件路径、检查维度）；（3）**结论** — 发现了什么。禁止只写 "已执行"、"通过" 或无具体内容的占位符。
+**Three-element execution summary requirement (FR-REVIEW-006)**: The `evidence` field of each required skill must contain three elements: (1) **where it was executed** — session location / record path; (2) **specific inputs / checkpoints** — what was actually checked (e.g., specific file paths, check dimensions); (3) **conclusion** — what was found. Placeholder text such as "executed", "passed", or any content-free filler is prohibited.
 
-**实质内容最低门槛（FR-REVIEW-007）**：识别空洞摘要的判据如下。凡出现以下任意情形视为空洞，reviewer 必须降级为 `failed`：
-- evidence 仅含状态词，无检查位置
-- evidence 无具体检查点或输入描述
-- evidence 缺少结论内容
-- 空洞反例：`{"status":"executed","evidence":"ran speckit-analyze, plan looks fine"}` — 缺在哪执行、无具体维度
-- 合规示例：`{"status":"executed","evidence":"(1) skill tool in this session; (2) checked task breakdown for T001-T008 against FR mapping in spec.md; (3) all tasks have FR reference, T005 scope boundary clear"}`
-不依赖执行位置路径的自动机器校验——判断由 reviewer 人工核查，不要求路径可访问。
+**Minimum substantive content threshold (FR-REVIEW-007)**: Criteria for identifying hollow summaries. Any of the following conditions constitutes a hollow summary, and the reviewer must downgrade to `failed`:
+- evidence contains only status words, no execution location
+- evidence lacks specific checkpoints or input descriptions
+- evidence is missing a conclusion
+- Hollow example: `{"status":"executed","evidence":"ran speckit-analyze, plan looks fine"}` — missing execution location, no specific dimensions
+- Compliant example: `{"status":"executed","evidence":"(1) skill tool in this session; (2) checked task breakdown for T001-T008 against FR mapping in spec.md; (3) all tasks have FR reference, T005 scope boundary clear"}`
+Judgment does not rely on automated machine verification of execution location paths — it is performed by manual reviewer inspection; path accessibility is not required.
 
-## 总原则
+## General Principles
 
-审查重心在计划能不能稳定执行，而不是清单看起来完整。先回答 6 个问题：
+The review focus is whether the plan can be executed stably, not whether the checklist looks complete. Answer these 6 questions first:
 
-1. **phase 划分合理吗** — 每个 phase 能被一个 agent 在合理 session 内独立完成？
-2. **依赖链正确吗** — 有没有反依赖？contract/schema 是否先于 engine/adapter/UI？
-3. **文件清单精确吗** — 有没有通配符、条件描述、引用式写法？
-4. **风险识别了吗** — plan 是否低估失败模式、回滚、性能、测试成本？
-5. **Verify 客观吗** — 每步能产生明确 pass/fail，而不是“看起来正常”？
-6. **FR 全链路覆盖吗** — 每个 spec FR 都有 task，每个 task 的 Verify 能证明 FR 被实现？
+1. **Is phase division reasonable** — Can each phase be completed independently by one agent within a reasonable session?
+2. **Is the dependency chain correct** — Are there reverse dependencies? Do contract/schema precede engine/adapter/UI?
+3. **Is the file list precise** — Are there wildcards, conditional descriptions, or reference-style entries?
+4. **Are risks identified** — Does the plan underestimate failure modes, rollback, performance, or testing costs?
+5. **Is Verify objective** — Can each step produce a clear pass/fail, rather than "looks normal"?
+6. **Is FR coverage end-to-end** — Does every spec FR have a task, and can every task's Verify prove the FR is implemented?
 
-## 增量审查规则
+## Incremental Review Rules
 
-第 1 轮：全量审查，按本合同所有维度出 findings。
+Round 1: Full review, produce findings across all dimensions in this contract.
 
-第 2+ 轮：
+Round 2+:
 
-1. 逐条核验前轮 blocking；未修复 → blocking。
-2. 只审本轮修改文件和受影响源。
-3. 如果触碰 RuntimeAdapter / checkpoint / workflow 边界、forbidden files、跨 package 接口 → 对该模块全量复审。
-4. 新 blocking 只能来自本轮新改动、前轮不可能发现的问题、架构/边界触碰；其余 late finding 标 `minor`。
-5. 每轮独立会话，只看 review package。
-6. 第 2+ 轮 `verdict=pass` 时，必须在 `resolutionSummary` 中逐条关闭前轮 blocking：写明原 finding、修复后文件/行号、为什么现在不再阻断。缺 closure summary → 审查不充分，应 `revise_required` 或重新审查。
+1. Verify each prior-round blocking item one by one; not resolved → blocking.
+2. Review only files changed in this round and affected sources.
+3. If RuntimeAdapter / checkpoint / workflow boundaries, forbidden files, or cross-package interfaces are touched → perform a full re-review of that module.
+4. New blocking findings may only come from changes in this round, problems impossible to detect in prior rounds, or architecture/boundary touches; all other late findings are marked `minor`.
+5. Each round is an independent session reviewing only the review package.
+6. When `verdict=pass` in round 2+, the `resolutionSummary` must close each prior-round blocking item one by one: state the original finding, the fixed file/line number, and why it no longer blocks. Missing closure summary → review is insufficient; should be `revise_required` or re-reviewed.
 
-## 阻断/非阻断分类
+## Blocking / Non-Blocking Classification
 
-**阻断（必须出 revise_required）**：
+**Blocking (must produce revise_required)**:
 
-- `speckit-analyze` 报 CRITICAL/HIGH 且影响执行：constitution MUST 冲突、核心 FR 无 task、artifact 互相矛盾、验收不可测试。
-- `plan-eng-review` 报架构/依赖/测试/失败模式不可执行且未处理。
-- 宪法门禁未逐条勾选或漏项。
-- task 未引用 FR 编号，或 FR → task → verify 链路断裂。
-- phase 粒度过大（例如”实现全部功能”）、同一 phase 横跨过多层、超过合理 session。
-- Depends On 倒置、循环依赖、[P] 并行标记与依赖矛盾。
-- Verify 是主观判断，缺 typecheck/test/build/明确替代检查。
-- Verify 命令是”假命令”：退出码被管道吞掉（如 `pnpm test | tail` 当判据）、用臆造 flag（如 `--kind`/`--cmd`）、grep 计数只测 `:0$`、md5/sha256 只录 after 不录 before、`require('xxx.ts')`。
-- 修改已有脚本/CLI/journal event/schema 的 task，plan 未在”已有接口签名锚点”登记其当前签名（SIG-xxx），或签名标”待 apply 时确认”。
-- 上游合并安全评估未完成，或 forbidden files 未说明。
-- Governance change 未给同步矩阵（7 个固定分类逐类判断，标”改”无对应 Task → blocking）。
-- UI change 缺 design package/UI contract/affected_contract_element_ids，或写”还原设计稿”而非合同 element——完全无可验收 UI 目标时阻断。
-- 计划把 `vibecoding` 硬编码到平台，或新增未批准 fallback、legacy adapter、兼容层、模板市场。
-- 验收只验代码不验行为：验收标准只检查代码结构/存在性/编译通过，没有覆盖运行时行为验证 — reviewer 必须标 blocking。纯文档/配置 phase 豁免。
-- plan pass 被当成人工 approval，或 phase 间 STOP 机制缺失。
-- **概念漂移 [codex ③]**：plan/tasks 引入了新的模式、状态机、实体、fallback、adapter，而 spec/decision-log 找不到来源。不需要重做完整需求审查，只做概念漂移扫描。
-- **文件代码影响范围覆盖不全（FR-IMPACT-002/004）**：plan 的文件/代码影响范围未覆盖 spec「业务影响范围」章的每一项受影响功能，或"删除/合并/重命名"类改动缺反向引用扫描（grep 全仓引用未列进改动面），任一漏项 → blocking。审查员须独立核：spec 业务影响列 N 项，plan 文件清单逐项有归宿（改/删/测）。这是防 plan 低估改动面（T018 漏 ~13 文件）的强制杠杆，不接受 pass 直到覆盖全。
+- `speckit-analyze` reports CRITICAL/HIGH that affects execution: constitution MUST conflict, core FR has no task, artifacts contradict each other, acceptance criteria are untestable.
+- `plan-eng-review` reports architecture/dependency/test/failure mode is not executable and unaddressed.
+- Constitution gate not checked line by line or items are missing.
+- Task does not reference an FR number, or the FR → task → verify chain is broken.
+- Phase granularity too coarse (e.g., "implement all features"), a single phase spans too many layers, or exceeds a reasonable session.
+- Depends On is inverted, circular dependency exists, or [P] parallel markers conflict with dependencies.
+- Verify is a subjective judgment; lacks typecheck/test/build or a clear alternative check.
+- Verify command is a "fake command": exit code swallowed by a pipe (e.g., `pnpm test | tail` used as a pass/fail criterion), invented flags (e.g., `--kind`/`--cmd`), grep count only checks `:0$`, md5/sha256 records only after without before, `require('xxx.ts')`.
+- A task modifies an existing script/CLI/journal event/schema but the plan has not registered its current signature under a "Existing Interface Signature Anchor" (SIG-xxx), or the signature is marked "to be confirmed at apply time".
+- Upstream merge safety assessment is incomplete, or forbidden files are not explained.
+- Governance change is missing a sync matrix (7 fixed categories each individually judged; marked "changed" with no corresponding Task → blocking).
+- UI change is missing design package/UI contract/affected_contract_element_ids, or describes "restore the design mockup" instead of contract elements — blocking when there is no verifiable UI goal at all.
+- Plan hardcodes `vibecoding` into the platform, or adds an unapproved fallback, legacy adapter, compatibility layer, or template marketplace.
+- Acceptance criteria verify only code, not behavior: acceptance criteria check only code structure/existence/compilation, without covering runtime behavior verification — reviewer must mark blocking. Pure documentation/configuration phases are exempt.
+- plan pass is treated as human approval, or STOP mechanism between phases is missing.
+- **Concept drift [codex ③]**: plan/tasks introduce new patterns, state machines, entities, fallbacks, or adapters that cannot be traced back to spec/decision-log. A full requirements re-review is not needed; only a concept drift scan is required.
+- **Incomplete file/code impact coverage (FR-IMPACT-002/004)**: The file/code impact coverage in the plan does not cover every impacted feature listed in the spec's "Business Impact Scope" section, or delete/merge/rename changes are missing a reverse-reference scan (grep of all repo references not listed in the change surface) — any omission → blocking. The reviewer must independently verify: if the spec's business impact lists N items, the plan file list must account for each one (changed/deleted/tested). This is the mandatory lever against plans underestimating change surface (e.g., T018 missing ~13 files); pass is not accepted until full coverage is achieved.
 
-**非阻断（应出 pass，可标 important/minor）**：
+**Non-blocking (should produce pass; may mark important/minor)**:
 
-- phase 粒度可合并但仍可执行。
-- 风险描述可更具体。
-- 复用优先矩阵部分条目偏笼统。
-- UI 细节可以更精确但不影响可执行验收。
-- phase 六节不完整（缺个别小节）但仍可独立执行。
-- 代码改动 phase 第一项不是 test-first，但整体测试策略清楚。
-- 文件路径不够精确但执行者能定位。
-- 前端 change 视觉合同 6 维度细节缺失，但已有可验收 UI 目标声明。
+- Phase granularity could be merged but is still executable.
+- Risk descriptions could be more specific.
+- Reuse-priority matrix entries are somewhat general.
+- UI details could be more precise but do not affect executable acceptance.
+- Phase six-section is incomplete (missing a minor subsection) but can still be executed independently.
+- Code-change phase does not have test-first as the first item, but the overall test strategy is clear.
+- File paths are not precise enough but the implementer can locate them.
+- Frontend change visual contract 6-dimension details are incomplete, but a verifiable UI goal declaration exists.
 
-## 检查维度
+## Inspection Dimensions
 
-| 维度 | 验证方法 |
-|------|---------|
-| Required Skills 已执行 | 检查 speckit-analyze/plan-eng-review/review 输出；无法执行 required skill → escalate |
-| 跨 artifact 一致性 | 对照 speckit-analyze 的 duplication/ambiguity/underspecification/coverage/inconsistency |
-| 宪法门禁 | grep Constitution Check 表，无未勾选项；constitution MUST 冲突自动 blocking |
-| FR 引用完整 | tasks.md 每个 task 引用 FR；每个 FR 至少一个 task |
-| FR→task→verify | 每个 task 的 Verify 能证明对应 FR 被实现 |
-| phase 六节格式 | 每个 phase 含 Goal/Files/Tasks/Verify/Knowledge/STOP |
-| test-first 排序 | 代码 phase 第一项为 failing test；docs-only 显式豁免 |
-| 依赖图 | 提取 Depends On 表，检查顺序、循环、[P] 冲突 |
-| phase 粒度 | 检查是否一个 agent 可在合理 session 独立完成 |
-| 执行顺序 | contract/schema → engine → adapter → UI/集成，高风险逻辑先测 |
-| 精确文件路径 | 禁止通配、模糊路径、引用式写法 |
-| 假命令检查 | Verify/gate_cmd 无管道吞退出码、无臆造 flag、grep 计数双向、md5 录 before/after、不 require .ts |
-| 接口签名锚点 | 改已有脚本/CLI/event/schema 的 task，plan 已登记 SIG-xxx 当前签名，无"待 apply 确认" |
-| 上游合并安全 | plan.md 必须说明是否触碰 forbidden files 和跨 package 接口 |
-| Governance 同步 | 检查治理文件矩阵逐项说明改/不改+原因 |
-| Knowledge/Checkpoint | 每 phase 更新 progress.md、apply/phase-N.md、verifier reports；最终 test/close artifact 有计划 |
-| 验证计划 | 包含项目对应 test/typecheck/build；prompt/docs-only 有替代检查 |
-| UI 设计合同 | affected_contract_element_ids、ui-contract.json 回链、合同 element 而非软描述 |
-| 视觉合同 6 维 | 字体、间距、颜色、交互态、响应式、暗黑模式逐项存在 |
-| 复用优先矩阵 | 可复用已有/需适配已有/必须新增；优先 `@multica/ui` / `@multica/views` |
-| Approval 边界 | plan pass 不等于 approval；apply 前必须等待人工 approval |
-| 原始需求逐条完整解决（FR-ACCEPT-003） | 对照 intake 原始需求台账/decision-log，**逐条**核验每条原始需求是否在 plan 中被**完整解决**（有对应 phase/task 落地，非仅提及）；任一条无归宿或未核到 → blocking |
-| 四类标准可逐条勾（D7/D10，FR-REVIEW-005） | 交付/异常/测试/代码四类标准必须以审查员**可逐条勾的硬条目**形式存在，不各开独立重章节。逐项见下表 |
-| 文件代码影响范围覆盖率（D12，FR-IMPACT-002/004） | 对照 spec「业务影响范围」章的每一项受影响功能，**逐项**核 plan 文件/代码影响范围是否覆盖（改/删/测有归宿）；删除/合并/重命名类改动须有反向引用扫描结果。漏一项 → blocking |
+| Dimension | Verification method |
+|-----------|-------------------|
+| Required Skills executed | Check speckit-analyze/plan-eng-review/review output; unable to execute required skill → escalate |
+| Cross-artifact consistency | Compare against speckit-analyze duplication/ambiguity/underspecification/coverage/inconsistency |
+| Constitution gate | grep Constitution Check table, no unchecked items; constitution MUST conflict → automatic blocking |
+| FR reference completeness | Every task in tasks.md references an FR; every FR has at least one task |
+| FR→task→verify | Every task's Verify can prove the corresponding FR is implemented |
+| Phase six-section format | Every phase contains Goal/Files/Tasks/Verify/Knowledge/STOP |
+| test-first ordering | First item in code phases is a failing test; docs-only phases explicitly exempt |
+| Dependency graph | Extract Depends On table, check ordering, cycles, [P] conflicts |
+| Phase granularity | Check whether one agent can complete independently within a reasonable session |
+| Execution ordering | contract/schema → engine → adapter → UI/integration; high-risk logic tested first |
+| Precise file paths | Wildcards, vague paths, reference-style entries prohibited |
+| Fake command check | Verify/gate_cmd: no pipe-swallowed exit codes, no invented flags, grep counts bidirectional, md5 records before/after, no require .ts |
+| Interface signature anchors | Tasks modifying existing scripts/CLI/events/schemas have registered SIG-xxx current signatures in the plan, with no "to be confirmed at apply time" |
+| Upstream merge safety | plan.md must state whether forbidden files and cross-package interfaces are touched |
+| Governance sync | Check governance file matrix with explanation of changed/unchanged + reason for each category |
+| Knowledge/Checkpoint | Each phase updates progress.md, apply/phase-N.md, verifier reports; final test/close artifacts are planned |
+| Verification plan | Includes project-appropriate test/typecheck/build; prompt/docs-only phases have alternative checks |
+| UI design contract | affected_contract_element_ids, ui-contract.json back-link, contract elements rather than soft descriptions |
+| Visual contract 6 dimensions | Font, spacing, color, interaction states, responsive, dark mode each present |
+| Reuse-priority matrix | Reuse existing / adapt existing / must add new; prefer existing UI/view packages already in the project under review |
+| Approval boundary | plan pass does not equal approval; human approval must be awaited before apply |
+| Original requirements resolved line by line (FR-ACCEPT-003) | Cross-reference the original requirements ledger/decision-log and **verify each original requirement one by one** to confirm it is **fully resolved** in the plan (has a corresponding phase/task landing, not merely mentioned); any requirement with no destination or not verified → blocking |
+| Four-category standards individually checkable (D7/D10, FR-REVIEW-005) | Delivery/exception/test/code four-category standards must exist as **hard line items that the reviewer can check off one by one**, without opening separate major sections for each. See the table below for each item |
+| File/code impact coverage rate (D12, FR-IMPACT-002/004) | Cross-reference every impacted feature in the spec's "Business Impact Scope" section and **verify one by one** whether the plan's file/code impact coverage accounts for it (changed/deleted/tested); delete/merge/rename changes must include reverse-reference scan results. Any omission → blocking |
 
-## 四类标准检查维度（D7/D10：可逐条勾硬条目）
+## Four-Category Standards Inspection Dimensions (D7/D10: Hard Line Items Checkable One by One)
 
-> 交付/异常/测试/代码四类标准不各开重章节。合法内核 = 让 done / 边界 / 测试 / 代码引用成为审查员**可逐条勾的硬条目**。下列每条都给出 pass/fail 判据，审查员逐条勾，任一硬条目未满足 → blocking。
+> Delivery/exception/test/code four-category standards do not each get a separate major section. The valid core = making done / boundaries / tests / code references into **hard line items that the reviewer can check off one by one**. Each item below has a pass/fail criterion; the reviewer checks off each one, and any unsatisfied hard item → blocking.
 
-| 类 | 可逐条勾硬条目 | pass/fail 判据 |
-|----|---------------|----------------|
-| **交付标准（done）** | 每个 phase 的 Goal 写出可勾的完成定义（产出哪些文件/行为，非"实现功能"泛述） | Goal 含具体可核产出，能逐条对照 phase 结束态判 done；只写"完成 X 功能"无可勾产出 → blocking |
-| **异常标准（边界）** | plan 显式列出本 change 的失败/边界/越权路径处理（不做什么、错误如何暴露、回滚边界） | 关键 failure path 有对应处理且可验证；缺失边界声明或只写 happy path → blocking |
-| **测试标准（双栏可跑命令）** | 测试标准落为 plan 的**双栏可跑命令**（gate_cmd 机器判 pass/fail + display_cmd 人眼摘要），治假绿（D8） | 见下方"假命令检查规则"；gate_cmd 退出码被吞 / 臆造 flag / 单向 grep → blocking |
-| **代码标准（引用现有规范）** | 仅**引用现有 CLAUDE.md / lint 规则**，不另立代码标准；明确标注 **lint error 是硬门、非 warn** | plan 引用了项目 CLAUDE.md 工程硬规则且声明 lint error 硬门；新立一套代码风格标准或把 lint error 当 warn 放过 → blocking |
+| Category | Hard line items (individually checkable) | pass/fail criterion |
+|----------|------------------------------------------|---------------------|
+| **Delivery standard (done)** | Each phase's Goal states a checkable definition of completion (which files/behaviors are produced, not a vague "implement feature" description) | Goal contains specific verifiable outputs that can be checked one by one against the phase end state to judge done; writing only "complete X feature" with no checkable outputs → blocking |
+| **Exception standard (boundaries)** | The plan explicitly lists failure/boundary/out-of-scope handling for this change (what is not done, how errors are surfaced, rollback boundaries) | Key failure paths have corresponding handling and are verifiable; missing boundary declaration or only happy path → blocking |
+| **Test standard (dual-column runnable commands)** | Test standards are expressed as the plan's **dual-column runnable commands** (gate_cmd for machine pass/fail judgment + display_cmd for human-readable summary), treating fake green (D8) | See "Fake Command Check Rules" below; gate_cmd exit code swallowed / invented flag / one-directional grep → blocking |
+| **Code standard (reference existing specs)** | Only **reference existing CLAUDE.md / lint rules**, do not establish new code standards; explicitly state that **lint errors are hard gates, not warnings** | Plan references the project CLAUDE.md engineering hard rules and declares lint errors as hard gates; establishing a new code style standard or treating lint errors as warnings → blocking |
 
-## 依赖图校验规则
+## Dependency Graph Validation Rules
 
-必须检查 tasks.md 的 Depends On 表：
+Must check the Depends On table in tasks.md:
 
-- 被依赖任务排在依赖任务之后 → blocking。
-- 后端契约/API phase 必须在 UI 消费 phase 之前。
-- 循环依赖 → blocking。
-- 标记 [P] 的任务不可有依赖链。
+- A depended-upon task appears after the task that depends on it → blocking.
+- Backend contract/API phases must precede UI consumption phases.
+- Circular dependency → blocking.
+- Tasks marked [P] must not have dependency chains.
 
-## UI 与视觉合同规则
+## UI and Visual Contract Rules
 
-前端 change 必查：
+Required checks for frontend changes:
 
-- plan.md 为每页面定义 6 维度：字体仅允许指定 token、4px 网格和 gap token、OKLCh 语义令牌、hover/focus/active/disabled + 150ms ease-out、断点、`.dark` 支持。
-- Shell/Sidebar/PageHeader 等布局框架检查布局保真：Sidebar 宽度、内容区 rounded/margin、折叠行为、导航高亮。
-- 每个 UI task 标注 `affected_contract_element_ids`，回链到 `ui-contract.json`。
-- 修改现有 UI 时说明是否影响已有 contract element、是否需要重新提取并 diff。
+- plan.md defines 6 dimensions for each page: font allows only specified tokens, 4px grid and gap tokens, OKLCh semantic tokens, hover/focus/active/disabled + 150ms ease-out, breakpoints, `.dark` support.
+- Layout framework checks for Shell/Sidebar/PageHeader, etc.: layout fidelity: Sidebar width, content area rounded/margin, collapse behavior, navigation highlight.
+- Each UI task is annotated with `affected_contract_element_ids` linking back to `ui-contract.json`.
+- When modifying existing UI, state whether existing contract elements are affected, and whether re-extraction and diff are needed.
 
-## Governance 同步规则
+## Governance Sync Rules
 
-修改 workflow、agent prompt 或治理规则时，plan 必须按 7 个固定分类逐类判断（每类”改/不改 + 原因”，标”改”须有对应 Task ID）：
+When modifying workflows, agent prompts, or governance rules, the plan must individually judge each of the 7 fixed categories (each marked "changed/unchanged + reason"; if marked "changed", a corresponding Task ID must exist):
 
-- 项目规则（CLAUDE.md / AGENTS.md / 子包 CLAUDE.md）
-- workflow 定义（stage prompts / *.workflow.ts）
-- reviewer contract（base-verifier / reviewer prompt / 审查合同）
-- schema（journal event / checkpoint / *.schema.json）
-- runtime config（.claude/settings.json / 引擎配置）
-- knowledge/doc（docs/WORKFLOW.md / constitution.md / Knowledge 规则）
-- automation gates / CI / hooks（.github/workflows / pre-commit / reserved-slugs 生成器 / gate scripts）
+- Project rules (CLAUDE.md / AGENTS.md / sub-package CLAUDE.md)
+- Workflow definitions (stage prompts / *.workflow.ts)
+- Reviewer contract (base-verifier / reviewer prompt / review contract)
+- Schema (journal event / checkpoint / *.schema.json)
+- Runtime config (.claude/settings.json / engine config)
+- Knowledge/doc (docs/WORKFLOW.md / constitution.md / Knowledge rules)
+- Automation gates / CI / hooks (.github/workflows / pre-commit / reserved-slugs generator / gate scripts)
 
-漏整类、或标”改”却无对应 Task → blocking。
+Missing an entire category, or marked "changed" with no corresponding Task → blocking.
 
-## 假命令检查规则
+## Fake Command Check Rules
 
-> 当前引擎只校验 RED/GREEN evidence 的 command/exit_code，不识别 plan 的 gate_cmd/display_cmd 分离。因此”验证命令是否可信”由本审查环节人工强制。
+> The current engine only validates the command/exit_code of RED/GREEN evidence; it does not recognize the gate_cmd/display_cmd separation in the plan. Therefore, "verifying whether verification commands are trustworthy" is enforced manually at this review stage.
 
-逐条核验 plan.md 和 tasks.md 的 Verify / gate_cmd：
+Verify every Verify / gate_cmd in plan.md and tasks.md one by one:
 
-1. **退出码完整**：禁止 `... | tail`、`| head` 等把被测命令退出码吞掉后当 pass/fail 判据；需要管道时必须 `set -o pipefail`。
-2. **接口真实**：命令的 flag/子命令必须真实存在，禁止臆造（如 `--kind`、`--cmd`）。存疑时要求 plan 给出该 CLI 的 help/签名出处。
-3. **断言双向**：grep 计数断言不能只匹配 `:0$`（单文件返回裸数字不带冒号）；md5/sha256 对比必须先录 before 再录 after。
-4. **测试方式正确**：测 TS 用 vitest，禁止 `require('xxx.ts')`。
-5. **gate 与 display 分离**：`tail`/`grep`/`jq` 类只能出现在 display_cmd（人眼摘要），不得作为 gate_cmd 的 pass/fail 判据。
+1. **Exit code intact**: Prohibit `... | tail`, `| head`, etc. from swallowing the tested command's exit code and using it as a pass/fail criterion; when a pipe is necessary, `set -o pipefail` must be used.
+2. **Interface is real**: Flags/subcommands in the command must actually exist; invented ones (e.g., `--kind`, `--cmd`) are prohibited. When in doubt, the plan must provide the CLI's help/signature source.
+3. **Assertions are bidirectional**: grep count assertions must not only match `:0$` (a single-file return is a bare number without a colon); md5/sha256 comparisons must record before first, then after.
+4. **Correct test method**: Test TS with vitest; `require('xxx.ts')` is prohibited.
+5. **gate and display separated**: `tail`/`grep`/`jq`-type commands may only appear in display_cmd (human-readable summary); they must not serve as the pass/fail criterion for gate_cmd.
 
-快速定位（人工 grep 辅助，命中需逐条确认是否被当成判据）：
+Quick scan (manual grep assist — hits must be individually confirmed as to whether they are used as a criterion):
 `grep -nE 'tail -[0-9]|--kind|--cmd|require\(.*\.ts' plan.md tasks.md`
 
-命中且被当作 pass/fail 判据 → blocking。
+Hit and used as a pass/fail criterion → blocking.
 
-## 验证方法
+## Verification Methods
 
-1. **Skill 对照**：逐条核验 speckit-analyze/plan-eng-review/review 的 findings 是否进入 verdict；未真实调用 required skill → escalate。
-2. **grep 验证**：FR 引用、phase 六节、test-first、Governance 矩阵、视觉合同 6 维。
-3. **读文件**：完整 Read spec.md、plan.md、tasks.md、progress.md，判断执行顺序和 scope。
-4. **路径检查**：逐路径 `ls` 或按 repo root 验证，禁止模糊路径。
-5. **依赖检查**：解析 Depends On 表，验证顺序、循环、[P]。
+1. **Skill cross-reference**: Verify one by one whether speckit-analyze/plan-eng-review/review findings are reflected in the verdict; required skill not actually invoked → escalate.
+2. **grep verification**: FR references, phase six-section, test-first, Governance matrix, visual contract 6 dimensions.
+3. **Read files**: Completely Read spec.md, plan.md, tasks.md, progress.md to judge execution ordering and scope.
+4. **Path check**: `ls` each path or verify against repo root; vague paths are prohibited.
+5. **Dependency check**: Parse the Depends On table, verify ordering, cycles, [P].
 
-## 同 Finding 连续 2 轮升级规则（FR-REV-001）
+## Same-Finding Two-Round Escalation Rule (FR-REV-001)
 
-同一 blocking 连续 2 轮未闭合时，finding 必须包含：
+When the same blocking finding remains unclosed for 2 consecutive rounds, the finding must include:
 
-1. 根因。
-2. 扫描范围。
-3. 反例矩阵。
-4. Closure checklist。
+1. Root cause.
+2. Scan scope.
+3. Counterexample matrix.
+4. Closure checklist.
 
-第 3 轮仍未闭合 → `escalate_to_human`。
+Still unclosed after round 3 → `escalate_to_human`.
 
-## 修订记录
+## Revision Log
 
-主 agent 在收到 `revise_required` 后、发起下一轮审查前，必须 append-only 记录失败根因、修改文件、修改摘要、验证命令和结果。reviewer 只读不写；缺修订记录时按证据缺失处理。
+After receiving `revise_required` and before initiating the next review round, the main agent must append-only record: failure root cause, modified files, modification summary, verification commands and results. The reviewer reads only, does not write; missing revision log is treated as missing evidence.

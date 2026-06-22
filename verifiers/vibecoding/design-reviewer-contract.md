@@ -1,184 +1,183 @@
-# Design Review 审查合同
+# Design Review Contract
 
-> 本文件定义 design-reviewer 的检查维度。合同外发现只能标 `minor`，不能标 `blocking`。
+> This file defines the inspection dimensions for the design-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
-## 三轴审查
+## Three-Axis Review
 
-每轮必须覆盖三轴，缺一不可：
+Every review round must cover all three axes — none may be omitted:
 
-| 轴 | 含义 | 对照源 |
+| Axis | Meaning | Reference Source |
 |----|------|--------|
-| **Problem Fit** | spec 是否解决真实、已批准的问题 | SPEC.md、constitution、intake artifacts、plan-ceo-review |
-| **Spec Quality** | FR、场景、验收、非目标是否足够进入计划 | spec.md、review skill output |
-| **Boundary Safety** | 是否越界、泄漏实现细节、踩 AgentHub/Knowledge/UI 边界 | contract.md、CLAUDE.md、plan-design-review |
+| **Problem Fit** | Does the spec solve a real, approved problem? | SPEC.md, constitution, intake artifacts, plan-ceo-review |
+| **Spec Quality** | Are FRs, scenarios, acceptance criteria, and non-goals sufficient to enter planning? | spec.md, review skill output |
+| **Boundary Safety** | Does the spec overstep boundaries, leak implementation details, or violate AgentHub/Knowledge/UI boundaries? | contract.md, CLAUDE.md, plan-design-review |
 
 ## Required Skill Execution
 
-审查员必须直接调用：
+The reviewer must directly invoke:
 
-- `plan-ceo-review`：premise challenge、scope mode、existing leverage、implementation alternatives、dream state delta、risk review。
-- `review`：独立复审设计目标、用户路径、验收边界、diff/scope drift。
-- `plan-design-review`：UI scope 时必需，覆盖信息架构、交互状态、用户旅程、AI slop risk、design system、响应式、无障碍、未决设计问题。
+- `plan-ceo-review`: premise challenge, scope mode, existing leverage, implementation alternatives, dream state delta, risk review.
+- `review`: independently re-examine design goals, user paths, acceptance boundaries, diff/scope drift.
+- `plan-design-review`: required when UI is in scope; covers information architecture, interaction states, user journeys, AI slop risk, design system, responsiveness, accessibility, and open design questions.
 
-required skill 不可用且 SKILL.md 文件不可读 → `escalate_to_human`。pass/revise 输出必须含顶层 `skillResults`，逐项记录 executed / not_applicable / unavailable / failed。
+If a required skill is unavailable and its SKILL.md file is unreadable → `escalate_to_human`. pass/revise output must include a top-level `skillResults` object recording each skill as executed / not_applicable / unavailable / failed.
 
-**Skill 执行回退规则**：审查员必须先尝试 Skill 工具调用 required skill。如果 Skill 工具在 headless/read-only 环境下失败，必须回退——直接 Read 该 skill 的 SKILL.md 文件，从中提取审查维度和检查清单，独立应用到 design sources。回退成功时记录 `status=executed`，并在 `mode` 或 `evidence` 标明 `skill-file fallback`。此回退规则对所有 required skill 通用，无需逐 skill 配置。
+**Skill Execution Fallback Rule**: The reviewer must first attempt to invoke required skills via the Skill tool. If the Skill tool fails in a headless/read-only environment, the reviewer must fall back — directly Read that skill's SKILL.md file, extract the review dimensions and checklists, and apply them independently to the design sources. When fallback succeeds, record `status=executed` and note `skill-file fallback` in the `mode` or `evidence` field. This fallback rule applies to all required skills universally; no per-skill configuration is needed.
 
-**三要素执行摘要要求（FR-REVIEW-006）**：每个必需技能的 `evidence` 字段必须包含三要素：（1）**在哪执行** — 会话位置/记录路径（如 `skill tool in this session` 或 `SKILL.md fallback: path/to/SKILL.md`）；（2）**具体输入/检查点** — 实际检查的内容（如具体文件路径、检查维度）；（3）**结论** — 发现了什么（如 "设计目标与 SPEC 对齐，无漂移" 或 "发现 FR-002 缺失覆盖"）。禁止只写 "已执行"、"通过" 或无具体内容的占位符。
+**Three-Element Evidence Requirement (FR-REVIEW-006)**: The `evidence` field for each required skill must contain three elements: (1) **Where executed** — session location or record path (e.g., `skill tool in this session` or `SKILL.md fallback: path/to/SKILL.md`); (2) **Specific inputs/checkpoints** — what was actually checked (e.g., specific file paths, review dimensions); (3) **Conclusion** — what was found (e.g., "design goals align with SPEC, no drift" or "FR-002 missing acceptance criteria coverage"). Placeholders such as "executed", "passed", or any content-free filler are prohibited.
 
-**实质内容最低门槛（FR-REVIEW-007）**：识别空洞摘要的判据如下。凡出现以下任意情形视为空洞，reviewer 必须降级为 `failed`：
-- evidence 仅含状态词，无检查位置（如 `"executed: skill ran ok"`）
-- evidence 无具体检查点或输入描述（如 `"checked the design"`）
-- evidence 缺少结论内容（如 `"result: ok"`）
-- 空洞反例：`{"status":"executed","evidence":"ran plan-ceo-review, no issues"}` — 缺在哪执行、无具体检查维度
-- 合规示例：`{"status":"executed","evidence":"(1) skill tool in this session; (2) checked FR-001/FR-002 mapping against spec.md lines 12-34; (3) FR-001 covered, FR-002 missing acceptance criteria"}`
-不依赖执行位置路径的自动机器校验——判断由 reviewer 人工核查，不要求路径可访问。
+**Minimum Substantive Content Threshold (FR-REVIEW-007)**: Criteria for identifying hollow summaries. Any of the following conditions renders evidence hollow; the reviewer must downgrade to `failed`:
+- evidence contains only status words with no execution location (e.g., `"executed: skill ran ok"`)
+- evidence lacks specific checkpoints or input descriptions (e.g., `"checked the design"`)
+- evidence is missing a conclusion (e.g., `"result: ok"`)
+- Hollow example: `{"status":"executed","evidence":"ran plan-ceo-review, no issues"}` — missing execution location and specific review dimensions
+- Compliant example: `{"status":"executed","evidence":"(1) skill tool in this session; (2) checked FR-001/FR-002 mapping against spec.md lines 12-34; (3) FR-001 covered, FR-002 missing acceptance criteria"}`
+Machine validation of execution location paths is not required — judgment is by the reviewer manually; path accessibility is not enforced.
 
-## 总原则
+## General Principles
 
-审查重心在实质而非格式。先回答 6 个问题：
+The review focus is on substance, not format. Answer these 6 questions first:
 
-1. **目标健康** — spec 解决的是 SPEC/用户要求的问题，还是 agent 自己发明的问题？
-2. **边界健康** — 模块职责是否清晰到能判断“一段代码放哪里”？
-3. **决策透明** — 重要选择是否说明为什么选它而不是替代方案？
-4. **可验收性** — Success Criteria 是否产生明确 pass/fail？
-5. **SPEC 偏离处理** — 与 SPEC 的差异是否分类为降规格、兼容演进或待人工决策？
-6. **原始需求覆盖** — intake 中每个用户问题/决策是否有 FR 或明确“不做”声明？
+1. **Goal Health** — Is the spec solving the problem stated in SPEC/requested by the user, or a problem the agent invented?
+2. **Boundary Health** — Are module responsibilities clear enough to decide "where does a piece of code belong"?
+3. **Decision Transparency** — Do important choices explain why this option was chosen over alternatives?
+4. **Verifiability** — Do Success Criteria produce unambiguous pass/fail outcomes?
+5. **SPEC Deviation Handling** — Are deviations from SPEC classified as spec downgrade, compatible evolution, or requiring human decision?
+6. **Original Requirement Coverage** — Does every user question/decision in the intake have a FR or an explicit "won't do" statement?
 
-## SPEC 偏离决策树
+## SPEC Deviation Decision Tree
 
-发现 spec.md 与 SPEC 不一致时：
+When spec.md is found inconsistent with SPEC:
 
-- SPEC 未明确规定 → 可作为实现细节差异，不阻断。
-- SPEC 有明确规定，spec 降低规格或偏离意图 → `revise_required` 或 `escalate_to_human`。
-- SPEC 有明确规定，spec 是更好且向后兼容的演进 → 可 pass，但 finding 标 `spec_evolution: true`，要求 close 时更新 SPEC。
+- SPEC does not explicitly specify → may be treated as an implementation detail difference; not blocking.
+- SPEC explicitly specifies, and spec downgrades or deviates from intent → `revise_required` or `escalate_to_human`.
+- SPEC explicitly specifies, and spec is a better, backward-compatible evolution → may pass, but mark the finding with `spec_evolution: true` and require SPEC to be updated at close.
 
-## 增量审查规则
+## Incremental Review Rules
 
-第 1 轮：全量审查，按本合同所有维度出 findings。
+Round 1: Full review against all dimensions in this contract.
 
-第 2+ 轮：
+Round 2+:
 
-1. 逐条核验前轮 blocking；未修复 → blocking。
-2. 只审本轮修改文件和受影响源。
-3. 如果触碰 RuntimeAdapter / checkpoint / workflow 边界、forbidden files、跨 package 接口 → 对该模块全量复审。
-4. 新 blocking 只能来自本轮新改动、前轮不可能发现的问题、架构/边界触碰；其余 late finding 标 `minor`。
-5. 每轮独立会话，只看 review package。
+1. Verify each prior-round blocking finding one by one; unresolved → still blocking.
+2. Review only files changed in this round and affected sources.
+3. If RuntimeAdapter / checkpoint / workflow boundaries, forbidden files, or cross-package interfaces are touched → perform a full re-review of that module.
+4. New blocking findings may only come from changes in this round, issues that could not have been found in prior rounds, or architectural/boundary touches; all other late findings are marked `minor`.
+5. Each round uses an independent session; review only the review package.
 
-## 阻断/非阻断分类
+## Blocking vs. Non-Blocking Classification
 
-**阻断（必须出 revise_required）**：
+**Blocking (must result in revise_required)**:
 
-- 原始需求覆盖不完整：decision-log.md 中的用户问题/决策没有 FR 或明确”不做”。
-- spec 引入 decision-log 不存在的核心概念（模式/分支/新状态机/新实体）且未在 spec 中标注来源和理由。
-- 设计违反 Coding Discipline 铁律 1（引入需求外概念）：新增类型/函数/模式/状态机/依赖无法映射回 decision-log.md 或 spec.md 的某条决策。
-- **声称来源真实存在逐条核验（FR-SRC-TRACE-001，硬指令，双向反查）**：被审 spec 的每个 FR/场景若声称一个决策来源（如"承接 D8"），审查员必须逐条到需求真相源 decision-log 中找到真实存在的对应条目；声称的来源在 decision-log 中搜不到 = 需求外概念 = `blocking`（违反 Coding Discipline 铁律 1）。**反向**：decision-log 里每条要改动已有功能的决策，必须在 spec 的「业务影响范围」章被列出；缺列即 `blocking`。此核验不依赖审查 prompt 是否点了重点——任何一轮都必须逐条做，不得用"粗粒度有对应 FR"代替逐条来源核对。
-- scope 漂移：spec 加入未批准目标，或删掉用户已批准目标。
-- 用户已批准 scope 被 reviewer 推翻：应降为风险，不得阻断。
-- Success Criteria 不能用命令、操作、截图、日志或人工步骤判断真伪。
-- spec 把多个独立结果塞进一个 change，或把纯技术切片伪装成 user story。
-- SPEC 偏离降低规格或改变 MVP，需要用户/人工决策。
-- AgentHub 边界错误：把 `vibecoding` 写成平台主流程、把 Runtime 私有能力写进平台合同、混淆 RuntimeAdapter/workflow/checkpoint/Knowledge、Capability 未按 workflow/stage 判断、deepseek 不作为 server-side verifier runtime、引入模板市场/PPT/research/Gemini 全量接入等延期项。
-- 文件放置错误：产品 prompt/workflow ts/schema/types 不在 repo，Spec 不在 `specs/<feature>/`，Knowledge 被当模板真相源，task 路径不是 `{{task_tracking_root}}/tasks/<task-id>/`。
-- Spec-Purity 黑名单命中：绝对路径、hook 事件字符串、TypeScript 类型字段、shell 命令行。
-- UI scope 没有设计资料、现有页面、截图、Figma 或设计授权，却直接进入实现。
-- UI spec 未列关键状态/交互/不可新增元素，或把可交互控件降级为只读展示。
-- 验收只验代码不验行为：验收标准只检查代码结构/存在性/编译通过，没有覆盖运行时行为验证 — reviewer 必须标 blocking。纯文档/配置 phase 豁免。
-- checkpoint package 缺 stage、artifact、acceptance criteria，或流程推进依赖文件监听而非显式 checkpoint。
-- 业务影响范围漏估（FR-IMPACT-001/003）：spec 的「业务影响范围」章漏列会被本需求破坏的已有功能/用户场景/受冲击的业务规则，或整章缺失。审查员须独立核影响是否穷尽（对照 decision-log 改动意图 + 全 spec 受影响功能），漏估即 blocking，不接受 pass。该章只写业务性质，混入文件路径/代码符号按 Spec-Purity 另判。**Grandfather 例外（与 FR-SPEC-003 旧 spec 兼容一致）**：本规则只对新模板（含第 11 章骨架）创建的 spec 生效；新模板生效前创建的旧 spec 合法缺第 11 章，"整章缺失"不对旧 spec 判 blocking——判据=spec frontmatter/创建时间早于新模板，或 spec 章节本就不含第 11 章骨架痕迹。新 spec 漏第 11 章才 blocking。
+- Incomplete original requirement coverage: a user question/decision in decision-log.md has no FR and no explicit "won't do" statement.
+- spec introduces a core concept (mode/branch/new state machine/new entity) not present in decision-log, without annotating its source and rationale in the spec.
+- Design violates Coding Discipline Iron Rule 1 (introducing out-of-scope concepts): a new type/function/pattern/state machine/dependency cannot be traced back to a decision in decision-log.md or spec.md.
+- **Claimed source truthfulness verification (FR-SRC-TRACE-001, hard directive, bidirectional cross-check)**: For every FR/scenario in the reviewed spec that claims a decision source (e.g., "derived from D8"), the reviewer must trace that claim to a real, existing entry in the decision-log. A claimed source not found in the decision-log = out-of-scope concept = `blocking` (violates Coding Discipline Iron Rule 1). **Reverse direction**: every decision in decision-log that modifies existing functionality must be listed in the spec's "Business Impact Scope" section; any omission is `blocking`. This verification is mandatory in every round regardless of whether the review prompt highlights it — "rough-grained FR correspondence" is not a substitute for per-entry source tracing.
+- Scope drift: spec adds unapproved goals or removes user-approved goals.
+- Reviewer overturning user-approved scope: must be downgraded to a risk finding; must not block.
+- Success Criteria cannot be judged true or false by commands, operations, screenshots, logs, or manual steps.
+- spec bundles multiple independent outcomes into one change, or disguises a purely technical slice as a user story.
+- SPEC deviation downgrades the spec or alters the MVP in a way that requires user/human decision.
+- AgentHub boundary errors: writing `vibecoding` as the platform's main flow, writing Runtime private capabilities into the platform contract, conflating RuntimeAdapter/workflow/checkpoint/Knowledge, Capability not evaluated per workflow/stage, deepseek not treated as a server-side verifier runtime, introducing deferred items such as template marketplace/PPT/research/full Gemini integration.
+- File placement errors: product prompt/workflow ts/schema/types not in repo, Spec not under `specs/<feature>/`, Knowledge used as a template source of truth, task path not `{{task_tracking_root}}/tasks/<task-id>/`.
+- Spec-Purity blacklist hit: absolute paths, hook event strings, TypeScript type field definitions, shell command lines.
+- UI scope with no design materials, existing pages, screenshots, Figma, or design authorization, yet proceeding directly to implementation.
+- UI spec does not list key states/interactions/elements that must not be added, or demotes interactive controls to read-only display.
+- Acceptance verifies code only, not behavior: acceptance criteria check only code structure/existence/compilation without covering runtime behavior verification — reviewer must mark blocking. Pure documentation/configuration phases are exempt.
+- checkpoint package missing stage, artifact, or acceptance criteria, or flow progression depends on file watching rather than explicit checkpoints.
+- Business impact scope underestimated (FR-IMPACT-001/003): the spec's "Business Impact Scope" section omits existing features/user scenarios/business rules that would be broken by this requirement, or the section is entirely absent. The reviewer must independently verify that the impact is exhaustive (cross-referencing decision-log change intent + all affected spec functionality); any underestimation is blocking and cannot be passed. This section must contain only business-level content; file paths or code symbols mixed in are subject to Spec-Purity judgment separately. **Grandfather Exception (consistent with FR-SPEC-003 legacy spec compatibility)**: this rule only applies to specs created with the new template (including the Chapter 11 skeleton); specs created before the new template was introduced are legitimately missing Chapter 11, and "section entirely absent" is not blocking for legacy specs — the criterion is: spec frontmatter/creation date predates the new template, or the spec chapters contain no trace of the Chapter 11 skeleton. New specs missing Chapter 11 are blocking.
 
-**验收指标三软门（FR-ORACLE-001/002/003）**：
+**Acceptance Criteria Three Soft Gates (FR-ORACLE-001/002/003)**:
 
-- **FR-ORACLE-001 分母检查**：spec 中的每个验收指标（Success Criteria）是否写明分母（即 "X/Y 中的 Y 是多少"）？任一指标缺分母（如只写"覆盖率达标"而不写共 N 条中 M 条通过）→ revise_required。
-- **FR-ORACLE-002 反向断言成对**：每条行为断言是否同时声明正向（X 必须发生）和反向（Y 必须不发生）？任一断言只有正向、缺反向一侧 → revise_required。
-- **FR-ORACLE-003 baseline 来源核验**：spec 引用的任何 baseline 数值或参考值，是否标明来源？实现者自填的来源须有独立确认（非同一人自证）；来源缺失或未独立确认 → revise_required。
+- **FR-ORACLE-001 Denominator Check**: Does each acceptance criterion (Success Criteria) in the spec state the denominator (i.e., "what is Y in X out of Y")? Any criterion missing a denominator (e.g., only "coverage met" without stating M out of N total) → revise_required.
+- **FR-ORACLE-002 Assertion Pairing**: Does each behavioral assertion state both the positive side (X must happen) and the negative side (Y must not happen)? Any assertion with only a positive side and no negative counterpart → revise_required.
+- **FR-ORACLE-003 Baseline Source Verification**: Are the sources of any baseline values or reference numbers cited in the spec stated? Implementer-supplied sources require independent confirmation (not self-certified by the same person); missing source or lack of independent confirmation → revise_required.
 
-**非阻断（应出 pass，可标 important/minor）**：
+**Non-Blocking (should result in pass; may mark important/minor)**:
 
-- scope 扩张类想法：来自 plan-ceo-review 的“还可以做 X”，放入 `scope_expansion: true` 的 minor finding，不影响 verdict。
-- 用户已批准 scope 的风险提醒。
-- 场景措辞可更明确、兼容性预留偏泛。
-- FR 编号不规范（非 `FR-<域缩写>-NNN`）、FR 无场景、用户场景少于 8 条且无合理说明。
-- 模块测试边界略粗，但不影响方向判断和 plan 阶段拆 phase。
-- design-fidelity-component-contract 缺补充项时按下方规则标 important，不直接 blocking。
+- Scope expansion ideas: "could also do X" suggestions from plan-ceo-review, placed in a minor finding with `scope_expansion: true`; does not affect verdict.
+- Risk reminders for user-approved scope.
+- Scenario wording could be more explicit; compatibility reservations are overly broad.
+- FR numbering non-standard (not `FR-<domain-abbrev>-NNN`), FR has no scenario, fewer than 8 user scenarios with no reasonable explanation.
+- Module test boundaries are slightly coarse but do not block direction judgment or plan-phase decomposition.
+- Missing supplementary items in design-fidelity-component-contract: mark important per the rules below; do not block directly.
 
-## 检查维度
+## Inspection Dimensions
 
-| 维度 | 验证方法 |
+| Dimension | Verification Method |
 |------|---------|
-| Required Skills 已执行 | 检查 plan-ceo-review/review 输出；UI scope 时检查 plan-design-review 输出。无法执行 required skill → escalate |
-| 问题陈述清晰 | 读 spec.md 概述：一句话讲用户视角问题，不夹实现方案 |
-| 原始需求覆盖 | 对照 decision-log.md，逐条映射到 FR 或”不做”声明 |
-| 场景覆盖完整 | 检查 ≥8 个用户/边界/失败/权限场景；每个 FR 至少一个 Given/When/Then |
-| FR 编号规范 | grep `FR-[A-Z]+-[0-9]{3}`，禁止 `FR-001` 平铺编号 |
-| 验收可判定 | Success Criteria 必须可命令/操作/截图/日志验证 |
-| 非目标明确 | out-of-scope 不得进入 FR；scope 扩张只记 minor |
-| 模块测试边界 | 每个模块有独立测试边界，能支撑 plan phase 划分 |
-| SPEC 偏离 | 按 SPEC 偏离决策树判断降规格/演进/需人工 |
-| AgentHub 边界 | 对照 contract.md/CLAUDE.md 检查 RuntimeAdapter/workflow/checkpoint/Knowledge 职责 |
-| 文件放置 | 检查 repo artifacts 与 Knowledge artifacts 的职责分离 |
-| UI 设计 | UI scope 时检查设计授权、关键状态、交互、响应式、可操作控件 |
-| 设计合同 | 若启用 design-fidelity-component-contract，检查 design-contract.md/ui-contract.json/component_candidates |
-| Checkpoint | 检查显式 checkpoint、artifact、acceptance criteria，不依赖文件监听 |
-| 四类标准可逐条勾（D7/D10，FR-REVIEW-005） | design 侧的交付/异常标准必须以审查员**可逐条勾的硬条目**形式存在（测试/代码标准在 plan 阶段落地）。逐项见下表 |
-| 业务影响范围穷尽性（D12，FR-IMPACT-003） | 读 spec「影响范围」章，独立核本需求影响到的已有功能/用户场景/受冲击业务规则是否列全（对照 decision-log 改动意图）。漏列受影响功能 → blocking。该章只写业务，不写文件路径 |
+| Required Skills executed | Check plan-ceo-review/review output; for UI scope check plan-design-review output. Unable to execute required skill → escalate |
+| Problem statement clear | Read spec.md overview: one sentence states the user-perspective problem without embedding implementation approach |
+| Original requirement coverage | Cross-reference decision-log.md; map each entry to a FR or "won't do" statement |
+| Scenario coverage complete | Check ≥8 user/boundary/failure/permission scenarios; at least one Given/When/Then per FR |
+| FR numbering standard | grep `FR-[A-Z]+-[0-9]{3}`; flat `FR-001` numbering is prohibited |
+| Acceptance determinable | Success Criteria must be verifiable by command/operation/screenshot/log |
+| Non-goals explicit | Out-of-scope items must not appear in FRs; scope expansion is recorded as minor only |
+| Module test boundary | Each module has an independent test boundary sufficient to support plan-phase decomposition |
+| SPEC deviation | Apply SPEC deviation decision tree to classify: downgrade / evolution / requires human |
+| AgentHub boundary | Cross-check contract.md/CLAUDE.md for RuntimeAdapter/workflow/checkpoint/Knowledge responsibilities |
+| File placement | Check that repo artifacts and Knowledge artifacts have separated responsibilities |
+| UI design | For UI scope: check design authorization, key states, interactions, responsiveness, interactive controls |
+| Design contract | If design-fidelity-component-contract is enabled, check design-contract.md/ui-contract.json/component_candidates |
+| Checkpoint | Check for explicit checkpoints, artifacts, acceptance criteria; no reliance on file watching |
+| Four standard types each individually checkable (D7/D10, FR-REVIEW-005) | On the design side, delivery/exception criteria must exist as **hard line items the reviewer can check one by one** (test/code criteria are established in the plan phase). See table below for each item |
+| Business impact scope exhaustiveness (D12, FR-IMPACT-003) | Read the spec's "Impact Scope" section; independently verify that all existing features/user scenarios/business rules affected by this requirement are listed (cross-reference decision-log change intent). Any omission of affected functionality → blocking. This section must be business-level only; no file paths |
 
-## 四类标准检查维度（design 侧可逐条勾硬条目）
+## Four Standard Types — Inspection Dimensions (Design-Side Hard Checkable Items)
 
-> 交付/异常/测试/代码四类标准不各开重章节。design 阶段只承载**交付（验收）**与**异常（边界场景）**两类可逐条勾硬条目；测试双栏命令与代码标准在 plan 阶段落地（见 plan-reviewer-contract）。每条给 pass/fail 判据，逐条勾，任一硬条目未满足 → blocking。
+> Delivery/exception/test/code standards do not each get a separate major section. The design phase only carries **delivery (acceptance)** and **exception (boundary scenarios)** as hard, individually checkable items; test dual-column commands and code standards are established in the plan phase (see plan-reviewer-contract). Each item has a pass/fail criterion; check each one individually — any unsatisfied hard item → blocking.
 
-| 类 | 可逐条勾硬条目 | pass/fail 判据 |
+| Type | Hard Checkable Items | pass/fail Criterion |
 |----|---------------|----------------|
-| **交付标准（done）** | 每个 FR 的 Success Criteria 可逐条勾（能用命令/操作/截图/日志/人工步骤判 pass/fail），非"看起来正常"泛述 | 每条 Success Criteria 可客观判定 → 勾；存在主观/无法判真伪的验收 → blocking |
-| **异常标准（边界）** | spec 显式列出失败/边界/权限场景（≥8 场景含失败与边界），每条有 Given/When/Then | 关键失败/边界场景齐全且可验收 → 勾；只覆盖 happy path、缺失败/边界场景 → blocking |
+| **Delivery Standard (done)** | Each FR's Success Criteria can be checked individually (verifiable by command/operation/screenshot/log/manual step), not a vague "looks correct" description | Each Success Criteria is objectively determinable → pass; any subjective or unverifiable acceptance criterion → blocking |
+| **Exception Standard (boundary)** | spec explicitly lists failure/boundary/permission scenarios (≥8 scenarios including failures and boundaries); each has a Given/When/Then | Key failure/boundary scenarios present and verifiable → pass; only happy path covered, missing failure/boundary scenarios → blocking |
 
-## Spec-Purity 黑名单
+## Spec-Purity Blacklist
 
-| 类别 | 禁止内容 | 示例 | 验证方法 |
+| Category | Prohibited Content | Example | Verification Method |
 |------|---------|------|---------|
-| 绝对文件路径 | 以 `/` 开头的用户/临时路径 | `/Users/...`、`/tmp/...` | grep 路径 |
-| Hook 事件字符串 | PreToolUse、PostToolUse、SessionStart | `SessionStart hook` | grep 事件名 |
-| TS 类型字段定义 | `interface` / `type` / 字段定义 | `interface X {` | grep TS 语法 |
-| Shell 命令行 | capture-phase-evidence.sh 采集 | `apply/evidence/phase-<N>-<MODE>.json` | 读 command 字段 |
+| Absolute file paths | Paths starting with `/` (user/temp paths) | `/Users/...`, `/tmp/...` | grep for path |
+| Hook event strings | PreToolUse, PostToolUse, SessionStart | `SessionStart hook` | grep for event names |
+| TS type field definitions | `interface` / `type` / field definitions | `interface X {` | grep for TS syntax |
+| Shell command lines | capture-phase-evidence.sh (agenthub platform path; not in the standalone repo) collection | `apply/evidence/phase-<N>-<MODE>.json` (agenthub platform path; not in the standalone repo) | read the command field |
 
-## UI 与设计合同规则
+## UI and Design Contract Rules
 
-如果涉及 UI：
+When UI is in scope:
 
-- design-review 只检查 spec 是否提出 UI 验收标准；视觉合同 6 维度由 plan-review 逐项检查。
-- 没有设计资料/授权却进入实现 → blocking。
-- `design-contract.md` 必须在 `docs/contracts/`；`ui-contract.json` 必须列出本 change 涉及页面 state/element。
-- `truth_source: "manual_added"` 的 element/state 合法，但必须建立在提取器生成的基线合同之上。
-- `component_candidates` 与 change 范围重叠时，review 必须标注采纳/不采纳。
-- 合同来源应为正式提取器 `generateMarkdown()`；手补章节需有 `手工补充` 或 `来源：plan.md` 标记。
-- 上述设计合同缺失或错误 → `important`，并给 `requiredFix`；除非会导致无法验收 UI，才升级 blocking。
+- design-review only checks whether the spec proposes UI acceptance criteria; the 6 visual contract dimensions are inspected by plan-review.
+- No design materials/authorization yet proceeding to implementation → blocking.
+- `design-contract.md` must be under `docs/contracts/`; `ui-contract.json` must list the page state/elements involved in this change.
+- Elements/states with `truth_source: "manual_added"` are legitimate, but must be built on top of the extractor-generated baseline contract.
+- When `component_candidates` overlap with the change scope, the review must annotate each as adopted/not adopted.
+- The contract source should be the formal extractor `generateMarkdown()`; manually added sections require a `manually added` or `source: plan.md` marker.
+- Any of the above design contract deficiencies or errors → `important` with a `requiredFix`; escalate to blocking only if it would make UI acceptance impossible.
 
-## Knowledge 路径规则
+## Knowledge Path Rules
 
-- 正确 project root：`{{task_tracking_root}}`。
-- task 文件位于 `{{task_tracking_root}}/tasks/<task-id>/`。
-- 出现 `/Users/Hugh/Knowledge/Projects/multica-agenthub` → `escalate_to_human`。
-- 禁止把 repo 内 `specs/<feature>/spec.md` 当 Knowledge task 目录。
+- Correct project root: `{{task_tracking_root}}`.
+- Task files are located at `{{task_tracking_root}}/tasks/<task-id>/`.
+- Do not treat `specs/<feature>/spec.md` in the repo as a Knowledge task directory.
 
-## 验证方法
+## Verification Methods
 
-1. **读文件**：Read decision-log.md、SPEC.md、constitution、spec.md、contract.md、CLAUDE.md。
-2. **Skill 对照**：逐条核验 plan-ceo-review/review/plan-design-review 的 finding 是否已纳入 verdict；未真实调用 required skill → escalate。
-3. **grep 验证**：FR 编号、黑名单、Knowledge 路径、验收标准关键字段。
-4. **交叉比对**：SPEC/constitution/contract 与 spec.md 不一致时，按决策树定级。
-5. **人工判断**：问题陈述、scope、模块边界必须给具体理由和 evidence。
+1. **Read files**: Read decision-log.md, SPEC.md, constitution, spec.md, contract.md, CLAUDE.md.
+2. **Skill cross-check**: Verify one by one that each plan-ceo-review/review/plan-design-review finding has been incorporated into the verdict; required skill not genuinely invoked → escalate.
+3. **grep verification**: FR numbering, blacklist, Knowledge paths, key acceptance criteria fields.
+4. **Cross-reference**: When SPEC/constitution/contract and spec.md are inconsistent, apply the decision tree to determine severity.
+5. **Manual judgment**: Problem statement, scope, and module boundaries must be supported by specific rationale and evidence.
 
-## 同 Finding 连续 2 轮升级规则（FR-REV-001）
+## Same Finding Escalation Rule for 2 Consecutive Rounds (FR-REV-001)
 
-同一 blocking 连续 2 轮未闭合时，finding 必须包含：
+When the same blocking finding remains unclosed for 2 consecutive rounds, the finding must include:
 
-1. 根因。
-2. 扫描范围。
-3. 反例矩阵。
-4. Closure checklist。
+1. Root cause.
+2. Scan scope.
+3. Counter-example matrix.
+4. Closure checklist.
 
-第 3 轮仍未闭合 → `escalate_to_human`。
+Still unclosed in round 3 → `escalate_to_human`.
 
-## 修订记录
+## Revision Log
 
-主 agent 在收到 `revise_required` 后、发起下一轮审查前，必须 append-only 记录失败根因、修改文件、修改摘要、验证命令和结果。reviewer 只读不写；缺修订记录时按证据缺失处理。
+After receiving `revise_required` and before initiating the next review round, the main agent must append-only record: the failure root cause, modified files, change summary, verification commands, and results. The reviewer reads only; treating a missing revision log as missing evidence.
