@@ -1,0 +1,14 @@
+{
+  "reviewRequestId": "fixture-class-missing",
+  "verdict": "revise_required",
+  "rootCause": "fixture",
+  "fixApproach": "fixture",
+  "findings": [
+    {
+      "severity": "important",
+      "issue": "finding with no blockerClass field at all",
+      "file": "some.ts",
+      "line": 5
+    }
+  ]
+}

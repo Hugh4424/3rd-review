@@ -1,0 +1,15 @@
+{
+  "reviewRequestId": "fixture-class-proc-imp",
+  "verdict": "revise_required",
+  "rootCause": "fixture",
+  "fixApproach": "fixture",
+  "findings": [
+    {
+      "severity": "important",
+      "blockerClass": "process_evidence",
+      "issue": "evidence file ts is stale but not blocking",
+      "file": "apply/evidence/phase-y.json",
+      "line": 1
+    }
+  ]
+}

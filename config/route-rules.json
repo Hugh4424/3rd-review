@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "rulesVersion": "1.0",
+  "description": "3rd-review 自适应路由单一规则表（RD-5 / FR-ROUTE-001/002/003）。阈值与档位定义只此一处；route-review.mjs 读取此表，不在代码内写死。环境探测层（env）与策略层（contentType/scope）分离：工具种类只影响 env，不缩小审查范围。",
+  "featureFlags": {
+    "description": "Cost-reduction feature switches read by the adapter at injection time. Each flag is additive: off restores prior behavior. Single source — adapter and tests read here, no hardcoded defaults.",
+    "review": {
+      "evidencePacket": {
+        "enabled": true,
+        "maxRawLines": 60,
+        "note": "EVP 预喂事实包（Phase 1）。enabled=true 时审查发起前系统预生成『原始事实包』(导航+原始事实, 标 seed/index, 禁结论词, 超限按相关度截断) 注入审查员初始输入；off 则不注入。maxRawLines 是原始检索输出注入上限。"
+      }
+    }
+  },
+  "report": {
+    "description": "审查报告渲染开关（Phase 3 RPT）。render-review-report.mjs 读取此节，阈值与默认不在代码内写死。",
+    "slimReadSet": {
+      "enabled": true,
+      "note": "读取清单瘦身开关（FR-CFG-001，契约键 report.slimReadSet.enabled）。enabled=true（默认）时：普通条目（sourceType!=='high_risk'）的 reason 列裁为空/短码，high_risk 条目保留实质 reason；并把『审查维度』与『读取清单』合并为一张表。enabled=false 时回退旧行为：所有条目显示完整 reason + 两张分离表。采显式 null-check（!== false），仅显式 false 关闭，不用 falsy-coalescing。display-only，不改 schema / 不删数据。"
+    }
+  },
+  "env": {
+    "description": "环境探测：agenthub（任务目录存在）vs standalone（脱平台）。仅影响落盘与门禁路径，不缩小审查范围。",
+    "values": ["agenthub", "standalone"],
+    "detect": {
+      "agenthub": "task-dir 存在且其下有 .machine/source/state.json 或 state.json",
+      "standalone": "无 task-dir / 任务目录不含 state.json"
+    }
+  },
+  "contentType": {
+    "description": "内容类型 5 类。由审查输入的 phaseType 标记（优先）或文件特征判定；推断结果需回显确认（D17）。",
+    "values": ["design-doc", "plan-doc", "code-diff", "text-record", "docs-only"],
+    "detect": [
+      { "type": "design-doc", "signals": ["design review", "design-review", "spec.md", "## Design", "设计评审"] },
+      { "type": "plan-doc", "signals": ["plan review", "plan-review", "plan.md", "## Plan", "计划评审", "tasks.md"] },
+      { "type": "code-diff", "signals": ["```diff", "diff --git", "@@", "code review", "code-review"] },
+      {
+        "type": "docs-only",
+        "signals": [],
+        "filePattern": "^(.*\\.md|docs/.*)$",
+        "excludes": [".json", ".yaml", ".toml"],
+        "note": "ALL changed files must match filePattern AND none may match excludes; orthogonal overlay over size tiers."
+      },
+      { "type": "text-record", "signals": [], "default": true }
+    ],
+    "note": "命中优先级 design-doc > plan-doc > code-diff > docs-only > text-record；phaseType 显式标记直接覆盖推断；无强信号落 text-record（default）。"
+  },
+  "scope": {
+    "description": "范围 4 档。code-diff 按 diff 行数阈值分档；风险关键词命中则升档。非 code-diff 落 small（保守，不缩范围）。",
+    "values": ["trivial", "small", "medium", "large"],
+    "diffThresholds": [
+      { "scope": "trivial", "maxLines": 0, "note": "0 行变更（纯元数据/无 diff）" },
+      { "scope": "small", "maxLines": 300, "note": "≤300 行" },
+      { "scope": "medium", "maxLines": 1500, "note": "301-1500 行" },
+      { "scope": "large", "maxLines": null, "note": ">1500 行（无上限）" }
+    ],
+    "riskKeywords": {
+      "description": "命中任一风险关键词 → scope 至少升到 large（不缩审查范围，FR-ROUTE-003）。",
+      "keywords": [
+        "auth.go", "client.ts", "auth-initializer", "web-providers", "proxy.ts",
+        "DROP TABLE", "DROP DATABASE", "rm -rf", "forbidden", "migration",
+        "secret", "credential", "token", "password", "DELETE FROM"
+      ],
+      "escalateTo": "large"
+    },
+    "nonDiffDefault": "small",
+    "note": "scope 只决定审查投入档位，绝不缩小责任域；风险关键词只升不降。"
+  },
+  "decision": {
+    "description": "route_decision 输出契约：selected（选中的审查档/方式）、rejected[]（被排除项+reason）、reason、rulesVersion。判定为纯函数：同输入必产同输出（可复现）。",
+    "fields": ["env", "contentType", "scope", "selected", "rejected", "reason", "rulesVersion"]
+  },
+  "lensTriggers": {
+    "description": "Content-derived lens trigger patterns (FR-LENS-001/002/003). inferAutomaticLensPlan reads these instead of hardcoding regex literals. Checkpoint-prefix logic (isPlan/isDesign/etc.) stays in code. Changing these patterns changes which lenses fire.",
+    "uiKeywords": ["ui\\b", "browser", "screenshot", "trace", "isolated-browser-qa", "responsive", "user-flow", "ui_change"],
+    "evidenceKeywords": ["apply/evidence", "Host-Verified Facts", "final-test-report", "raw output", "exit code", "\\bGREEN\\b", "\\bRED\\b", "verify-change"],
+    "mechanicalRiskKeywords": ["provider_name:risk", "forbidden_phrasing:risk", "set_u_array:warning", "Precomputed Mechanical Grep Input"],
+    "sourceManifestKeywords": ["##\\s+Source Manifest", "##\\s+Delta Package", "^diff --git ", "Precomputed Changed File Classification"],
+    "requiredSkillKeywords": ["required skill", "mandatory skills", "skillResults", "qa-only", "verify-change", "plan-ceo-review", "speckit-analyze"],
+    "fullFallbackOnHighRisk": true,
+    "fullFallbackOnNoMatch": true,
+    "note": "uiKeywords are tested case-insensitively. evidenceKeywords are tested case-insensitively. sourceManifestKeywords index 0/1 are full regex; index 2 is multiline; index 3 is literal substring. Keep in sync with strong-signal-v4 suppression logic in code."
+  },
+  "degradation": {
+    "description": "降级路由规则（FR-DEG-001/002/003/004）。applyPostRoundDegradation 读取此节，阈值与匹配规则不在代码内写死。",
+    "midTier": {
+      "enabled": true,
+      "note": "三档自适应降级中间档开关（FR-CFG-001，契约键 degradation.midTier.enabled）。enabled=true（默认）时 applyPostRoundDegradation 走 R1/R2/R6 三档；enabled=false 时回退旧二元 R1/R6 行为（永不出 R2）。默认采显式 null-check（!== false），仅显式 false 关闭。"
+    },
+    "maxFindingsForDowngrade": 1,
+    "note": "三档自适应（FR-DEG-001..004，Clarifications 2026-06-19）：①上轮无 blocking、问题少 → 较当前档降一档（R1→R2→R6，R6 保持）；②上轮恰 1 条『非硬护栏』blocking → 中间档 R2；③上轮 >1 blocking 或含『硬护栏』blocking → 维持最重档 R1；④同一 blocking 跨轮反复未解 → escalate（不降级，置 escalate=true）。R6 已降级轮的新领域 blocking 仍按 newDomainRules 升回 R1。midTier 开关关闭时回退旧二元 R1/R6。",
+    "tierOrder": ["cross_source_with_subagent", "cross_source_no_subagent", "same_source_subagent"],
+    "midLevel": "cross_source_no_subagent",
+    "hardGuardrailCriteria": {
+      "description": "机读判据（FR-DEG-004/FR-REVIEW-004/005）：finding 的 blockerClass/riskType/sourceType/contractId 命中任一配置值即视为硬护栏 blocking，任何形态不降级（维持 R1）。output_contract/process_evidence 是代表输出契约/流程证据护栏的 blockerClass；delivery_quality 是普通交付质量类，不算硬护栏。",
+      "blockerClass": ["output_contract", "process_evidence"],
+      "riskType": ["security", "data-integrity"],
+      "sourceType": ["high_risk"],
+      "contractId": []
+    },
+    "newDomainRules": {
+      "description": "新领域判据（FR-DEG-003）：finding 满足任一维度即认定为新领域。三维正交叠加：domainLabels（领域标签）、pathPrefixes（代码路径前缀）、lensTypes（审查 lens 类型）。",
+      "domainLabels": ["performance", "accessibility", "i18n", "data-integrity", "observability"],
+      "pathPrefixes": [],
+      "lensTypes": ["performance", "accessibility", "i18n", "data-integrity", "observability"]
+    }
+  }
+}

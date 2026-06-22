@@ -1,0 +1,15 @@
+{
+  "reviewRequestId": "fixture-class-legal",
+  "verdict": "revise_required",
+  "rootCause": "fixture",
+  "fixApproach": "fixture",
+  "findings": [
+    {
+      "severity": "blocking",
+      "blockerClass": "delivery_quality",
+      "issue": "off-by-one in degradation predicate causes wrong routing",
+      "file": "route-review.mjs",
+      "line": 226
+    }
+  ]
+}

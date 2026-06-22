@@ -1,0 +1,15 @@
+{
+  "case": "subreviewer-miss",
+  "scenario": "子审漏判（机械维度隐蔽缺陷，主审抽样抓回）",
+  "expected": {
+    "verdict": "revise_required",
+    "blockingCount": 1,
+    "blockingTitles": [
+      "prompt 文本内直接出现 provider 专名，违反 provider-name 约定"
+    ],
+    "requiredSections": ["Summary", "Findings", "Checks", "Required Revisions"],
+    "reviewDimensions": ["方向", "盲点", "细节"],
+    "downgradeReasonRequired": true
+  },
+  "rationale": "diff 在 prompt 正文段落中段嵌入 provider 专名（Codex），不在行首，机械 grep 子审若只按行首 token 分类，可能把它判为 low-risk 而漏掉。base-verifier 抽样兜底要求主审对被接受的 low-risk 来源至少抽样复核 1 项，主审据此读原文发现该约定违规并抓回为 blocking。本用例证明：信赖子审覆盖不等于免审，抽样下限是过度信赖的安全网，最终裁决权仍属主审。"
+}

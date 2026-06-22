@@ -1,0 +1,1666 @@
+{
+  "reviewRequestId": "persist-fx-with-readset-001",
+  "verdict": "pass",
+  "resolutionSummary": "Phase 4 implements the required blockerClass finding classification on the active verdict and verifier-report schemas, wires located gate validation into reviewer_output, adds producer prompt guidance, and covers the behavior with targeted schema and gate tests. The review-fixes exclusion is sound because that schema has no finding item or severity field to classify.",
+  "riskDisposition": [
+    {
+      "risk": "specs/review-adaptive-routing-cost-control/tasks.md was marked unclassified despite parent inventory classification",
+      "checkedSource": "git status --short; specs/review-adaptive-routing-cost-control/tasks.md",
+      "decision": "not_blocking",
+      "whyNotBlocking": "The path is an untracked design artifact explicitly listed as unrelated to the phase commit. I inspected the actual tasks file for P4 requirements and used it only as a design source."
+    },
+    {
+      "risk": "Source Manifest used brace shorthand for specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+      "checkedSource": "code-review-phase-4-round-1.prompt.md plus specs/review-adaptive-routing-cost-control/spec.md, plan.md, tasks.md",
+      "decision": "not_blocking",
+      "whyNotBlocking": "The shorthand is a process-evidence issue in the review package, not an implementation defect. I resolved and inspected the exact files, so no review scope was lost."
+    },
+    {
+      "risk": "Source Manifest used wildcard shorthand for packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+      "checkedSource": "find packages/core/agenthub/skills/3rd-review/__fixtures__; fixture files",
+      "decision": "not_blocking",
+      "whyNotBlocking": "I expanded and inspected the five exact fixture files. They match the intended legal, illegal, missing, output_contract, and process_evidence cases."
+    },
+    {
+      "risk": "Source Manifest used TASK_DIR-relative shorthand for artifacts/decision-log.md",
+      "checkedSource": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/artifacts/decision-log.md",
+      "decision": "not_blocking",
+      "whyNotBlocking": "I inspected the exact task decision log path and verified D6 plus D6-apply-1 context."
+    },
+    {
+      "risk": "Skill path declarations include placeholder and home-relative shorthand paths",
+      "checkedSource": "packages/core/agenthub/skills/3rd-review/SKILL.md lines around required skill fallback; code-reviewer contract",
+      "decision": "not_blocking",
+      "whyNotBlocking": "The <name> placeholders are generic fallback instructions for non-code reviews. This checkpoint is code-review, and the code-review contract does not require executing those non-code skills."
+    },
+    {
+      "risk": "required-skill-source ambiguous",
+      "checkedSource": "packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer-contract.md; packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer.md; packages/core/agenthub/skills/3rd-review/SKILL.md",
+      "decision": "not_blocking",
+      "whyNotBlocking": "The code-reviewer contract has no required external skill execution section. The SKILL.md required-skill execution rule applies to non-code reviews only."
+    },
+    {
+      "risk": "scope-inventory needed to rule out forbidden or out-of-scope edits",
+      "checkedSource": "git status --short; git show --name-only 4dc45a0ae^..4dc45a0ae; root and package CLAUDE files",
+      "decision": "not_blocking",
+      "whyNotBlocking": "Committed Phase 4 files are confined to agenthub schema, gate, tests, fixtures, and SKILL.md producer wiring. No forbidden core files or product UI/backend paths were modified."
+    },
+    {
+      "risk": "Mechanical grep coverage was missing for changed ts/md files",
+      "checkedSource": "rg over changed ts/md files; node scripts/provider-name-scan.mjs; git diff --check",
+      "decision": "not_blocking",
+      "whyNotBlocking": "Targeted grep found only pre-existing allowed technical/test references. provider-name-scan passed over the managed prompt set, and git diff --check passed."
+    },
+    {
+      "risk": "worktree hygiene has unrelated dirty paths",
+      "checkedSource": "git status --short",
+      "decision": "not_blocking",
+      "whyNotBlocking": "Dirty paths are packages/core/.machine, packages/core/agenthub/host/__test_intake_bg__, and specs/review-adaptive-routing-cost-control. The first two are transient test state and the specs directory is an untracked design artifact; Phase 4 implementation is committed in HEAD."
+    }
+  ],
+  "verificationResults": [
+    {
+      "command": "git status --short && git rev-parse HEAD && git show --stat --oneline --decorate --name-status 4dc45a0ae --",
+      "exitCode": 0,
+      "evidence": "HEAD is 4dc45a0ae; dirty worktree contains only packages/core/.machine, packages/core/agenthub/host/__test_intake_bg__, and specs/review-adaptive-routing-cost-control."
+    },
+    {
+      "command": "pnpm --filter @multica/core exec vitest run skills/3rd-review/dispatch-name-scan.test.ts -t finding-class",
+      "exitCode": 0,
+      "evidence": "1 test file passed; 7 finding-class tests passed, 18 skipped."
+    },
+    {
+      "command": "pnpm --filter @multica/core exec vitest run host/gate.test.ts -t validateBlockerClass",
+      "exitCode": 0,
+      "evidence": "1 test file passed; 4 validateBlockerClass tests passed, 230 skipped."
+    },
+    {
+      "command": "pnpm --filter @multica/core exec vitest run host/gate.test.ts -t FR-GATE-CALIBRATION",
+      "exitCode": 0,
+      "evidence": "1 test file passed; 5 calibration tests passed, 229 skipped."
+    },
+    {
+      "command": "pnpm --filter @multica/core exec vitest run checkpoint/artifact-validator.test.ts host/verdict-override.test.ts",
+      "exitCode": 0,
+      "evidence": "2 test files passed; 33 tests passed."
+    },
+    {
+      "command": "node scripts/provider-name-scan.mjs",
+      "exitCode": 0,
+      "evidence": "provider-name-scan: all clean; scanned 23 managed files."
+    },
+    {
+      "command": "git diff --check 4dc45a0ae^ 4dc45a0ae -- Phase 4 changed files",
+      "exitCode": 0,
+      "evidence": "No whitespace or patch formatting errors reported."
+    },
+    {
+      "command": "Read apply/evidence/phase-4-RED.json and apply/evidence/phase-4-GREEN.json plus stdout/stderr",
+      "exitCode": 0,
+      "evidence": "RED captured exit_code 1 at ead058be for missing blockerClass behavior; GREEN captured exit_code 0 at 4dc45a0ae for finding-class tests."
+    }
+  ],
+  "finalVerifierReadSet": [
+    {
+      "sourceType": "verifier_contract",
+      "target": "packages/core/agenthub/skills/3rd-review/verifiers/base-verifier.md",
+      "reason": "Required verifier file and delegated review rules."
+    },
+    {
+      "sourceType": "verifier_contract",
+      "target": "packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer-contract.md",
+      "reason": "Required code-review blocking criteria and review discipline."
+    },
+    {
+      "sourceType": "verifier_contract",
+      "target": "packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer.md",
+      "reason": "Required code-review output and must-read contract."
+    },
+    {
+      "sourceType": "schema",
+      "target": "packages/core/agenthub/schemas/verdict.schema.json",
+      "reason": "Required output schema and core Phase 4 schema change."
+    },
+    {
+      "sourceType": "design_source",
+      "target": "specs/review-adaptive-routing-cost-control/spec.md",
+      "reason": "Resolved source manifest shorthand and verified FR-CLASS requirements."
+    },
+    {
+      "sourceType": "design_source",
+      "target": "specs/review-adaptive-routing-cost-control/plan.md",
+      "reason": "Resolved source manifest shorthand and checked P4 schema/gate plan."
+    },
+    {
+      "sourceType": "design_source",
+      "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+      "reason": "Resolved source manifest shorthand and checked P4 tasks 10 through 12."
+    },
+    {
+      "sourceType": "design_source",
+      "target": "specs/review-adaptive-routing-cost-control/acceptance-baseline.md",
+      "reason": "Checked acceptance criteria for blockerClass and AJV behavior."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/schemas/verifier-report.schema.json",
+      "reason": "Verified required blockerClass, enum, additionalProperties behavior, and not guard."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/schemas/review-fixes.schema.json",
+      "reason": "Verified the schema has no finding item or severity field, making blockerClass structurally inapplicable."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/host/workflow-gate.ts",
+      "reason": "Verified validateBlockerClass and reviewerOutput call site."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/host/gate.test.ts",
+      "reason": "Verified T_CLASS_GATE_001 through T_CLASS_GATE_004 and updated existing fixtures."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/checkpoint/artifact-validator.test.ts",
+      "reason": "Verified existing valid report fixtures include blockerClass."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/host/verdict-override.test.ts",
+      "reason": "Verified override schema tests include blockerClass and preserve existing semantics."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/skills/3rd-review/SKILL.md",
+      "reason": "Verified producer wiring for blockerClass in review rule and output template; inspected source manifest and skill path risks."
+    },
+    {
+      "sourceType": "changed_file",
+      "target": "packages/core/agenthub/skills/3rd-review/dispatch-name-scan.test.ts",
+      "reason": "Verified T_CLASS_001 through T_CLASS_007 and review-fixes exclusion assertion."
+    },
+    {
+      "sourceType": "standard",
+      "target": "CLAUDE.md",
+      "reason": "Checked forbidden files and upstream merge safety."
+    },
+    {
+      "sourceType": "standard",
+      "target": "packages/core/agenthub/CLAUDE.md",
+      "reason": "Checked gate architecture and provider-name scan rules."
+    },
+    {
+      "sourceType": "standard",
+      "target": "packages/core/CLAUDE.md",
+      "reason": "Checked core package boundary expectations."
+    },
+    {
+      "sourceType": "standard",
+      "target": "packages/core/agenthub/workflows/vibecoding/contract.md",
+      "reason": "Checked workflow code-review and governance rules."
+    },
+    {
+      "sourceType": "mechanical_check",
+      "target": "scripts/provider-name-scan.mjs",
+      "reason": "Ran managed provider-name scan and inspected script location after the first wrong path attempt."
+    }
+  ],
+  "findings": [],
+  "_runtimeConfig": {
+    "source": "user",
+    "configFile": "/Users/Hugh/.agenthub/review-dispatch-config.json",
+    "provider": "codex",
+    "role": "reviewer",
+    "round": 1,
+    "model": "",
+    "effort": "high",
+    "explicitModel": false,
+    "explicitEffort": false,
+    "reviewer": {
+      "model": "",
+      "thinking_level": "high"
+    },
+    "subreviewer": {
+      "model": "",
+      "thinking_level": "high"
+    }
+  },
+  "_delegatedPrecheck": {
+    "version": "1.0",
+    "mode": "delegated",
+    "lenses": [
+      "source-manifest-auditor",
+      "required-skill-auditor",
+      "evidence-freshness-auditor",
+      "scope-boundary-auditor",
+      "mechanical-grep-auditor",
+      "design-intent-auditor"
+    ],
+    "plannerDecisions": [
+      {
+        "lens": "source-manifest-auditor",
+        "source": "automatic",
+        "reason": "Review package exposes source manifest or changed-file inventory.",
+        "signals": [
+          "Source Manifest"
+        ]
+      },
+      {
+        "lens": "required-skill-auditor",
+        "source": "automatic",
+        "reason": "Checkpoint or package contains mandatory skill requirements.",
+        "signals": [
+          "required skill signal",
+          "design checkpoint"
+        ]
+      },
+      {
+        "lens": "evidence-freshness-auditor",
+        "source": "automatic",
+        "reason": "Review package contains verification or evidence freshness claims.",
+        "signals": [
+          "evidence/verify signal",
+          "code-review checkpoint"
+        ]
+      },
+      {
+        "lens": "scope-boundary-auditor",
+        "source": "automatic",
+        "reason": "Scope boundary review is actionable because changed files or code-review scope are visible.",
+        "signals": [
+          "code-review checkpoint"
+        ]
+      },
+      {
+        "lens": "mechanical-grep-auditor",
+        "source": "automatic",
+        "reason": "Mechanical risk scan is available or required for code review.",
+        "signals": [
+          "code-review checkpoint"
+        ]
+      },
+      {
+        "lens": "design-intent-auditor",
+        "source": "automatic",
+        "reason": "Checkpoint or package contains design-intent signals.",
+        "signals": [
+          "spec/decision-log/intake/scenario signal"
+        ]
+      }
+    ],
+    "runtimeFingerprint": {
+      "plannerRulesVersion": "strong-signal-v4",
+      "precheckScriptSha256": "9451f8d0be7dc5012c92a9f8bad65a03fc8b7d6a30991a750443e57a288fa390",
+      "lensPlanSha256": "8edc78a54c831d691532aac06a36337280be359f72898a1d2ea9d6dd3d9e5ee5"
+    },
+    "fourTuple": {
+      "repoRoot": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+      "taskDir": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control",
+      "gitHEAD": "4dc45a0ae7828d96b78e3f9508786c11a10aad6f",
+      "reviewRequestId": "code-review-phase-4.20260616T005433.6673e1",
+      "checkpoint": null,
+      "round": "1"
+    },
+    "hostVerifiedFacts": {
+      "source": "host-verified-facts",
+      "collectedAt": "2026-06-16T00:57:44.141Z",
+      "repoRoot": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+      "taskDir": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control",
+      "gitHEAD": "4dc45a0ae7828d96b78e3f9508786c11a10aad6f",
+      "reviewRequestId": "code-review-phase-4.20260616T005433.6673e1",
+      "checkpoint": null,
+      "round": "1",
+      "fourTuple": {
+        "repoRoot": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+        "taskDir": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control",
+        "gitHEAD": "4dc45a0ae7828d96b78e3f9508786c11a10aad6f",
+        "reviewRequestId": "code-review-phase-4.20260616T005433.6673e1"
+      },
+      "sources": {
+        "repoRoot": "prompt:repoRoot | git rev-parse --show-toplevel",
+        "taskDir": "adapter --task-dir | prompt:taskDir",
+        "gitHEAD": "git rev-parse HEAD",
+        "evidenceMeta": "prompt paths + taskDir/repoRoot apply/evidence scan + git hash-object",
+        "verifyCommands": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control/specs/review-adaptive-routing-cost-control/tasks.md#Verify"
+      },
+      "evidenceMeta": [
+        {
+          "path": "apply/evidence/phase-1-GREEN.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-GREEN.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 514,
+          "gitHash": "dfa7d643eeb1b88569e6b65816aa18cfc3f35052",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "5698d60ae6d1fdef754eb85fc8a6077a4ee4276d",
+            "command": "pnpm --filter @multica/core exec vitest run skills/3rd-review/dispatch-name-scan.test.ts",
+            "exit_code": 0,
+            "timestamp": "2026-06-15T12:59:27Z",
+            "phase": 1,
+            "mode": "GREEN"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-1-GREEN.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-GREEN.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-1-GREEN.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-GREEN.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 418,
+          "gitHash": "8b1b73bef836fa46ad105017119c8a1b6af0318a",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-1-RED.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-RED.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 506,
+          "gitHash": "be4443c9e10ec040406fb1f7bbdd614f28aa351d",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "5698d60ae6d1fdef754eb85fc8a6077a4ee4276d",
+            "command": "pnpm --filter @multica/core exec vitest run skills/3rd-review/dispatch-name-scan.test.ts",
+            "exit_code": 1,
+            "timestamp": "2026-06-15T12:59:26Z",
+            "phase": 1,
+            "mode": "RED"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-1-RED.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-RED.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1324,
+          "gitHash": "8e7491825726ef304404dd6a995b8ddb47a39739",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-1-RED.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-1-RED.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1084,
+          "gitHash": "76585bd9eeda7c06ae79ed25e2bf7bc780f13b53",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-adapter-GREEN.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-adapter-GREEN.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-adapter-GREEN.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-adapter-GREEN.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1716,
+          "gitHash": "558c8c7dce6f143017629ca1b31925eb30a45b85",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-adapter-RED.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-adapter-RED.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-adapter-RED.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-adapter-RED.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1891,
+          "gitHash": "81a39fd34e6e6ae4b792d09deb968eb6ffa17e4d",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-GREEN.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-GREEN.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 511,
+          "gitHash": "5b3d119b857c09b5ef922a0d97889943c2d3e14d",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "b8311a27a3131663426b69974f0e8fb8271c1115",
+            "command": "pnpm exec node packages/core/agenthub/skills/3rd-review/scripts/route-review.test.mjs",
+            "exit_code": 0,
+            "timestamp": "2026-06-15T16:01:07Z",
+            "phase": 2,
+            "mode": "GREEN"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-GREEN.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-GREEN.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-GREEN.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-GREEN.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1658,
+          "gitHash": "73d9e61a6703d808ae473ad03abb8a589a88f746",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-RED.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-RED.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 503,
+          "gitHash": "993647457aab0a6ba5067ba43457af695f7bf41f",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "b8311a27a3131663426b69974f0e8fb8271c1115",
+            "command": "pnpm exec node packages/core/agenthub/skills/3rd-review/scripts/route-review.test.mjs",
+            "exit_code": 1,
+            "timestamp": "2026-06-15T15:20:53Z",
+            "phase": 2,
+            "mode": "RED"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-RED.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-RED.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1154,
+          "gitHash": "ca368e91a485db9ac01e7f97bea937422c279f3a",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-2-RED.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-2-RED.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 945,
+          "gitHash": "a52f41c10726fe2ef7b61302fb7c62e10d987146",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-GREEN.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-GREEN.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 511,
+          "gitHash": "cdedf09f2b4ee2c946921f112e3b7f7d9930af02",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "ead058be816b53a78d83ff6d5d70aa867dd32415",
+            "command": "pnpm exec node packages/core/agenthub/skills/3rd-review/scripts/route-review.test.mjs",
+            "exit_code": 0,
+            "timestamp": "2026-06-15T23:41:28Z",
+            "phase": 3,
+            "mode": "GREEN"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-GREEN.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-GREEN.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-GREEN.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-GREEN.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 2392,
+          "gitHash": "742e76db0b707d43fc7690405c9f8c0cf9e0a919",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-RED.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-RED.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 503,
+          "gitHash": "3a7377223ae92dc661df7a97e0899c75cba1d0a3",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "46213059023b5d2f5cb09ef94ebb2d7531b04eaf",
+            "command": "pnpm exec node packages/core/agenthub/skills/3rd-review/scripts/route-review.test.mjs",
+            "exit_code": 1,
+            "timestamp": "2026-06-15T23:37:52Z",
+            "phase": 3,
+            "mode": "RED"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-RED.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-RED.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 733,
+          "gitHash": "21c308eadfdcb9fddb6df94fa357f6b48c7ea68d",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-3-RED.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-3-RED.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-baseline-HEAD-failures.txt",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-baseline-HEAD-failures.txt",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-GREEN.json",
+          "absPath": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control/apply/evidence/phase-4-GREEN.json",
+          "sourceRoot": "prompt",
+          "exists": false,
+          "size": null,
+          "gitHash": null,
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-GREEN.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-GREEN.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 531,
+          "gitHash": "07b4b41901f81d09d02634a030e302b797a4db75",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "4dc45a0ae7828d96b78e3f9508786c11a10aad6f",
+            "command": "pnpm --filter @multica/core exec vitest run skills/3rd-review/dispatch-name-scan.test.ts -t finding-class",
+            "exit_code": 0,
+            "timestamp": "2026-06-16T00:54:24Z",
+            "phase": 4,
+            "mode": "GREEN"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-GREEN.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-GREEN.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-GREEN.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-GREEN.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 448,
+          "gitHash": "a1fc5e9cca18753f3d216d87c6a4bd68ec08d809",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-RED.json",
+          "absPath": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control/apply/evidence/phase-4-RED.json",
+          "sourceRoot": "prompt",
+          "exists": false,
+          "size": null,
+          "gitHash": null,
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-RED.json",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-RED.json",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 523,
+          "gitHash": "53ed1f8290fa1519dcd865913f0daa37a27cd878",
+          "jsonFields": {
+            "cwd": "/Users/Hugh/Hugh/Project/multica-agenthub-review-adaptive-routing-cost-control",
+            "git_sha": "ead058be816b53a78d83ff6d5d70aa867dd32415",
+            "command": "pnpm --filter @multica/core exec vitest run skills/3rd-review/dispatch-name-scan.test.ts -t finding-class",
+            "exit_code": 1,
+            "timestamp": "2026-06-16T00:03:13Z",
+            "phase": 4,
+            "mode": "RED"
+          },
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-RED.stderr",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-RED.stderr",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 7413,
+          "gitHash": "e5a08128aec6359318bf1355225bc8f6560b2cc4",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-RED.stdout",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-RED.stdout",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 1771,
+          "gitHash": "b88037bce91077974a2442aade2531604d80a401",
+          "jsonFields": null,
+          "mismatch": false
+        },
+        {
+          "path": "apply/evidence/phase-4-with-change-failures.txt",
+          "absPath": "/Users/Hugh/Hugh/Knowledge/Projects/multica-agenthub/tasks/review-adaptive-routing-cost-control/apply/evidence/phase-4-with-change-failures.txt",
+          "sourceRoot": "taskDir",
+          "exists": true,
+          "size": 0,
+          "gitHash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "jsonFields": null,
+          "mismatch": false
+        }
+      ],
+      "evidenceMismatches": [],
+      "verifyCommands": []
+    },
+    "bundle": {
+      "mode": "delegated",
+      "topRisks": [
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/.machine/",
+          "reason": "[other] Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/agenthub/host/__test_intake_bg__/",
+          "reason": "[other] Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+          "reason": "[other] Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+          "reason": "[other] Source Manifest uses brace shorthand instead of exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+          "reason": "[other] Source Manifest uses wildcard shorthand instead of exact fixture paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "artifacts/decision-log.md (in TASK_DIR)",
+          "reason": "[other] Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "<name> skill path declarations",
+          "reason": "[other] Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "required-skill-source",
+          "reason": "[other] required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "scope-inventory",
+          "reason": "[other] Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "changed .ts/.tsx/.sh/.md files",
+          "reason": "[other] Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+        }
+      ],
+      "candidateFindings": [],
+      "recommendedFinalReadSet": [
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+          "reason": "Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+          "reason": "Source Manifest uses brace shorthand instead of exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+          "reason": "Source Manifest uses wildcard shorthand instead of exact fixture paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "artifacts/decision-log.md (in TASK_DIR)",
+          "reason": "Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "<name> skill path declarations",
+          "reason": "Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "required-skill-source",
+          "reason": "required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "scope-inventory",
+          "reason": "Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "changed .ts/.tsx/.sh/.md files",
+          "reason": "Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+        }
+      ],
+      "coverageAccepted": [
+        {
+          "file": "Lens Source Slice / Host-Verified Facts evidenceMeta",
+          "ranges": [
+            "structured host-verified facts evidenceMeta for phase-4 RED/GREEN json/stdout/stderr"
+          ],
+          "coverageMetric": "structural",
+          "assertionType": "evidence-freshness-auditor",
+          "result": "ok",
+          "digest": "4dc45a0-phase4-evidence-ok"
+        },
+        {
+          "file": "review-slice",
+          "ranges": [
+            "Lens Source Slice"
+          ],
+          "coverageMetric": "structural",
+          "assertionType": "design-intent-auditor",
+          "result": "ok",
+          "digest": "D6-intent-covered-by-FR-CLASS-001-004-and-explicit-non-goal"
+        }
+      ]
+    },
+    "finalFacingBundle": {
+      "mode": "delegated",
+      "topRisks": [
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+          "reason": "[other] Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+          "reason": "[other] Source Manifest uses brace shorthand instead of exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+          "reason": "[other] Source Manifest uses wildcard shorthand instead of exact fixture paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "artifacts/decision-log.md (in TASK_DIR)",
+          "reason": "[other] Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "<name> skill path declarations",
+          "reason": "[other] Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "required-skill-source",
+          "reason": "[other] required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "scope-inventory",
+          "reason": "[other] Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "changed .ts/.tsx/.sh/.md files",
+          "reason": "[other] Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "worktree hygiene",
+          "reason": "[hygiene] 2 out-of-scope path(s) coalesced"
+        }
+      ],
+      "candidateFindings": [],
+      "recommendedFinalReadSet": [
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+          "reason": "Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+          "reason": "Source Manifest uses brace shorthand instead of exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+          "reason": "Source Manifest uses wildcard shorthand instead of exact fixture paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "artifacts/decision-log.md (in TASK_DIR)",
+          "reason": "Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "<name> skill path declarations",
+          "reason": "Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "required-skill-source",
+          "reason": "required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "scope-inventory",
+          "reason": "Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "changed .ts/.tsx/.sh/.md files",
+          "reason": "Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+        },
+        {
+          "sourceType": "high_risk",
+          "target": "worktree hygiene",
+          "reason": "2 out-of-scope worktree path(s) coalesced; inspect git status --short or hygiene inventory summary only"
+        }
+      ],
+      "coverageAccepted": [
+        {
+          "file": "Lens Source Slice / Host-Verified Facts evidenceMeta",
+          "ranges": [
+            "structured host-verified facts evidenceMeta for phase-4 RED/GREEN json/stdout/stderr"
+          ],
+          "coverageMetric": "structural",
+          "assertionType": "evidence-freshness-auditor",
+          "result": "ok",
+          "digest": "4dc45a0-phase4-evidence-ok"
+        },
+        {
+          "file": "review-slice",
+          "ranges": [
+            "Lens Source Slice"
+          ],
+          "coverageMetric": "structural",
+          "assertionType": "design-intent-auditor",
+          "result": "ok",
+          "digest": "D6-intent-covered-by-FR-CLASS-001-004-and-explicit-non-goal"
+        }
+      ]
+    },
+    "reports": [
+      {
+        "lens": "source-manifest-auditor",
+        "report": {
+          "status": "risk",
+          "facts": [
+            "Current Worktree Inventory reports 3 status lines, 3 unique paths, 0 renames, 3 untracked paths, 0 deleted paths.",
+            "Authoritative dirty paths are packages/core/.machine/, packages/core/agenthub/host/__test_intake_bg__/, and specs/review-adaptive-routing-cost-control/.",
+            "packages/core/.machine/ is classified as unrelated / exclude before review.",
+            "packages/core/agenthub/host/__test_intake_bg__/ is classified as unrelated / exclude before review.",
+            "specs/review-adaptive-routing-cost-control/ is classified as design artifact.",
+            "tasks.md inline slice also shows ?? specs/review-adaptive-routing-cost-control/tasks.md as unclassified.",
+            "Source Manifest uses non-exact shorthand specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md.",
+            "Source Manifest uses non-exact shorthand packages/core/agenthub/skills/3rd-review/__fixtures__/*.json.",
+            "Source Manifest uses TASK_DIR-relative shorthand artifacts/decision-log.md (in TASK_DIR).",
+            "Precomputed declarations include shorthand paths .claude/skills/<name>/SKILL.md, packages/core/agenthub/skills/<name>/SKILL.md, ~/.claude/skills/<name>/SKILL.md, and ~/.codex/skills/<name>/SKILL.md."
+          ],
+          "riskFlags": [
+            {
+              "type": "other",
+              "target": "packages/core/.machine/",
+              "description": "Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+            },
+            {
+              "type": "other",
+              "target": "packages/core/agenthub/host/__test_intake_bg__/",
+              "description": "Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+            },
+            {
+              "type": "other",
+              "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+              "description": "Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+            },
+            {
+              "type": "other",
+              "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+              "description": "Source Manifest uses brace shorthand instead of exact repo-relative paths."
+            },
+            {
+              "type": "other",
+              "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+              "description": "Source Manifest uses wildcard shorthand instead of exact fixture paths."
+            },
+            {
+              "type": "other",
+              "target": "artifacts/decision-log.md (in TASK_DIR)",
+              "description": "Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+            },
+            {
+              "type": "other",
+              "target": "<name> skill path declarations",
+              "description": "Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+            }
+          ],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "Lens Source Slice / Current Worktree Inventory",
+              "ranges": [
+                "git status --porcelain=v1 output and inventory stats"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "source-manifest-auditor",
+              "result": "risk",
+              "digest": "inventory-3-untracked-2-unrelated"
+            },
+            {
+              "file": "Lens Source Slice / Source Manifest",
+              "ranges": [
+                "Source Manifest full source list"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "source-manifest-auditor",
+              "result": "risk",
+              "digest": "manifest-shorthand-paths"
+            },
+            {
+              "file": "Lens Source Slice / tasks.md Phase 4 inline",
+              "ranges": [
+                "inline table row for specs/review-adaptive-routing-cost-control/tasks.md"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "source-manifest-auditor",
+              "result": "risk",
+              "digest": "tasks-md-unclassified-row"
+            }
+          ],
+          "mustEscalateToFinal": true
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/source-manifest-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/source-manifest-auditor.prompt.md",
+        "promptSha256": "80c68ee7017b448077685f58e66a22766a5cb7d189a7469f4bf68cb8c16cdb99",
+        "error": null
+      },
+      {
+        "lens": "required-skill-auditor",
+        "report": {
+          "status": "risk",
+          "facts": [
+            "checkpoint_type=code-review from slice line 'review kind: code-review'",
+            "authoritativeContract=packages/core/agenthub/workflows/vibecoding/contract.md",
+            "required_skills=[] because slice shows workflow/stage skills only and no code-review checkpoint Required Skill Execution names",
+            "workflow/stage skills visible include superpowers-subagent-driven-development, superpowers-test-driven-development, superpowers-requesting-code-review, superpowers-receiving-code-review, isolated-browser-qa, but lens forbids substituting them for checkpoint skills"
+          ],
+          "riskFlags": [
+            {
+              "type": "other",
+              "target": "required-skill-source",
+              "description": "required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+            }
+          ],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "Lens Source Slice",
+              "ranges": [
+                "review kind: code-review",
+                "Contract Context (required-skill)",
+                "Required skills ARE available in your skills directory"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "required-skill-auditor",
+              "result": "risk",
+              "digest": "code-review checkpoint present; reviewer skill names absent; workflow skills not substituted"
+            }
+          ],
+          "mustEscalateToFinal": false
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/required-skill-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/required-skill-auditor.prompt.md",
+        "promptSha256": "4b1961dffad574f9eccf566e901029fd66f4c82af7a62668cf728262d87adc22",
+        "error": null
+      },
+      {
+        "lens": "evidence-freshness-auditor",
+        "report": {
+          "status": "ok",
+          "facts": [
+            "Host-verified facts collected at 2026-06-16T00:57:01.352Z for git HEAD 4dc45a0ae7828d96b78e3f9508786c11a10aad6f.",
+            "Evidence provenance reports 32 files and evidenceMismatches=[]; no stale hash mismatches reported.",
+            "Phase 4 GREEN evidence exists in taskDir: apply/evidence/phase-4-GREEN.json size=531 gitHash=07b4b41901f81d09d02634a030e302b797a4db75 json.git_sha=4dc45a0ae7828d96b78e3f9508786c11a10aad6f exit_code=0.",
+            "Phase 4 RED evidence exists in taskDir: apply/evidence/phase-4-RED.json size=523 gitHash=53ed1f8290fa1519dcd865913f0daa37a27cd878 exit_code=1.",
+            "Phase 4 stdout/stderr companions exist in taskDir with recorded git hashes: GREEN.stdout a1fc5e9cca18753f3d216d87c6a4bd68ec08d809, GREEN.stderr e69de29bb2d1d6434b8b29ae775ad8c2e48c5391, RED.stdout b88037bce91077974a2442aade2531604d80a401, RED.stderr e5a08128aec6359318bf1355225bc8f6560b2cc4."
+          ],
+          "riskFlags": [],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "Lens Source Slice / Host-Verified Facts evidenceMeta",
+              "ranges": [
+                "structured host-verified facts evidenceMeta for phase-4 RED/GREEN json/stdout/stderr"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "evidence-freshness-auditor",
+              "result": "ok",
+              "digest": "4dc45a0-phase4-evidence-ok"
+            }
+          ],
+          "mustEscalateToFinal": false
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/evidence-freshness-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/evidence-freshness-auditor.prompt.md",
+        "promptSha256": "e690193f910de2b994949d1c5b3899408a2f16271dd21b38ab11fecd1ff8537f",
+        "error": null
+      },
+      {
+        "lens": "scope-boundary-auditor",
+        "report": {
+          "status": "risk",
+          "facts": [
+            "Current Worktree Inventory is absent from the supplied Lens Source Slice; authoritative changed-file verification cannot be performed.",
+            "Contract Context lists forbidden files: server/internal/handler/auth.go, packages/core/api/client.ts, packages/core/platform/types.ts, packages/core/platform/auth-initializer.tsx, apps/web/components/web-providers.tsx, apps/web/proxy.ts.",
+            "Source Manifest names changed/review sources under packages/core/agenthub plus specs and artifacts, but it is not labeled as the authoritative Current Worktree Inventory."
+          ],
+          "riskFlags": [
+            {
+              "type": "other",
+              "target": "scope-inventory",
+              "description": "Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+            }
+          ],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "Lens Source Slice",
+              "ranges": [
+                "Contract Context scope-boundary forbidden files and upstream merge safety rules",
+                "Source Manifest changed/review source list",
+                "Current Worktree Inventory absence check"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "scope-boundary-auditor",
+              "result": "risk",
+              "digest": "missing-current-worktree-inventory"
+            }
+          ],
+          "mustEscalateToFinal": true
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/scope-boundary-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/scope-boundary-auditor.prompt.md",
+        "promptSha256": "005b1d398b839b8a0b1c820cca2e463fcb4b2470957e273a4a0e273f23605f29",
+        "error": null
+      },
+      {
+        "lens": "mechanical-grep-auditor",
+        "report": {
+          "status": "risk",
+          "facts": [
+            "Precomputed mechanical grep input reports files scanned: 0.",
+            "Patterns listed: provider_name, forbidden_phrasing, stale_todo, set_u_array.",
+            "Precomputed matches: none.",
+            "Lens Source Slice lists changed/read-set files, but provides no scanned file contents or line-level grep results."
+          ],
+          "riskFlags": [
+            {
+              "type": "other",
+              "target": "changed .ts/.tsx/.sh/.md files",
+              "description": "Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+            }
+          ],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "precomputed-mechanical-grep-input",
+              "ranges": [
+                "Files scanned: 0; matches: none"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "mechanical-grep-auditor",
+              "result": "risk",
+              "digest": "zero-scan"
+            }
+          ],
+          "mustEscalateToFinal": true
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/mechanical-grep-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/mechanical-grep-auditor.prompt.md",
+        "promptSha256": "d4aa89c71c6fa11cb864b3be718749871ec5fefff5069b3b93814a85a2f3a7e9",
+        "error": null
+      },
+      {
+        "lens": "design-intent-auditor",
+        "report": {
+          "status": "ok",
+          "facts": [
+            "review-slice maps decision D6 to FR-CLASS machine enforcement via schema prevention.",
+            "review-slice maps missing blockerClass intent to FR-CLASS-001: every finding must carry blockerClass and missing fails fast.",
+            "review-slice maps process_evidence blocking concern to FR-CLASS-002: process_evidence plus blocking is forbidden, while important/minor remains legal.",
+            "review-slice maps count/severity substitution concern to FR-CLASS-003: blockerClass is a dedicated classification field.",
+            "review-slice maps override concern to FR-CLASS-004 explicit non-goal: no new human-advance-over-revise override entry.",
+            "review-slice explicitly excludes packages/core/agenthub/host/__test_intake_bg__/ as unrelated transient intake background dirs."
+          ],
+          "riskFlags": [],
+          "candidateFindings": [],
+          "coverageProof": [
+            {
+              "file": "review-slice",
+              "ranges": [
+                "Lens Source Slice"
+              ],
+              "coverageMetric": "structural",
+              "assertionType": "design-intent-auditor",
+              "result": "ok",
+              "digest": "D6-intent-covered-by-FR-CLASS-001-004-and-explicit-non-goal"
+            }
+          ],
+          "mustEscalateToFinal": false
+        },
+        "resultFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/design-intent-auditor.result.json",
+        "promptFile": "/var/folders/27/fkx5yqf96c13pfkc1w75xy840000gp/T/review-delegated-precheck-cKsnX2/design-intent-auditor.prompt.md",
+        "promptSha256": "9cb1d57743077f1747a4e345ef2dd471959d25472fc7396bfaad435acecf22e8",
+        "error": null
+      }
+    ],
+    "subreviewerRuntimeReports": [
+      {
+        "name": "source-manifest-auditor",
+        "requestedModel": "gpt-5.5",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.5",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.5",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T23-05-39-019ecbd1-1b75-7b92-aef6-262870db673f.jsonl",
+        "elapsedSec": 43,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 33025,
+          "cached_input_tokens": 2432,
+          "output_tokens": 1674,
+          "reasoning_output_tokens": 516,
+          "total_tokens": 34699
+        }
+      },
+      {
+        "name": "required-skill-auditor",
+        "requestedModel": "gpt-5.5",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.5",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.5",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8b61-7021-95d6-2d1a54314c79.jsonl",
+        "elapsedSec": 26,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 28960,
+          "cached_input_tokens": 2432,
+          "output_tokens": 881,
+          "reasoning_output_tokens": 516,
+          "total_tokens": 29841
+        }
+      },
+      {
+        "name": "evidence-freshness-auditor",
+        "requestedModel": "gpt-5.5",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.5",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.5",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8d35-7823-acb8-2b4389470a33.jsonl",
+        "elapsedSec": 29,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 36918,
+          "cached_input_tokens": 2432,
+          "output_tokens": 986,
+          "reasoning_output_tokens": 516,
+          "total_tokens": 37904
+        }
+      },
+      {
+        "name": "scope-boundary-auditor",
+        "requestedModel": "gpt-5.4-mini",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.4-mini",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.4-mini",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T09-32-23-019ec8e8-8aaa-7c13-9641-b761332121f5.jsonl",
+        "elapsedSec": 29,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 25456,
+          "cached_input_tokens": 2432,
+          "output_tokens": 708,
+          "reasoning_output_tokens": 510,
+          "total_tokens": 26164
+        }
+      },
+      {
+        "name": "mechanical-grep-auditor",
+        "requestedModel": "gpt-5.4-mini",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.4-mini",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.4-mini",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T09-32-24-019ec8e8-8db8-7203-8ec0-459e8ab8322d.jsonl",
+        "elapsedSec": 20,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 24128,
+          "cached_input_tokens": 4480,
+          "output_tokens": 755,
+          "reasoning_output_tokens": 516,
+          "total_tokens": 24883
+        }
+      },
+      {
+        "name": "design-intent-auditor",
+        "requestedModel": "gpt-5.5",
+        "requestedEffort": "high",
+        "requestedTokenBudget": null,
+        "sessionModel": "gpt-5.5",
+        "sessionEffort": "high",
+        "modelEvidence": "codex session meta",
+        "effortEvidence": "codex session meta",
+        "effectiveModel": "gpt-5.5",
+        "effectiveEffort": "high",
+        "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8cad-77f0-b003-5fbd7ec6d132.jsonl",
+        "elapsedSec": 21,
+        "tokenUsageSource": "codex session meta",
+        "tokenUsage": {
+          "input_tokens": 34962,
+          "cached_input_tokens": 2432,
+          "output_tokens": 674,
+          "reasoning_output_tokens": 339,
+          "total_tokens": 35636
+        }
+      }
+    ],
+    "source": "review-dispatch-adapter.sh"
+  },
+  "subreviewerRuntimeReports": [
+    {
+      "name": "source-manifest-auditor",
+      "requestedModel": "gpt-5.5",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.5",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.5",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T23-05-39-019ecbd1-1b75-7b92-aef6-262870db673f.jsonl",
+      "elapsedSec": 43,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 33025,
+        "cached_input_tokens": 2432,
+        "output_tokens": 1674,
+        "reasoning_output_tokens": 516,
+        "total_tokens": 34699
+      }
+    },
+    {
+      "name": "required-skill-auditor",
+      "requestedModel": "gpt-5.5",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.5",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.5",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8b61-7021-95d6-2d1a54314c79.jsonl",
+      "elapsedSec": 26,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 28960,
+        "cached_input_tokens": 2432,
+        "output_tokens": 881,
+        "reasoning_output_tokens": 516,
+        "total_tokens": 29841
+      }
+    },
+    {
+      "name": "evidence-freshness-auditor",
+      "requestedModel": "gpt-5.5",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.5",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.5",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8d35-7823-acb8-2b4389470a33.jsonl",
+      "elapsedSec": 29,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 36918,
+        "cached_input_tokens": 2432,
+        "output_tokens": 986,
+        "reasoning_output_tokens": 516,
+        "total_tokens": 37904
+      }
+    },
+    {
+      "name": "scope-boundary-auditor",
+      "requestedModel": "gpt-5.4-mini",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.4-mini",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.4-mini",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T09-32-23-019ec8e8-8aaa-7c13-9641-b761332121f5.jsonl",
+      "elapsedSec": 29,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 25456,
+        "cached_input_tokens": 2432,
+        "output_tokens": 708,
+        "reasoning_output_tokens": 510,
+        "total_tokens": 26164
+      }
+    },
+    {
+      "name": "mechanical-grep-auditor",
+      "requestedModel": "gpt-5.4-mini",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.4-mini",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.4-mini",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/15/rollout-2026-06-15T09-32-24-019ec8e8-8db8-7203-8ec0-459e8ab8322d.jsonl",
+      "elapsedSec": 20,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 24128,
+        "cached_input_tokens": 4480,
+        "output_tokens": 755,
+        "reasoning_output_tokens": 516,
+        "total_tokens": 24883
+      }
+    },
+    {
+      "name": "design-intent-auditor",
+      "requestedModel": "gpt-5.5",
+      "requestedEffort": "high",
+      "requestedTokenBudget": null,
+      "sessionModel": "gpt-5.5",
+      "sessionEffort": "high",
+      "modelEvidence": "codex session meta",
+      "effortEvidence": "codex session meta",
+      "effectiveModel": "gpt-5.5",
+      "effectiveEffort": "high",
+      "sessionFile": "/Users/Hugh/.codex/sessions/2026/06/16/rollout-2026-06-16T08-57-03-019ecdee-8cad-77f0-b003-5fbd7ec6d132.jsonl",
+      "elapsedSec": 21,
+      "tokenUsageSource": "codex session meta",
+      "tokenUsage": {
+        "input_tokens": 34962,
+        "cached_input_tokens": 2432,
+        "output_tokens": 674,
+        "reasoning_output_tokens": 339,
+        "total_tokens": 35636
+      }
+    }
+  ],
+  "delegatedReviewBundle": {
+    "mode": "delegated",
+    "topRisks": [
+      {
+        "sourceType": "high_risk",
+        "target": "packages/core/.machine/",
+        "reason": "[other] Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "packages/core/agenthub/host/__test_intake_bg__/",
+        "reason": "[other] Changed path is classified unrelated / exclude before review and must be inspected by Final Verifier."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+        "reason": "[other] Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+        "reason": "[other] Source Manifest uses brace shorthand instead of exact repo-relative paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+        "reason": "[other] Source Manifest uses wildcard shorthand instead of exact fixture paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "artifacts/decision-log.md (in TASK_DIR)",
+        "reason": "[other] Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "<name> skill path declarations",
+        "reason": "[other] Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "required-skill-source",
+        "reason": "[other] required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "scope-inventory",
+        "reason": "[other] Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "changed .ts/.tsx/.sh/.md files",
+        "reason": "[other] Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+      }
+    ],
+    "candidateFindings": [],
+    "recommendedFinalReadSet": [
+      {
+        "sourceType": "high_risk",
+        "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+        "reason": "Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+        "reason": "Source Manifest uses brace shorthand instead of exact repo-relative paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+        "reason": "Source Manifest uses wildcard shorthand instead of exact fixture paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "artifacts/decision-log.md (in TASK_DIR)",
+        "reason": "Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "<name> skill path declarations",
+        "reason": "Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "required-skill-source",
+        "reason": "required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "scope-inventory",
+        "reason": "Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+      },
+      {
+        "sourceType": "high_risk",
+        "target": "changed .ts/.tsx/.sh/.md files",
+        "reason": "Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+      }
+    ],
+    "coverageAccepted": [
+      {
+        "file": "Lens Source Slice / Host-Verified Facts evidenceMeta",
+        "ranges": [
+          "structured host-verified facts evidenceMeta for phase-4 RED/GREEN json/stdout/stderr"
+        ],
+        "coverageMetric": "structural",
+        "assertionType": "evidence-freshness-auditor",
+        "result": "ok",
+        "digest": "4dc45a0-phase4-evidence-ok"
+      },
+      {
+        "file": "review-slice",
+        "ranges": [
+          "Lens Source Slice"
+        ],
+        "coverageMetric": "structural",
+        "assertionType": "design-intent-auditor",
+        "result": "ok",
+        "digest": "D6-intent-covered-by-FR-CLASS-001-004-and-explicit-non-goal"
+      }
+    ]
+  },
+  "recommendedFinalReadSet": [
+    {
+      "sourceType": "high_risk",
+      "target": "specs/review-adaptive-routing-cost-control/tasks.md",
+      "reason": "Inline tasks slice marks this untracked file unclassified despite parent inventory path being classified design artifact."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "specs/review-adaptive-routing-cost-control/{spec,plan,tasks}.md",
+      "reason": "Source Manifest uses brace shorthand instead of exact repo-relative paths."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "packages/core/agenthub/skills/3rd-review/__fixtures__/*.json",
+      "reason": "Source Manifest uses wildcard shorthand instead of exact fixture paths."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "artifacts/decision-log.md (in TASK_DIR)",
+      "reason": "Source Manifest uses TASK_DIR-relative shorthand instead of an exact repo-relative path."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "<name> skill path declarations",
+      "reason": "Precomputed declarations include placeholder and home-relative shorthand skill paths that are not exact repo-relative paths."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "required-skill-source",
+      "reason": "required_skill_source_ambiguous: Final Verifier must inspect the actual code-review checkpoint contract or reviewer Required Skill Execution section to identify reviewer checkpoint required skills before availability can be audited"
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "scope-inventory",
+      "reason": "Final Verifier must inspect the authoritative changed-file inventory because this slice lacks Current Worktree Inventory; cannot rule out forbidden/core/out-of-scope edits."
+    },
+    {
+      "sourceType": "high_risk",
+      "target": "changed .ts/.tsx/.sh/.md files",
+      "reason": "Mechanical grep coverage is insufficient because zero files were scanned; Final Verifier must run or inspect provider-name, forbidden-phrasing, stale TODO/FIXME, and set -u array checks across the actual changed files."
+    }
+  ],
+  "_execNonce": "4a6cfe7177924da2c1998405235ca5dd",
+  "_execNonceVersion": "1",
+  "reviewRecordHash": "fc1acc7671ce62dc2349259afa9d067b92d4781be9526e9c8203a89553cc80f7"
+}

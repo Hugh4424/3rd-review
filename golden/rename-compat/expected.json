@@ -1,0 +1,13 @@
+{
+  "case": "rename-compat",
+  "scenario": "改名目录兼容（软链/改名后仍可识别）",
+  "expected": {
+    "verdict": "pass",
+    "blockingCount": 0,
+    "blockingTitles": [],
+    "requiredSections": ["Summary", "Findings", "Checks", "Required Revisions"],
+    "reviewDimensions": ["方向", "盲点", "细节"],
+    "downgradeReasonRequired": false
+  },
+  "rationale": "改名同时保留软链（review-dispatch -> 3rd-review），旧路径仍可解析，现有调用不断。RED/GREEN 证据齐全（find -L 验证双路径同解析）。符合 D8（旧名保留过渡桩）。兼容性正常，无 blocking，通过。"
+}
