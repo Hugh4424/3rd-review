@@ -186,6 +186,37 @@ while :; do
 
   # 提取裁决 + 注入 provenance=single-context，写最终 verdict.json
   VERDICT_VAL="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict',''))" "$RAW_VERDICT")"
+
+  # pass 必带三字段校验（FR-GUARD-007）：reviewSnapshot / riskDisposition / worktreeInventory。
+  # 缺任一即 fail-fast —— 一个空 pass 不得被当作通过（README/SKILL 的信任承诺由此兑现）。
+  # 客观字段（reviewSnapshot/worktreeInventory）standalone 不替 runner 补，runner 必须自带；
+  # 主观字段（riskDisposition）任何形态都不补（补=伪造）。
+  if [ "$VERDICT_VAL" = "pass" ]; then
+    MISSING_FIELDS="$(python3 -c "
+import json, sys
+v = json.load(open(sys.argv[1]))
+missing = []
+# reviewSnapshot: 必须是非空数组（至少覆盖一个被审文件）
+rs = v.get('reviewSnapshot')
+if not isinstance(rs, list) or len(rs) == 0:
+    missing.append('reviewSnapshot')
+# riskDisposition: 必须是数组；空数组合法（无高风险项时），但不补
+if not isinstance(v.get('riskDisposition'), list):
+    missing.append('riskDisposition')
+# worktreeInventory: 必须是对象且带 included/unrelated/excluded 三个数组
+wi = v.get('worktreeInventory')
+if (not isinstance(wi, dict)
+        or not all(isinstance(wi.get(k), list) for k in ('included', 'unrelated', 'excluded'))):
+    missing.append('worktreeInventory')
+print(' '.join(missing))
+" "$RAW_VERDICT")"
+    if [ -n "$MISSING_FIELDS" ]; then
+      write_manifest failed "escalate_to_human" 2 "$ROUND" "pass missing required evidence fields: $MISSING_FIELDS"
+      escalate "runner 返回 pass 但缺少必带证据字段：${MISSING_FIELDS}" \
+        "pass 必须带 reviewSnapshot/riskDisposition/worktreeInventory；让 runner 产出这些字段，或人工复核该裁决是否可信"
+    fi
+  fi
+
   FINAL_VERDICT_FILE="$REVIEWS_DIR/verdict-round-${ROUND}.json"
   REPORT_FILE="$REVIEWS_DIR/report-round-${ROUND}.md"
   python3 - "$RAW_VERDICT" "$FINAL_VERDICT_FILE" "$TASK_ID" "$ROUND" "$REPORT_FILE" "$REVIEWS_DIR" <<'PY'

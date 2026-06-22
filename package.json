@@ -1,0 +1,16 @@
+{
+  "name": "3rd-review",
+  "version": "0.1.0",
+  "description": "Independent, cross-source code review dispatch that an AI agent can't fake its way past.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:core && npm run test:standalone",
+    "test:core": "node scripts/route-review.test.mjs && node scripts/cost-compare.test.mjs && node scripts/verdict-core-hash.test.mjs",
+    "test:standalone": "bash scripts/standalone.test.sh && bash scripts/standalone-verify.test.sh",
+    "_comment_monorepo": "The remaining *.test.mjs / *.test.ts under scripts|verifiers|subreviewers are agenthub-monorepo-coupled (they reference ../../../harness, packages/core/agenthub, or git checkout) and only run inside the agenthub monorepo, NOT in this standalone checkout. See README 'Verifying'."
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

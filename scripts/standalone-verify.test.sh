@@ -71,7 +71,13 @@ for a in "\$@"; do case "\$a" in --result-file=*) RESULT="\${a#*=}";; --review-r
   const findings=(exp.blockingTitles||[]).map(t=>({severity:"blocking",issue:t,file:"review-input",recommendation:"fix per finding"}));
   const v={reviewRequestId:rid, verdict:exp.verdict, findings, reviewDimensions:exp.reviewDimensions};
   if(exp.verdict!=="pass") v.downgradeReason="降级理由：见 findings（"+exp.verdict+"）";
-  if(exp.verdict==="pass") v.resolutionSummary="clean pass";
+  if(exp.verdict==="pass"){
+    v.resolutionSummary="clean pass";
+    // compliant runner ships the three pass-evidence fields (standalone fails-fast without them)
+    v.reviewSnapshot=[{path:"review-input", gitHead:"manual-", mtime:0, hash:"stub"}];
+    v.riskDisposition=[];
+    v.worktreeInventory={included:["review-input"], unrelated:[], excluded:[]};
+  }
   fs.writeFileSync(out, JSON.stringify(v,null,2));
 ' "$expected_json" "\$RID" "\$RESULT"
 STUB

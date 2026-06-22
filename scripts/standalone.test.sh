@@ -54,6 +54,21 @@ for a in "\$@"; do
     --review-request-id=*) RID="\${a#*=}" ;;
   esac
 done
+# A compliant runner emits the three pass-evidence fields on a pass verdict
+# (reviewSnapshot/riskDisposition/worktreeInventory); standalone fails-fast without them.
+if [ "$verdict" = "pass" ]; then
+cat > "\$RESULT" <<JSON
+{
+  "reviewRequestId": "\$RID",
+  "verdict": "$verdict",
+  "findings": [],
+  "resolutionSummary": "stub review for test",
+  "reviewSnapshot": [{"path": "input.md", "gitHead": "manual-", "mtime": 0, "hash": "stub"}],
+  "riskDisposition": [],
+  "worktreeInventory": {"included": ["input.md"], "unrelated": [], "excluded": []}
+}
+JSON
+else
 cat > "\$RESULT" <<JSON
 {
   "reviewRequestId": "\$RID",
@@ -62,6 +77,7 @@ cat > "\$RESULT" <<JSON
   "resolutionSummary": "stub review for test"
 }
 JSON
+fi
 STUB
   chmod +x "$stub"
 }

@@ -79,14 +79,15 @@ The routing logic lives in a **pure function** (`scripts/route-review.mjs`) read
 The **standalone** entrypoint is the one most people want — point it at a file or a diff and get an independent verdict back.
 
 > **Prerequisite (read this before your first run):** `standalone.sh` needs a *review runner* — the command that actually drives the reviewing engine. Inside the agenthub platform this is wired up automatically via `review-dispatch-adapter.sh`. In a plain GitHub checkout that adapter isn't shipped, so you **must** pass your own runner with `--review-runner`, otherwise the run escalates to a human on the spot.
+>
+> **What a runner must output:** it receives `--prompt-file` / `--result-file` / `--review-request-id` and must write a JSON verdict to `--result-file`, at minimum `{"verdict": "pass" | "revise_required" | "escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces** the three evidence fields — `reviewSnapshot[]`, `riskDisposition[]`, `worktreeInventory` — and *fails the pass to escalation if any is missing.* A ready-to-use runner that wraps `codex` lives in [`examples/codex-runner.sh`](./examples/codex-runner.sh).
 
 ```bash
-# Standalone checkout: pass your own review runner (any command that reads the
-# prompt and returns a verdict JSON — e.g. a codex/gemini wrapper).
+# Standalone checkout: point at the example codex-backed runner (or your own).
 ./standalone.sh \
   --input=my-change.diff \
   --output-root=./reviews \
-  --review-runner='your-review-runner-command'
+  --review-runner="$PWD/examples/codex-runner.sh"
 
 # Exit-code contract:
 #   0 = pass            2 = escalate_to_human
@@ -104,9 +105,11 @@ A `pass` is not the finish line, and it's not free to claim. Three things keep i
 **1. Independence is non-negotiable.** The final verdict *must* come from an isolated context. The main agent grading its own work is the exact failure this whole tool exists to prevent.
 
 **2. A `pass` must carry evidence.** Every `pass` ships three fields:
-- `reviewSnapshot[]` — `path / gitHead / mtime / hash` for every file reviewed (objective coverage proof; the persistence layer *may* backfill it from the verifier read-set).
-- `worktreeInventory` — `included / unrelated / excluded` paths (objective; may be backfilled from `git status`).
-- `riskDisposition[]` — for each high-risk item: `risk / checkedSource / decision / whyNotBlocking`. This one is **subjective and never backfilled** — the reviewer *must* produce it, and a `pass` that's missing it fails fast. Backfilling a subjective judgement would be forgery, so the pipeline refuses to.
+- `reviewSnapshot[]` — `path / gitHead / mtime / hash` for every file reviewed (objective coverage proof).
+- `worktreeInventory` — `included / unrelated / excluded` paths (objective).
+- `riskDisposition[]` — for each high-risk item: `risk / checkedSource / decision / whyNotBlocking`. **Subjective** — the reviewer *must* produce it; backfilling a subjective judgement would be forgery, so nothing ever does.
+
+In **standalone** mode none of the three are backfilled: the runner must produce them, and a `pass` missing any of them fails fast to escalation. (Inside the agenthub platform the persistence layer *may* backfill the two *objective* fields from the verifier read-set / `git status` — but never `riskDisposition`.)
 
 **3. Tamper-evident execution proof.** Each genuine review run stamps an `_execNonce` + `reviewRecordHash` into an append-only ledger. The gate cross-checks them, and a consumed nonce can't be replayed. *(Honest about its own limits: in a single-process shared shell this is **tamper-evident, not tamper-proof** — a truly malicious agent with disk access could forge the ledger. Real anti-forgery needs process isolation. We don't pretend otherwise.)*
 
@@ -142,6 +145,18 @@ This tool is the residue of a lot of bruises. A few that shaped the design:
 - **The expensive part of a review wasn't the finding — it was the re-reading.** We profiled one real `codex` pass round: **343s, 1.25M tokens, 44 commands.** Of 24 file reads, **9 were re-reading fixed protocol files that never change within a task** (CLAUDE.md, contracts, schemas — 220–260 lines each, re-read every round). A zero-finding `pass` round cost the same as a `revise` round, because protocol re-reading was decoupled from whether there was anything to find. **Lesson: judge ROI by profiling the actual session, never by gut feel.**
 
 - **A "stronger means more sub-agents" instinct.** Wrong. Hand all context to one external reviewer and the sub-agents save nothing. The win only lands when each sub-agent reads its *own* assigned files and returns a summary.
+
+---
+
+## Verifying
+
+```bash
+npm test          # routing core (pure-function) + the standalone path, zero deps
+```
+
+`npm test` runs the **portable** suite — the pure-function router tests (`route-review`, `cost-compare`, `verdict-core-hash`, all `node:assert`, no dependencies) and the two standalone integration tests (bash, with a built-in stub runner). All green out of the box on a fresh checkout.
+
+> The other `*.test.mjs` / `*.test.ts` files in the repo are **agenthub-monorepo-coupled** — they reference `../../../harness`, `packages/core/agenthub`, or `git checkout`, and only run inside the agenthub monorepo, not in this standalone checkout. They're shipped as reference, not run by `npm test`.
 
 ---
 

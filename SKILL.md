@@ -1,3 +1,8 @@
+---
+name: 3rd-review
+description: Independent cross-source code/document review dispatch. Use when a stage/phase completes and needs review, or when the user asks to review code, a plan, or a design; to get an independent (non-self) verdict; to run cross-source review (codex/gemini reviewing Claude's work); to prevent an agent from self-reviewing/self-approving; or for checkpoint review with pass/revise/escalate gating.
+---
+
 # 3rd-review — 自动审查分发（薄壳）
 
 > 本文件是主会话读取的骨架。审查员/脚本执行时才用的细节在 `references/`，主会话不读，子代理/脚本按需读。
