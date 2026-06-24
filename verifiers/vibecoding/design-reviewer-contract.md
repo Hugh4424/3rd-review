@@ -79,7 +79,7 @@ Round 2+:
 - spec bundles multiple independent outcomes into one change, or disguises a purely technical slice as a user story.
 - SPEC deviation downgrades the spec or alters the MVP in a way that requires user/human decision.
 - AgentHub boundary errors: writing `vibecoding` as the platform's main flow, writing Runtime private capabilities into the platform contract, conflating RuntimeAdapter/workflow/checkpoint/Knowledge, Capability not evaluated per workflow/stage, deepseek not treated as a server-side verifier runtime, introducing deferred items such as template marketplace/PPT/research/full Gemini integration.
-- File placement errors: product prompt/workflow ts/schema/types not in repo, Spec not under `specs/<feature>/`, Knowledge used as a template source of truth, task path not `{{task_tracking_root}}/tasks/<task-id>/`.
+- File placement errors: product prompt/workflow ts/schema/types not in repo, Spec not under `specs/{feature}/`, Knowledge used as a template source of truth, task path not `{{task_tracking_root}}/tasks/{task-id}/`.
 - Spec-Purity blacklist hit: absolute paths, hook event strings, TypeScript type field definitions, shell command lines.
 - UI scope with no design materials, existing pages, screenshots, Figma, or design authorization, yet proceeding directly to implementation.
 - UI spec does not list key states/interactions/elements that must not be added, or demotes interactive controls to read-only display.
@@ -98,7 +98,7 @@ Round 2+:
 - Scope expansion ideas: "could also do X" suggestions from plan-ceo-review, placed in a minor finding with `scope_expansion: true`; does not affect verdict.
 - Risk reminders for user-approved scope.
 - Scenario wording could be more explicit; compatibility reservations are overly broad.
-- FR numbering non-standard (not `FR-<domain-abbrev>-NNN`), FR has no scenario, insufficient user scenarios (complex needs <8, simple needs <3 key scenarios) with no reasonable explanation. Note: scenario count itself is minor; only a missing failure scenario or a missing boundary scenario (both are required) is escalated to blocking (see Exception Standard).
+- FR numbering non-standard (not `FR-{domain-abbrev}-NNN`), FR has no scenario, insufficient user scenarios (complex needs <8, simple needs <3 key scenarios) with no reasonable explanation. Note: scenario count itself is minor; only a missing failure scenario or a missing boundary scenario (both are required) is escalated to blocking (see Exception Standard).
 - Module test boundaries are slightly coarse but do not block direction judgment or plan-phase decomposition.
 - Missing supplementary items in design-fidelity-component-contract: mark important per the rules below; do not block directly.
 
@@ -141,7 +141,7 @@ Round 2+:
 | Absolute file paths | Paths starting with `/` (user/temp paths) | `/Users/...`, `/tmp/...` | grep for path |
 | Hook event strings | PreToolUse, PostToolUse, SessionStart | `SessionStart hook` | grep for event names |
 | TS type field definitions | `interface` / `type` / field definitions | `interface X {` | grep for TS syntax |
-| Shell command lines | capture-phase-evidence.sh (agenthub platform path; not in the standalone repo) collection | `apply/evidence/phase-<N>-<MODE>.json` (agenthub platform path; not in the standalone repo) | read the command field |
+| Shell command lines | capture-phase-evidence.sh (agenthub platform path; not in the standalone repo) collection | `apply/evidence/phase-{N}-{MODE}.json` (agenthub platform path; not in the standalone repo) | read the command field |
 
 ## UI and Design Contract Rules
 
@@ -158,8 +158,8 @@ When UI is in scope:
 ## Knowledge Path Rules
 
 - Correct project root: `{{task_tracking_root}}`.
-- Task files are located at `{{task_tracking_root}}/tasks/<task-id>/`.
-- Do not treat `specs/<feature>/spec.md` in the repo as a Knowledge task directory.
+- Task files are located at `{{task_tracking_root}}/tasks/{task-id}/`.
+- Do not treat `specs/{feature}/spec.md` in the repo as a Knowledge task directory.
 
 ## Verification Methods
 

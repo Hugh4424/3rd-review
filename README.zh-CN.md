@@ -79,7 +79,7 @@
 | `2` | 🙋 **得叫人**——摆不平（返修来回好几轮、轮次用完了，也是这个码） |
 | 其它 | ⚠️ 出错了 |
 
-完整报告（审了啥、发现了啥）会落在 `./reviews/tasks/<id>/reviews/report.md`。
+完整报告（审了啥、发现了啥）会落在 `./reviews/tasks/{id}/reviews/report.md`。
 
 > 其实底下还有个 `1`（「要返修」）裁决，但 `standalone.sh` 不会停在这——审查员要求返修时，它会循环重审，只有真的需要人来定夺时才停下、返回 `2`（默认来回 3 轮还没解决就升级人工）。
 
@@ -142,7 +142,7 @@
 
 **路由器是个纯函数。** [`scripts/route-review.mjs`](./scripts/route-review.mjs) 读一张数据表（[`config/route-rules.json`](./config/route-rules.json)），按内容类型 + 改动量 + 风险关键词决定审查档位。同入同出、没有藏着的状态——所以好测、可信。
 
-**runner 契约。** 审查 runner 被这样调用：`<runner> --prompt-file=… --result-file=… --review-request-id=…`，必须往 `--result-file` 写一个 JSON 裁决，至少包含 `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`。裁决是 `pass` 时，standalone 会**强制要求**三个证据字段必须存在——`reviewSnapshot[]`、`riskDisposition[]`、`worktreeInventory`——缺任一就直接 fail-fast 升级人工。它只校验字段*存在且格式合法*，不判断审查员有没有把风险覆盖对；`riskDisposition` 绝不自动补（替主观判断回填等于伪造）。完整规范——含 standalone 与平台两路径的补填差异——见 [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md)。
+**runner 契约。** 审查 runner 被这样调用：`{runner} --prompt-file=… --result-file=… --review-request-id=…`，必须往 `--result-file` 写一个 JSON 裁决，至少包含 `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`。裁决是 `pass` 时，standalone 会**强制要求**三个证据字段必须存在——`reviewSnapshot[]`、`riskDisposition[]`、`worktreeInventory`——缺任一就直接 fail-fast 升级人工。它只校验字段*存在且格式合法*，不判断审查员有没有把风险覆盖对；`riskDisposition` 绝不自动补（替主观判断回填等于伪造）。完整规范——含 standalone 与平台两路径的补填差异——见 [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md)。
 
 **四条不可谈判的硬护栏**（任何档位都绕不过）：每轮覆盖改动行 ≥80%；高风险维度永远全审；缩范围审查只要有一条护栏不达标就立即回退全量；最终裁决永远必须来自独立上下文。
 

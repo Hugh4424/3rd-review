@@ -22,17 +22,17 @@
 
 ```json
 {
-  "case": "<case-slug>",
-  "scenario": "<情形中文名>",
+  "case": "{case-slug}",
+  "scenario": "{情形中文名}",
   "expected": {
     "verdict": "pass | revise_required | escalate_to_human",
-    "blockingCount": <number>,
-    "blockingTitles": ["<标题>", ...],
+    "blockingCount": {number},
+    "blockingTitles": ["{标题}", ...],
     "requiredSections": ["Summary", "Findings", "Checks", "Required Revisions"],
     "reviewDimensions": ["方向", "盲点", "细节"],
     "downgradeReasonRequired": true | false
   },
-  "rationale": "<为什么期望这个裁决>"
+  "rationale": "{为什么期望这个裁决}"
 }
 ```
 

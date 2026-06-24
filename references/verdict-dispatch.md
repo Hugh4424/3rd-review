@@ -15,8 +15,8 @@ The main agent must execute the following steps in order (none may be skipped):
 
 **Step 6a-2: post_review_pass gate**
 ```bash
-bash packages/core/agenthub/harness/gate.sh post_review_pass <workflow-id> \
-  --checkpoint-id="<checkpoint-id>" --round=<N> --task-dir=<TASK_DIR>
+bash packages/core/agenthub/harness/gate.sh post_review_pass {workflow-id} \
+  --checkpoint-id="{checkpoint-id}" --round={N} --task-dir={TASK_DIR}
 ```
 (agenthub platform path; not in the standalone repo)
 
@@ -24,8 +24,8 @@ bash packages/core/agenthub/harness/gate.sh post_review_pass <workflow-id> \
 
 **Step 6a-3: stage_advance**
 ```bash
-bash packages/core/agenthub/harness/gate.sh stage_advance <workflow-id> \
-  --task-dir=<TASK_DIR> [--last-phase=true]
+bash packages/core/agenthub/harness/gate.sh stage_advance {workflow-id} \
+  --task-dir={TASK_DIR} [--last-phase=true]
 ```
 (agenthub platform path; not in the standalone repo)
 

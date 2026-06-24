@@ -16,7 +16,7 @@ Issuing a verdict without reading the contract → review is insufficient → mu
 ## VibeCoding Binding
 
 - Inspect the review package only; do not inspect chat history.
-- Do not treat `specs/<feature>/tasks.md` in the repo as phase evidence.
+- Do not treat `specs/{feature}/tasks.md` in the repo as phase evidence.
 - For phase ≥ 2, the first review round must perform a cross-phase comparison: mark issues that recurred from the previous phase with `cross_phase_recurrence: true` in findings. The Markdown report is rendered by dispatch as a `## Cross-Phase Comparison` section. ⚠️ Recurrence does not automatically upgrade to blocking (unless FR-REV-001 is triggered).
 - Starting from the 3rd consecutive revise round, dispatch automatically computes `revision_class` (A/B/C). Check whether `apply/phase-N.md` ends with a review-summary section (the agent must write this after ≥ 2 revise rounds) → absence is blocking. The reviewer does not output `revision_class`; output findings only.
 
@@ -32,7 +32,7 @@ Issuing a verdict without reading the contract → review is insufficient → mu
 
 ## Evidence Authenticity (FR-REV-002)
 
-- Evidence files are at `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`; gate has verified provenance.
+- Evidence files are at `apply/evidence/phase-{N}-{MODE}.json` + `.stdout` + `.stderr`; gate has verified provenance.
 - When reviewing, Read the evidence JSON to confirm command, exit_code, and timestamp are reasonable.
 - stdout/stderr content must not contain truncation markers such as `...`, `(omitted)`, or `(same as above)`.
 - When the review package contains `Host-Verified Facts`, do not re-run evidence commands; the host has already verified provenance / cwd / git SHA / exit_code.
@@ -44,47 +44,47 @@ Return only verdict.schema.json-compatible JSON. Do not write files, do not outp
 
 ```json
 {
-  "reviewRequestId": "<3rd-review supplied id>",
+  "reviewRequestId": "[3rd-review supplied id]",
   "verdict": "pass | revise_required | escalate_to_human",
-  "rootCause": "<required for revise_required: root cause>",
-  "fixApproach": "<required for revise_required: fix approach>",
-  "resolutionSummary": "<recommended for pass: resolution summary>",
+  "rootCause": "[required for revise_required: root cause]",
+  "fixApproach": "[required for revise_required: fix approach]",
+  "resolutionSummary": "[recommended for pass: resolution summary]",
   "reviewSnapshot": [
     {
-      "path": "<reviewed file path>",
-      "gitHead": "<review-bound git HEAD>",
-      "mtime": "<file mtime when read>",
-      "hash": "<content hash when read>"
+      "path": "[reviewed file path]",
+      "gitHead": "[review-bound git HEAD]",
+      "mtime": "[file mtime when read]",
+      "hash": "[content hash when read]"
     }
   ],
   "riskDisposition": [
     {
-      "risk": "<delegated topRisks/high risk>",
-      "checkedSource": "<source or evidence path checked>",
+      "risk": "[delegated topRisks/high risk]",
+      "checkedSource": "[source or evidence path checked]",
       "decision": "not_blocking | blocking",
-      "whyNotBlocking": "<why this is not blocking, or why it must revise>"
+      "whyNotBlocking": "[why this is not blocking, or why it must revise]"
     }
   ],
   "worktreeInventory": {
-    "included": [{ "path": "<reviewed path for this checkpoint>", "reason": "<why included>" }],
-    "unrelated": [{ "path": "<dirty but unrelated path>", "reason": "<why it does not affect this checkpoint>" }],
-    "excluded": [{ "path": "<excluded path>", "reason": "<why exclusion is safe>" }]
+    "included": [{ "path": "[reviewed path for this checkpoint]", "reason": "[why included]" }],
+    "unrelated": [{ "path": "[dirty but unrelated path]", "reason": "[why it does not affect this checkpoint]" }],
+    "excluded": [{ "path": "[excluded path]", "reason": "[why exclusion is safe]" }]
   },
   "verificationResults": [
     {
-      "command": "<actual verification command, or evidence path when no command was rerun>",
+      "command": "[actual verification command, or evidence path when no command was rerun]",
       "exitCode": 0,
-      "evidence": "<stdout/stderr/evidence path or Host-Verified Facts source>"
+      "evidence": "[stdout/stderr/evidence path or Host-Verified Facts source]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
-      "file": "<path>",
+      "file": "[path]",
       "line": 123,
-      "issue": "<description>",
-      "impact": "<impact>",
-      "recommendation": "<recommendation>",
+      "issue": "[description]",
+      "impact": "[impact]",
+      "recommendation": "[recommendation]",
       "repeat": false,
       "cross_phase_recurrence": false
     }

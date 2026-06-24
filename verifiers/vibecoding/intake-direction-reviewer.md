@@ -50,34 +50,34 @@ Return only verdict.schema.json-compatible JSON. Do not write files, do not outp
 
 ```json
 {
-  "reviewRequestId": "<passed in by 3rd-review>",
+  "reviewRequestId": "[passed in by 3rd-review]",
   "verdict": "pass | revise_required | escalate_to_human",
   "skillResults": [
     {
       "name": "plan-ceo-review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific check points: file path / dimension>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific check points: file path / dimension]; (3) [conclusion: what was found]"
     },
     {
       "name": "review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific check points: file path / dimension>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific check points: file path / dimension]; (3) [conclusion: what was found]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
       "axis": "Direction Fit | Demand Reality | Premise Safety | Frame Alternative | Implicit Constraint | Frame Risk",
-      "file": "<path>",
+      "file": "[path]",
       "line": 0,
-      "code": "<relevant source text>",
-      "issue": "<problem>",
-      "impact": "<impact>",
-      "recommendation": "<fix recommendation>",
-      "evidence": "<skill / source / command evidence>",
-      "requiredFix": "<required when blocking>"
+      "code": "[relevant source text]",
+      "issue": "[problem]",
+      "impact": "[impact]",
+      "recommendation": "[fix recommendation]",
+      "evidence": "[skill / source / command evidence]",
+      "requiredFix": "[required when blocking]"
     }
   ]
 }

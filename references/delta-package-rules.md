@@ -9,7 +9,7 @@
 - **Subject under review (fully accessible, inlined on demand)**: design/plan — inline key structure, put the full document into the Source Manifest; code-review — inline the current phase's tasks section, that phase's FR section, plan phase section, git diff, and hunk context, put full file paths into the Source Manifest; test-acceptance — inline the report conclusion/risk section/acceptance summary, put the full report into the Source Manifest.
 - **git diff (mandatory for code review; replaces full inline of large files)**: Round 1 — pass the full diff; Round 2+ — pass `git diff --stat` + the current round's `git diff`. Small files (≤24 KB) may be fully inlined; medium files (24 KB–80 KB) — inline diff + 80–120 lines of context around each hunk; large files (>80 KB) — full inline is forbidden by default, pass only diff + hunk context + Required Read Set. If hunk context cannot be generated / changed lines cannot be located / manifest files cannot be read → fall back to the full package; if still unavailable → `escalate_to_human`.
 - **Previous-round finding closure check (Round 2+ only; additive step)**:
-  - Use the `findingsSummary` quick index in `reviews.jsonl` to locate the corresponding checkpoint + round, then read the full raw JSON (`reviews/<checkpoint>/round-<round>.json`).
+  - Use the `findingsSummary` quick index in `reviews.jsonl` to locate the corresponding checkpoint + round, then read the full raw JSON (`reviews/{checkpoint}/round-{round}.json`).
   - Using only `findingsSummary` is forbidden (full context is lost).
   - **Writing a "revision summary / what I changed" inside the review package is forbidden** — the reviewer must not be pre-informed of fix content; whether a finding is closed is determined independently by the reviewer.
   - The closure check is an additive check performed on top of the complete review; it does not narrow the review scope.
@@ -25,7 +25,7 @@ When R6 triggers a same-source sub-agent review due to `no_external_cli`, the fo
 2. **Follow the review contract**: the sub-agent must receive the complete reviewer-contract + verifier prompt; bare "please review this code" dispatch is not allowed.
 3. **Hard rails do not downgrade**: the fallback only affects the reviewer source (external CLI → internal sub-agent); it does not affect review depth — the hard rail layer is fully preserved (FR-REVIEW-004/005 constraints unchanged).
 4. **Output format unchanged**: the result JSON is identical to the external-CLI path; the `provenance` field must use the verdict schema enum values (`"single-context"` / `"independent-subagent"` / `"independent-session"`); the sub-agent path uses `"independent-subagent"`.
-5. **Verification method**: `jq -e .verdict reviews/<cp>/round-N.json` still exits 0; `jq -r .provenance reviews/<cp>/round-N.json` should output `independent-subagent`.
+5. **Verification method**: `jq -e .verdict reviews/{cp}/round-N.json` still exits 0; `jq -r .provenance reviews/{cp}/round-N.json` should output `independent-subagent`.
 
 **Prohibited actions**:
 - The main agent must not self-review (self-review equals no review).

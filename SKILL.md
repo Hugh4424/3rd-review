@@ -60,11 +60,11 @@ RESULT_FILE=$(mktemp /tmp/3rd-review-result-XXXXXX.json)
 
 # Step B (dispatch with run_in_background:true — MUST be this single bash command, no trailing command appended):
 #   the verdict is written to RESULT_FILE; the adapter review sub-command's real exit code is this command's exit code.
-bash <path-to>/review-dispatch-adapter.sh review \
+bash {path-to}/review-dispatch-adapter.sh review \
   --prompt-file="$PROMPT_FILE" --result-file="$RESULT_FILE" \
-  --checkpoint-id="<checkpoint-id>" --round="<round>" \
-  --task-dir=<TASK_DIR> --workflow=<workflow-id> \
-  --reviewer-role="reviewer" --reviewer-runtime-id="<runtime-id>" --reviewer-provider="<provider>"
+  --checkpoint-id="{checkpoint-id}" --round="{round}" \
+  --task-dir={TASK_DIR} --workflow={workflow-id} \
+  --reviewer-role="reviewer" --reviewer-runtime-id="{runtime-id}" --reviewer-provider="{provider}"
 
 # Step C (after the command exits and auto-wakes you, foreground): consume RESULT_FILE only after the three-condition check, then clean up PROMPT_FILE.
 ```

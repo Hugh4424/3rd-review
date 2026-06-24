@@ -47,8 +47,8 @@ After receiving `revise_required` and before initiating the next review round, t
 ### Knowledge Path Rules
 
 - Correct project root: `{{task_tracking_root}}`.
-- Task files are located at `{{task_tracking_root}}/tasks/<task-id>/`.
-- If any artifact contains a user-specific absolute path (e.g. `/Users/<username>/...`) or a legacy project-specific literal path that does not belong in the current review context → `escalate_to_human`.
+- Task files are located at `{{task_tracking_root}}/tasks/{task-id}/`.
+- If any artifact contains a user-specific absolute path (e.g. `/Users/{username}/...`) or a legacy project-specific literal path that does not belong in the current review context → `escalate_to_human`.
 
 ---
 

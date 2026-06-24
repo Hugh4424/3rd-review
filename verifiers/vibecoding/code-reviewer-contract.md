@@ -95,14 +95,14 @@ The following are blocking by default (not merely suggestions — they are admis
 
 ## Evidence Authenticity Dimension (FR-REV-002)
 
-- Evidence files are located at `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`; gate has verified provenance (evidence_captured hash)
+- Evidence files are located at `apply/evidence/phase-{N}-{MODE}.json` + `.stdout` + `.stderr`; gate has verified provenance (evidence_captured hash)
 - When reviewing, Read the evidence JSON and confirm that command, exit_code, and timestamp are reasonable
 - **No placeholders**: evidence stdout/stderr content must not contain truncation markers such as `...`, `(omitted)`, or `(same as above)`
 - **Host-Verified Facts take priority**: When the review package includes a Host-Verified Facts section, the reviewer does not re-run the evidence command (the host has already verified provenance and exit_code). The reviewer still reads the evidence JSON to confirm command/exit_code/timestamp reasonableness and reads stdout/stderr to check for placeholders. If Host-Verified Facts contradict the reviewer's findings → escalate_to_human (fail-closed)
 
 ## FR Consumption Point Scan Review Dimension (Return-Revision Granularity Discipline Enforcement)
 
-When a blocking finding from the previous round falls into the category of [missing required input / suppressed fallback / validation field gap / FR implementation consumption point drift], the reviewer must read `apply/phase-<N>-revise-plan.md` (or the corresponding `revise-plan-checklist`) from the current round and verify the `FR Consumption Scan` section:
+When a blocking finding from the previous round falls into the category of [missing required input / suppressed fallback / validation field gap / FR implementation consumption point drift], the reviewer must read `apply/phase-{N}-revise-plan.md` (or the corresponding `revise-plan-checklist`) from the current round and verify the `FR Consumption Scan` section:
 
 1. **Does the search term matrix truly provide coverage?**: The search term set must cover at minimum the FR's ID + core field names + entry function names + template titles/anchors + test names; each term must include a grep command + matched output. Only grepping the FR ID alone is insufficient (consumption points frequently appear under aliases, field names, or schema keys — a single grep misses call sites and reproduces the drift).
 2. **Are hit points classified?**: Each hit point must be labeled "consumption point / non-consumption point + reason"; missing classification or a vacuous reason → revise_required.
@@ -139,11 +139,11 @@ Append format (**gate enforces the sourceRequestId/sourceRound/resubmitRound tri
 
 ## Revision Record
 ### Round N → N+1 (YYYY-MM-DDThh:mm:ss)
-- **Failure root cause**: <why this round did not pass>
-- **Modified files**: <list of files>
-- **Change summary**: <what was changed>
-- **Verification commands and results**: <command + output>
-- **sourceRequestId=<reviewRequestId from previous round>**
-- **sourceRound=<N>**
-- **resubmitRound=<N+1>**
+- **Failure root cause**: [why this round did not pass]
+- **Modified files**: [list of files]
+- **Change summary**: [what was changed]
+- **Verification commands and results**: [command + output]
+- **sourceRequestId={reviewRequestId from previous round}**
+- **sourceRound={N}**
+- **resubmitRound={N+1}**
 ```

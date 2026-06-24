@@ -28,7 +28,7 @@ Skills must run in read-only verifier mode: review only; do not modify artifacts
 
 ## VibeCoding Binding
 
-- Do not treat `specs/<feature>/tasks.md` in the repo as the Knowledge task directory.
+- Do not treat `specs/{feature}/tasks.md` in the repo as the Knowledge task directory.
 - The correct project root for Knowledge is `{{task_tracking_root}}`.
 - Out-of-contract findings may only be labeled `minor`, not `blocking`.
 - Scope-expansion opinions may only be labeled `minor`, unless they point out a conflict between the current plan and a spec/design already approved by the user.
@@ -53,44 +53,44 @@ Return only verdict.schema.json-compatible JSON. Do not write files, do not outp
 
 ```json
 {
-  "reviewRequestId": "<passed in by 3rd-review>",
+  "reviewRequestId": "[passed in by 3rd-review]",
   "verdict": "pass | revise_required | escalate_to_human",
   "skillResults": [
     {
       "name": "speckit-analyze",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific checkpoints: file paths/dimensions>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific checkpoints: file paths/dimensions]; (3) [conclusion: what was found]"
     },
     {
       "name": "plan-eng-review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific checkpoints: file paths/dimensions>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific checkpoints: file paths/dimensions]; (3) [conclusion: what was found]"
     },
     {
       "name": "review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific checkpoints: file paths/dimensions>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific checkpoints: file paths/dimensions]; (3) [conclusion: what was found]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
       "axis": "Traceability | Executability | Verification | Governance | UI Contract",
-      "file": "<path>",
+      "file": "[path]",
       "line": 123,
-      "code": "<relevant original text>",
-      "issue": "<issue>",
-      "impact": "<impact>",
-      "recommendation": "<minimum fix recommendation>",
-      "evidence": "<skill/source/command evidence>",
-      "requiredFix": "<required when blocking>",
+      "code": "[relevant original text]",
+      "issue": "[issue]",
+      "impact": "[impact]",
+      "recommendation": "[minimum fix recommendation]",
+      "evidence": "[skill/source/command evidence]",
+      "requiredFix": "[required when blocking]",
       "repeat": false,
       "cross_phase_recurrence": false
     }
   ],
-  "resolutionSummary": "<round 2+ only: close each prior blocking finding with: original finding | fixed file/line | why no longer blocking>"
+  "resolutionSummary": "[round 2+ only: close each prior blocking finding with: original finding | fixed file/line | why no longer blocking]"
 }
 ```

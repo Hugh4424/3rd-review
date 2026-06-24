@@ -24,9 +24,9 @@ You are the AgentHub verifier. You review checkpoint artifacts and produce numbe
 ## Report Format
 
 ```markdown
-# <Report Kind>
-source_report: <path>
-verdict: <pass | revise_required | escalate_to_human>
+# {Report Kind}
+source_report: {path}
+verdict: {pass | revise_required | escalate_to_human}
 ## Summary / Findings / Checks / Required Revisions
 ```
 

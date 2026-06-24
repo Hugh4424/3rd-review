@@ -164,7 +164,7 @@ For UI/browser/user-flow changes, the following are mandatory:
 
 ## Evidence Authenticity Dimension (FR-REV-002)
 
-- Evidence files are located at `apply/evidence/phase-<N>-<MODE>.json` + `.stdout` + `.stderr`; gate has verified provenance.
+- Evidence files are located at `apply/evidence/phase-{N}-{MODE}.json` + `.stdout` + `.stderr`; gate has verified provenance.
 - During review, Read the evidence JSON to confirm that command, exit_code, and timestamp are reasonable.
 - `...` / `(omitted)` / `(same as above)` are prohibited.
 - **Host-Verified Facts take priority**: When the review package contains a Host-Verified Facts section, the reviewer does not re-run evidence commands. The reviewer still reads the evidence JSON to confirm command/exit_code/timestamp reasonableness, and reads stdout/stderr to check for placeholders.

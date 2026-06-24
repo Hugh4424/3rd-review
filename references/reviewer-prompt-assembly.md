@@ -26,14 +26,14 @@ Resolution command:
 
 ```bash
 RUNTIME_CONFIG_JSON=$(node scripts/resolve-review-runtime-config.mjs \
-  --role=reviewer --round="<round>")
+  --role=reviewer --round="{round}")
 ```
 
 Append to the prompt:
 
 ```text
 ## Runtime Preferences
-<RUNTIME_CONFIG_JSON>
+{RUNTIME_CONFIG_JSON}
 
 Reviewer MUST use reviewer.model / reviewer.thinking_level as the requested reviewer runtime. If reviewer.model is empty, omit the model flag and let the system default apply.
 review-dispatch-adapter MUST run delegated precheck before final reviewer execution.
@@ -63,7 +63,7 @@ The following overrides ALL conflicting rules from the verifier prompts above:
 
 **Required skills ARE available** in your skills directory. Execute them in read-only verifier mode. Depending on checkpoint kind these include: `plan-ceo-review`, `plan-design-review`, `speckit-analyze`, `plan-eng-review`, `qa-only`, `verify-change`, `review` (see the checkpoint→required-skills mapping in `references/execution-steps.md`).
   - Try the Skill tool first when available.
-  - If Skill tool execution fails, read the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`.
+  - If Skill tool execution fails, read the skill's SKILL.md from the first existing path: `~/.codex/skills/{name}/SKILL.md`, `.claude/skills/{name}/SKILL.md`, `~/.claude/skills/{name}/SKILL.md`.
   - Apply the lens's checklist/dimensions to the review sources.
   - Record key findings in skillResults with status="executed" and evidence strings (in English). If SKILL.md fallback was used, set mode to include `skill-file fallback`. Evidence MUST contain three elements: (1) where executed (session location or SKILL.md fallback path); (2) specific input/checkpoint checked; (3) conclusion/finding. Hollow summaries ("ran skill, no issues") are rejected (FR-REVIEW-006/007).
   - If a skill is not applicable to this review, set status="not_applicable" with reason in evidence
@@ -98,10 +98,10 @@ The sampling fallback ONLY reduces redundant reading effort on 低危 coverageAc
 
 **No spawning narrowed subtasks**: Do NOT spawn sub-agents with task descriptions that pre-state "the revision summary" or limit scope to "verify whether prior finding X is closed". Any sub-agent you spawn must receive the checkpoint responsibility scope, Source Manifest, Required Read Set, and full-review mandate, not a narrowed confirmation task.
 
-**Non-code review skill execution**: For design/plan/test-acceptance reviews, the reviewer MUST attempt to execute required skills. The execution order: (1) Try `Skill("<name>")` to invoke the skill directly. (2) If that fails (common in headless/read-only environments where skills require AskUserQuestion or file output), fall back by reading the skill's SKILL.md from the first existing path: `~/.codex/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`. Extract the review dimensions/lens from SKILL.md and apply those dimensions independently to the review sources. (3) Record results in `skillResults`: status=`executed` if either direct Skill execution or SKILL.md fallback succeeded, mode includes `skill-file fallback` when fallback was used, and status=`failed` only if both approaches failed. This fallback pattern works for ANY skill without per-skill configuration. Skill results are input to your review, not final verdict — only findings matching the checkpoint's reviewer contract blocking list can be marked blocking; non-matching findings MUST be downgraded to important/minor. If a required skill is unavailable and its SKILL.md cannot be read at all → escalate_to_human.
+**Non-code review skill execution**: For design/plan/test-acceptance reviews, the reviewer MUST attempt to execute required skills. The execution order: (1) Try `Skill("{name}")` to invoke the skill directly. (2) If that fails (common in headless/read-only environments where skills require AskUserQuestion or file output), fall back by reading the skill's SKILL.md from the first existing path: `~/.codex/skills/{name}/SKILL.md`, `.claude/skills/{name}/SKILL.md`, `~/.claude/skills/{name}/SKILL.md`. Extract the review dimensions/lens from SKILL.md and apply those dimensions independently to the review sources. (3) Record results in `skillResults`: status=`executed` if either direct Skill execution or SKILL.md fallback succeeded, mode includes `skill-file fallback` when fallback was used, and status=`failed` only if both approaches failed. This fallback pattern works for ANY skill without per-skill configuration. Skill results are input to your review, not final verdict — only findings matching the checkpoint's reviewer contract blocking list can be marked blocking; non-matching findings MUST be downgraded to important/minor. If a required skill is unavailable and its SKILL.md cannot be read at all → escalate_to_human.
 
 Output format (English-only JSON):
-{"reviewRequestId":"<id>","verdict":"pass|revise_required|escalate_to_human","reviewSnapshot":[{"path":"...","gitHead":"...","mtime":"...","hash":"..."}],"riskDisposition":[{"risk":"...","checkedSource":"...","decision":"not_blocking|blocking","whyNotBlocking":"..."}],"worktreeInventory":{"included":[{"path":"...","reason":"..."}],"unrelated":[{"path":"...","reason":"..."}],"excluded":[{"path":"...","reason":"..."}]},"skillResults":[...],"verificationResults":[{"command":"<command or evidence read>","exitCode":0,"evidence":"<path or host fact>"}],"findings":[{"severity":"blocking|important|minor","blockerClass":"delivery_quality|process_evidence|output_contract","file":"...","line":0,"issue":"...","impact":"...","recommendation":"..."}]}
+{"reviewRequestId":"{id}","verdict":"pass|revise_required|escalate_to_human","reviewSnapshot":[{"path":"...","gitHead":"...","mtime":"...","hash":"..."}],"riskDisposition":[{"risk":"...","checkedSource":"...","decision":"not_blocking|blocking","whyNotBlocking":"..."}],"worktreeInventory":{"included":[{"path":"...","reason":"..."}],"unrelated":[{"path":"...","reason":"..."}],"excluded":[{"path":"...","reason":"..."}]},"skillResults":[...],"verificationResults":[{"command":"[command or evidence read]","exitCode":0,"evidence":"[path or host fact]"}],"findings":[{"severity":"blocking|important|minor","blockerClass":"delivery_quality|process_evidence|output_contract","file":"...","line":0,"issue":"...","impact":"...","recommendation":"..."}]}
 ```
 
 ### Thick-Wrapper Invocation Surface (Recommended Entry Point)
@@ -116,11 +116,11 @@ RESULT_FILE=$(mktemp /tmp/3rd-review-result-XXXXXX.json)
 # Step B (launch with run_in_background:true — MUST contain only this one command;
 #   do NOT chain trailing commands, do NOT capture with RESULT=$(...),
 #   as these mask the real exit code — see SKILL.md red-flag checklist / execution-steps.md):
-bash <path-to>/review-dispatch-adapter.sh review \
+bash {path-to}/review-dispatch-adapter.sh review \
   --prompt-file="$PROMPT_FILE" --result-file="$RESULT_FILE" \
-  --checkpoint-id="<checkpoint-id>" --round="<round>" \
-  --task-dir=<TASK_DIR> --workflow=<workflow-id> \
-  --reviewer-role="reviewer" --reviewer-runtime-id="<runtime-id>" --reviewer-provider="<provider>"
+  --checkpoint-id="{checkpoint-id}" --round="{round}" \
+  --task-dir={TASK_DIR} --workflow={workflow-id} \
+  --reviewer-role="reviewer" --reviewer-runtime-id="{runtime-id}" --reviewer-provider="{provider}"
 
 # Step C (foreground, after command exits): read verdict from RESULT_FILE only after all three conditions pass, then clean up PROMPT_FILE
 VERDICT=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).verdict)" "$RESULT_FILE")
@@ -143,9 +143,9 @@ rm -f "$PROMPT_FILE"
 
 3. Review implementation metadata persistence path contract:
 
-- Markdown: `<task-dir>/reports/<checkpoint-id>-<N>.md`
-- Raw JSON: `<task-dir>/reviews/<checkpoint-id>/round-<N>.json` (contains `_codexMeta`)
-- Metrics JSON: `<task-dir>/reviews/<checkpoint-id>/round-<N>.metrics.json`
+- Markdown: `{task-dir}/reports/{checkpoint-id}-{N}.md`
+- Raw JSON: `{task-dir}/reviews/{checkpoint-id}/round-{N}.json` (contains `_codexMeta`)
+- Metrics JSON: `{task-dir}/reviews/{checkpoint-id}/round-{N}.metrics.json`
 
 Rendering rules are enforced by `render-views.ts`; when `subreviewer_meta` is not recorded, the report displays "Sub-agent details: not recorded" — do not fabricate split values.
 

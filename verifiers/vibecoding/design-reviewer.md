@@ -30,7 +30,7 @@ Skills must run in read-only verifier mode: review only; do not modify the spec;
 ## VibeCoding Binding
 
 - The correct project root for Knowledge is `{{task_tracking_root}}`.
-- Do not treat `specs/<feature>/spec.md` in the repo as the Knowledge task directory.
+- Do not treat `specs/{feature}/spec.md` in the repo as the Knowledge task directory.
 - Out-of-contract findings may only be labeled `minor`, not `blocking`.
 - Scope-expansion opinions may only be labeled `minor`, unless they point out a conflict between the current spec and a user-approved goal.
 - Scope decisions already approved by the user in intake/grill/talk-with-zhipeng must not be overturned by the reviewer; only risks may be flagged.
@@ -54,40 +54,40 @@ Return only verdict.schema.json-compatible JSON. Do not write files, do not outp
 
 ```json
 {
-  "reviewRequestId": "<passed in by 3rd-review>",
+  "reviewRequestId": "[passed in by 3rd-review]",
   "verdict": "pass | revise_required | escalate_to_human",
   "skillResults": [
     {
       "name": "plan-ceo-review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific checkpoints: file paths/dimensions>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific checkpoints: file paths/dimensions]; (3) [conclusion: what was found]"
     },
     {
       "name": "review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific checkpoints: file paths/dimensions>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific checkpoints: file paths/dimensions]; (3) [conclusion: what was found]"
     },
     {
       "name": "plan-design-review",
       "status": "executed | not_applicable | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "<UI scope conclusion; for non-UI state not_applicable reason>"
+      "evidence": "[UI scope conclusion; for non-UI state not_applicable reason]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
       "axis": "Problem Fit | Spec Quality | Boundary Safety | UI Contract | Checkpoint",
-      "file": "<path>",
+      "file": "[path]",
       "line": 123,
-      "code": "<relevant original text>",
-      "issue": "<issue>",
-      "impact": "<impact>",
-      "recommendation": "<minimum fix recommendation>",
-      "evidence": "<skill/source/command evidence>",
-      "requiredFix": "<required when blocking>",
+      "code": "[relevant original text]",
+      "issue": "[issue]",
+      "impact": "[impact]",
+      "recommendation": "[minimum fix recommendation]",
+      "evidence": "[skill/source/command evidence]",
+      "requiredFix": "[required when blocking]",
       "repeat": false,
       "cross_phase_recurrence": false
     }

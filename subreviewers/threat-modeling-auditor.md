@@ -120,17 +120,17 @@ When a spec is present:
     {
       "severity": "blocking",
       "category": "forgery-bypass",
-      "description": "<specific spec phrase or section + why it is a bypass>"
+      "description": "[specific spec phrase or section + why it is a bypass]"
     },
     {
       "severity": "important",
       "category": "proof-independence",
-      "description": "<specific spec phrase or section + why independence is broken>"
+      "description": "[specific spec phrase or section + why independence is broken]"
     },
     {
       "severity": "minor",
       "category": "schema-drift",
-      "description": "<specific spec phrase or section + why schema contract is weak>"
+      "description": "[specific spec phrase or section + why schema contract is weak]"
     }
   ]
 }

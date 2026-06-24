@@ -34,21 +34,21 @@ The checkpoint package must contain:
 ```yaml
 stage: test-acceptance
 project_root: "{{project_root}}"
-change_id: "<change-id>"
-task_id: "<task-id>"
+change_id: "{change-id}"
+task_id: "{task-id}"
 artifacts:
   - SPEC.md
-  - specs/<feature>/spec.md
-  - specs/<feature>/plan.md
-  - specs/<feature>/tasks.md
+  - specs/{feature}/spec.md
+  - specs/{feature}/plan.md
+  - specs/{feature}/tasks.md
   - final_test_report
   - command_outputs
   - changed_files
   - reports
 knowledge:
-  - {{task_tracking_root}}/tasks/<task-id>/progress.md
-  - {{task_tracking_root}}/tasks/<task-id>/test/final-test-report.md
-  - {{task_tracking_root}}/tasks/<task-id>/reports/
+  - {{task_tracking_root}}/tasks/{task-id}/progress.md
+  - {{task_tracking_root}}/tasks/{task-id}/test/final-test-report.md
+  - {{task_tracking_root}}/tasks/{task-id}/reports/
 ```
 
 Missing the final test report, the spec acceptance section (spec.md chapter 10), or reports → `escalate_to_human`.
@@ -56,9 +56,9 @@ Missing the final test report, the spec acceptance section (spec.md chapter 10),
 ## VibeCoding Binding
 
 - The correct Knowledge project root is `{{task_tracking_root}}`.
-- The final test report must be located at `{{task_tracking_root}}/tasks/<task-id>/test/final-test-report.md`.
-- Review reports must be located at `{{task_tracking_root}}/tasks/<task-id>/reports/`.
-- Do not substitute the repo-internal `specs/<feature>/` artifact for Knowledge test/close evidence.
+- The final test report must be located at `{{task_tracking_root}}/tasks/{task-id}/test/final-test-report.md`.
+- Review reports must be located at `{{task_tracking_root}}/tasks/{task-id}/reports/`.
+- Do not substitute the repo-internal `specs/{feature}/` artifact for Knowledge test/close evidence.
 - A test acceptance pass does not equal delivery completion; a close summary and explicit user delivery confirmation are still required.
 - Findings outside the contract scope can only be marked `minor`, not `blocking`.
 
@@ -83,34 +83,34 @@ Return only verdict.schema.json-compatible JSON. Do not write files, do not outp
 
 ```json
 {
-  "reviewRequestId": "<passed in by 3rd-review>",
+  "reviewRequestId": "[passed in by 3rd-review]",
   "verdict": "pass | revise_required | escalate_to_human",
   "skillResults": [
     {
       "name": "qa-only",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific check points: file path / dimension>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific check points: file path / dimension]; (3) [conclusion: what was found]"
     },
     {
       "name": "verify-change --light",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier | read-only verifier; skill-file fallback",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific check points: file path / dimension>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific check points: file path / dimension]; (3) [conclusion: what was found]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
       "axis": "Acceptance Coverage | Evidence Authenticity | Workflow Closure | Delivery Readiness",
-      "file": "<path>",
+      "file": "[path]",
       "line": 123,
-      "code": "<relevant source text>",
-      "issue": "<problem>",
-      "impact": "<impact>",
-      "recommendation": "<minimal fix recommendation>",
-      "evidence": "<skill / source / command evidence>",
-      "requiredFix": "<required when blocking>",
+      "code": "[relevant source text]",
+      "issue": "[problem]",
+      "impact": "[impact]",
+      "recommendation": "[minimal fix recommendation]",
+      "evidence": "[skill / source / command evidence]",
+      "requiredFix": "[required when blocking]",
       "repeat": false,
       "cross_phase_recurrence": false
     }

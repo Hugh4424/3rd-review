@@ -34,7 +34,7 @@ Once all required skills are available, proceed to the next step.
 Executed only for `code-review-*` checkpoints. Other checkpoints skip this step.
 
 ```bash
-bash packages/core/agenthub/harness/gate.sh phase_pre_review <workflow-id> --task-dir=<TASK_DIR> --phase=<N>
+bash packages/core/agenthub/harness/gate.sh phase_pre_review {workflow-id} --task-dir={TASK_DIR} --phase={N}
 ```
 *(agenthub platform path; not in the standalone repo)*
 
@@ -43,11 +43,11 @@ exit ≠ 0 → stop, fix per the remediation guide.
 ### Step 2: checkpoint_request (obtain reviewRequestId)
 
 ```bash
-bash packages/core/agenthub/harness/gate.sh checkpoint_request <workflow-id> --task-dir=<TASK_DIR> --checkpoint-id=<checkpoint-id> --round=<N>
+bash packages/core/agenthub/harness/gate.sh checkpoint_request {workflow-id} --task-dir={TASK_DIR} --checkpoint-id={checkpoint-id} --round={N}
 ```
 *(agenthub platform path; not in the standalone repo)*
 
-Extract reviewRequestId from output (`checkpoint_request: <reviewRequestId>`). The `<checkpoint-id>` for the Apply phase must be `code-review-phase-N`; do not use `apply` or the reviewRequestId. When `apply/currentPhase=N` and the parameter is omitted, gate automatically binds `code-review-phase-N`.
+Extract reviewRequestId from output (`checkpoint_request: {reviewRequestId}`). The `{checkpoint-id}` for the Apply phase must be `code-review-phase-N`; do not use `apply` or the reviewRequestId. When `apply/currentPhase=N` and the parameter is omitted, gate automatically binds `code-review-phase-N`.
 
 ### Step 3: Construct the Review Package
 
@@ -55,15 +55,15 @@ Review package = Inline Package + Delta Package + Source Manifest + Current Work
 
 #### 3a. Delta Package
 
-Construct from artifacts and `git diff` per the Delta Package rules. For round 2+, quickly index `reviews.jsonl` by `findingsSummary`, then read the full raw JSON from `reviews/<checkpoint>/round-<round>.json` using checkpoint + round.
+Construct from artifacts and `git diff` per the Delta Package rules. For round 2+, quickly index `reviews.jsonl` by `findingsSummary`, then read the full raw JSON from `reviews/{checkpoint}/round-{round}.json` using checkpoint + round.
 
 #### 3b. Design Sources (phase-scoped inline + full-source manifest; missing required → escalate_to_human)
 
 | File | design-review | plan-review | code-review | test-acceptance-review |
 |------|:--:|:--:|:--:|:--:|
-| `specs/<changeId>/spec.md` | required | required | required | required |
-| `specs/<changeId>/plan.md` | — | required | required | required |
-| `specs/<changeId>/tasks.md` | — | required | required | required |
+| `specs/{changeId}/spec.md` | required | required | required | required |
+| `specs/{changeId}/plan.md` | — | required | required | required |
+| `specs/{changeId}/tasks.md` | — | required | required | required |
 | `artifacts/decision-log.md` | **required** | **required** | optional | optional |
 | Extra design docs declared in tasks.md `design_docs` | if declared → required | if declared → required | if declared → required | if declared → required |
 
@@ -74,8 +74,8 @@ Construct from artifacts and `git diff` per the Delta Package rules. For round 2
 
 ```text
 ## Source Manifest
-- specs/<changeId>/{spec,plan,tasks}.md — full source, read on demand
-- <changed-file> — full source, read on demand; inline package contains diff/hunk context
+- specs/{changeId}/{spec,plan,tasks}.md — full source, read on demand
+- {changed-file} — full source, read on demand; inline package contains diff/hunk context
 ```
 
 #### 3b-1. Current Worktree Inventory (machine-generated, authoritative)
@@ -118,7 +118,7 @@ The reviewer runs inside the reviewer runtime and can read files itself. Standar
 
 #### 3d. Verifier Instructions (short entry point + path list)
 
-Extract the review kind prefix from `--checkpoint-id` (exact, e.g. `code-review-phase-5`) and select the corresponding verifier. All gate, journal, and raw JSON paths use the same exact `<checkpoint-id>`; do not abbreviate to the review kind:
+Extract the review kind prefix from `--checkpoint-id` (exact, e.g. `code-review-phase-5`) and select the corresponding verifier. All gate, journal, and raw JSON paths use the same exact `{checkpoint-id}`; do not abbreviate to the review kind:
 
 | checkpoint-id prefix | verifier prompt | verifier contract |
 |---|---|---|
@@ -129,7 +129,7 @@ Extract the review kind prefix from `--checkpoint-id` (exact, e.g. `code-review-
 | `intake-direction-review` | `verifiers/vibecoding/intake-direction-reviewer.md` | `verifiers/vibecoding/intake-reviewer-contract.md` |
 | `intake-detail-review` | `verifiers/vibecoding/intake-detail-reviewer.md` | `verifiers/vibecoding/intake-reviewer-contract.md` |
 
-The prompt inlines only the short entry point; the three full verifier files are listed in the Verifier Instruction Manifest: `verifiers/base-verifier.md`, `verifiers/vibecoding/<verifier-contract>`, `verifiers/vibecoding/<verifier-prompt>`. The short entry point must include: review kind, reviewRequestId, verdict schema output requirements, required skills, the rule that blocking findings may only come from contract rules, and the requirement to read the Required Read Set. If any verifier file is missing → `escalate_to_human`. Fall back to inlining all three originals only when the reviewer runtime cannot read repo files, and record a `fallbackCostNote`.
+The prompt inlines only the short entry point; the three full verifier files are listed in the Verifier Instruction Manifest: `verifiers/base-verifier.md`, `verifiers/vibecoding/{verifier-contract}`, `verifiers/vibecoding/{verifier-prompt}`. The short entry point must include: review kind, reviewRequestId, verdict schema output requirements, required skills, the rule that blocking findings may only come from contract rules, and the requirement to read the Required Read Set. If any verifier file is missing → `escalate_to_human`. Fall back to inlining all three originals only when the reviewer runtime cannot read repo files, and record a `fallbackCostNote`.
 
 #### 3e. Required Read Set (Final Verifier mandatory read set)
 
@@ -179,7 +179,7 @@ Execution entry point:
 ```bash
 bash packages/core/agenthub/harness/review-dispatch-adapter.sh exec \
   --prompt-file="$PROMPT_FILE" --result-file="$RESULT_FILE" \
-  --checkpoint-id="<checkpoint-id>" --round="<round>" \
+  --checkpoint-id="{checkpoint-id}" --round="{round}" \
   --role=reviewer \
   --delegated-precheck=required
 ```

@@ -11,13 +11,13 @@ Verify that all skills required by the current review checkpoint contract are av
 3. Treat workflow/stage mandatory skills as context only. Do not substitute stage-entry skills for reviewer checkpoint required skills.
 3. Check each required skill for availability following the real discovery contract (base-main.md rule 14):
    - **Priority A**: Is the skill available in the Skill tool list? → available
-   - **Priority B**: Is `packages/core/agenthub/skills/<name>/SKILL.md` present? → available_internal (AgentHub built-in)
+   - **Priority B**: Is `packages/core/agenthub/skills/{name}/SKILL.md` present? → available_internal (AgentHub built-in)
    - **Priority C**: Does the skill exist in the reviewer runtime skill directory? → available_runtime
    - If none of the above → missing
 4. For each unavailable skill, check the reason and impact.
 5. Record the status of each skill: available, available_internal, available_runtime, or missing.
 6. If only workflow/stage skills are visible and reviewer checkpoint skills are absent, flag `required_skill_source_ambiguous` instead of inventing a required-skill list.
-7. Output facts must include `authoritativeContract=<path>` and `required_skills=[...]`.
+7. Output facts must include `authoritativeContract={path}` and `required_skills=[...]`.
 8. For `plan-review`, the required skills are `speckit-analyze`, `plan-eng-review`, and `review`. If the slice suggests `plan-ceo-review` or `plan-design-review` for plan-review, treat that as a source-selection error and report risk.
 
 ## Accountability

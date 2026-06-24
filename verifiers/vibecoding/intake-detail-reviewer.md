@@ -137,34 +137,34 @@ Each finding must identify its dimension (see axis below) and specify the exact 
 
 ```json
 {
-  "reviewRequestId": "<passed in by 3rd-review>",
+  "reviewRequestId": "[passed in by 3rd-review]",
   "verdict": "pass | revise_required | escalate_to_human",
   "skillResults": [
     {
       "name": "review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier",
-      "evidence": "(1) <where executed: skill tool in this session | SKILL.md fallback: path>; (2) <specific check points: file path / dimension>; (3) <conclusion: what was found>"
+      "evidence": "(1) [where executed: skill tool in this session | SKILL.md fallback: path]; (2) [specific check points: file path / dimension]; (3) [conclusion: what was found]"
     },
     {
       "name": "plan-ceo-review",
       "status": "executed | unavailable | failed",
       "mode": "read-only verifier",
-      "evidence": "(1) <where executed>; (2) <specific check points: scope / ROI / timing>; (3) <conclusion>"
+      "evidence": "(1) [where executed]; (2) [specific check points: scope / ROI / timing]; (3) [conclusion]"
     }
   ],
   "findings": [
     {
       "severity": "blocking | important | minor",
       "axis": "Blindspot | Missing Scenario | Hidden Premise | Source Accuracy | Decision Consistency | Assumption Completeness | Verifiability | Open Issue | Drift | Scope Drift | Real Pain | Complexity ROI | Risk Scope | Timing",
-      "file": "<path>",
+      "file": "[path]",
       "line": 0,
-      "code": "<relevant source text>",
-      "issue": "<issue>",
-      "impact": "<impact>",
-      "recommendation": "<fix recommendation>",
-      "evidence": "<skill / source / command evidence>",
-      "requiredFix": "<required when blocking>"
+      "code": "[relevant source text]",
+      "issue": "[issue]",
+      "impact": "[impact]",
+      "recommendation": "[fix recommendation]",
+      "evidence": "[skill / source / command evidence]",
+      "requiredFix": "[required when blocking]"
     }
   ]
 }

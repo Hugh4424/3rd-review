@@ -79,7 +79,7 @@ A *different* engine does the review — OpenAI's `codex`, Google's `gemini`, or
 | `2` | 🙋 **Needs a human** — couldn't settle it (this is also what you get when fixes keep being needed and the rounds run out) |
 | other | ⚠️ Something errored |
 
-The full report — what was checked, what was found — lands at `./reviews/tasks/<id>/reviews/report.md`.
+The full report — what was checked, what was found — lands at `./reviews/tasks/{id}/reviews/report.md`.
 
 > Under the hood there's also a `1` ("needs fixes") verdict, but `standalone.sh` doesn't stop there: when the reviewer asks for fixes, it loops and re-reviews, and only stops — with exit `2` — once a human is genuinely needed (by default after 3 rounds without resolution).
 
@@ -142,7 +142,7 @@ This tool is the scar tissue from running a real AI dev pipeline. A few bruises 
 
 **The router is a pure function.** [`scripts/route-review.mjs`](./scripts/route-review.mjs) reads a single data table ([`config/route-rules.json`](./config/route-rules.json)) and decides the review tier from content type + scope + risk keywords. Same input, same output, no hidden state — that's why it's easy to test and trust.
 
-**The runner contract.** A review runner is called as `<runner> --prompt-file=… --result-file=… --review-request-id=…` and must write a JSON verdict to `--result-file`: at minimum `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces the presence** of three evidence fields — `reviewSnapshot[]`, `riskDisposition[]`, and `worktreeInventory` — and fails fast to escalation if any is missing. It checks they're present and well-formed, not whether the reviewer covered every risk correctly; and `riskDisposition` is never auto-filled (backfilling a judgement would be forgery). Full spec — including the standalone-vs-platform backfill rules — in [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md).
+**The runner contract.** A review runner is called as `{runner} --prompt-file=… --result-file=… --review-request-id=…` and must write a JSON verdict to `--result-file`: at minimum `{"verdict": "pass"|"revise_required"|"escalate_to_human", "findings": [...]}`. On a `pass`, standalone **enforces the presence** of three evidence fields — `reviewSnapshot[]`, `riskDisposition[]`, and `worktreeInventory` — and fails fast to escalation if any is missing. It checks they're present and well-formed, not whether the reviewer covered every risk correctly; and `riskDisposition` is never auto-filled (backfilling a judgement would be forgery). Full spec — including the standalone-vs-platform backfill rules — in [`references/pass-evidence-contract.md`](./references/pass-evidence-contract.md).
 
 **The four non-negotiable rails** (no tier can bypass them): ≥80% coverage of changed lines each round; high-risk dimensions always get full review; a reduced-scope review that fails any rail falls back to full scope immediately; and the final verdict must always come from an independent context.
 
