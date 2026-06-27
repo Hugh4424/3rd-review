@@ -794,6 +794,46 @@ test("T_DEGRADE_ROUND_FALLBACK_BASIS rounds missing the round field → basis us
   assert.match(d.basis || "", /rounds 1→2/, `basis must use 1-based consistent round numbers; got ${d.basis}`);
 });
 
+// ── T4-3 test-gap-fill: R6 route when no blocking findings (R2-baseline → R6) ──
+// applyPostRoundDegradation is single-step: it applies ONE tier of degradation
+// based on the last round's history. Sequential R1→R2→R6 is achieved by the
+// caller reapplying degradation across rounds. T_DEGRADE_001c already covers
+// R2→R6 from a manual R2 baseline; this test confirms the degradation applied
+// to an actual route-review R2 decision also reaches R6 with R2 as currentDecision.
+test("T4-3a no-blocking findings with R2-baseline decision → R6 (via routeReview, not manual)", () => {
+  const r2Decision = routeReview({ input: "```diff\n@@", diffLines: 500 }); // medium → R2
+  assert.strictEqual(r2Decision.level, R2, `precondition: medium diff baseline must be R2`);
+  const history = [{ round: 1, level: R2, findings: [{ severity: "minor" }] }];
+  const d = applyPostRoundDegradation(history, r2Decision);
+  assert.strictEqual(d.level, R6, `no-blocking findings from R2 baseline via routeReview must reach R6, got ${d.level}`);
+  assert.strictEqual(d.cleanContextRequired, true, `degraded to R6 must enforce clean context`);
+});
+
+// ── T4-3 test-gap-fill: R1 when multiple hard-guardrail blocking findings ──
+test("T4-3b multiple hard-guardrail blocking findings → keep R1", () => {
+  const history = [{ round: 1, level: R1, findings: [
+    { severity: "blocking", blockerClass: "output_contract" },
+    { severity: "blocking", blockerClass: "process_evidence" },
+  ] }];
+  const d = applyPostRoundDegradation(history, fullDecision());
+  assert.strictEqual(d.level, R1, `multiple hard-guardrail blockings must keep R1, got ${d.level}`);
+  assert.match(d.basis || "", /hard-guardrail/i, `basis must cite hard-guardrail, got ${d.basis}`);
+});
+
+// ── T4-3 test-gap-fill: unknown level → explicit error ──
+test("T4-3c unknown RouteDecision.level → explicit error (no silent fallback, FR-ROUTE-003/004)", () => {
+  const history = [{ round: 1, level: R1, findings: [{ severity: "minor" }] }];
+  let threw = false;
+  try {
+    applyPostRoundDegradation(history, { level: "bogus_level_xyz", basis: "test" });
+  } catch (e) {
+    threw = true;
+    assert.match(e.message, /unknown current level/i, `error message must identify the unknown level, got: ${e.message}`);
+    assert.match(e.message, /fail-fast|no silent fallback/i, `error message must cite fail-fast, got: ${e.message}`);
+  }
+  assert.ok(threw, "unknown level must throw, not silently fall back");
+});
+
 // ── T0-5 envOverride: explicit env bypasses filesystem detection ──
 // [FR-DECOUPLE-003]: routeReview must accept envOverride to allow
 // callers to set env without relying on .machine/source/state.json

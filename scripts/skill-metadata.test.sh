@@ -100,6 +100,21 @@ else
   echo "SKIP: standalone.sh executable check (global skill file missing)"
 fi
 
+# ── T4-1 must-keep-checklist.md assertions ──
+
+MKC="$SKILL_DIR/references/must-keep-checklist.md"
+if [ -f "$MKC" ]; then
+  # grep -c '^##': count the ## sections. If the output is exactly 4, we're green.
+  H2_COUNT=$(grep -c '^##' "$MKC" || echo 0)
+  if [ "$H2_COUNT" -eq 4 ]; then
+    pass "references/must-keep-checklist.md exists with exactly 4 '##' sections (T4-1 / FR-QUALITY-001)"
+  else
+    fail "references/must-keep-checklist.md has $H2_COUNT '##' sections, expected 4"
+  fi
+else
+  fail "references/must-keep-checklist.md not found at $MKC"
+fi
+
 # ── T3-4 AC-6 runtime smoke ──
 
 echo ""

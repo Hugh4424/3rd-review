@@ -325,11 +325,17 @@ function tierOrderOf(rules) {
     : null;
   return fromCfg && fromCfg.length ? fromCfg : [FULL_SCOPE_LEVEL, MID_LEVEL, DOWNGRADED_LEVEL];
 }
-// Return the level one step lighter than `level`; if already lightest (or unknown), stay.
+// Return the level one step lighter than `level`; if already lightest, stay.
+// Unknown (unrecognized) level → explicit error (fail-fast, FR-ROUTE-003/004).
 function downgradeOneTier(level, rules) {
   const order = tierOrderOf(rules);
   const i = order.indexOf(level);
-  if (i < 0) return DOWNGRADED_LEVEL; // unknown current level → conservative single-tier floor
+  if (i < 0) {
+    throw new Error(
+      `downgradeOneTier: unknown current level "${level}" — must be one of ` +
+        `${JSON.stringify(order)} (fail-fast, no silent fallback)`
+    );
+  }
   return i >= order.length - 1 ? order[i] : order[i + 1];
 }
 
