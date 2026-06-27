@@ -8,7 +8,7 @@
 // verdict, summary, precheckDecisionSource, routeLevel, and
 // findings[].severity/issue/recommendation.
 // Excludes (adapter-meta, non-semantic): _execNonce, _runtimeConfig,
-// subreviewerRuntimeReports, delegatedReviewBundle, worktreeInventory, riskDisposition.
+// subreviewerRuntimeReports, delegatedReviewBundle, worktreeInventory.
 
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -29,6 +29,7 @@ const SEMANTIC_KEYS = [
   // (source=route) to unlock the exemption with no hash change.
   "precheckDecisionSource",
   "routeLevel",
+  "riskDisposition",
 ];
 
 /** Keys inside each finding entry that contribute to the hash.

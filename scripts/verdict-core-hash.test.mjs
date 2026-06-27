@@ -231,14 +231,27 @@ test("worktreeInventory excluded from hash", () => {
   assert.strictEqual(runHash(base), runHash(withInventory));
 });
 
-test("riskDisposition excluded from hash", () => {
+test("riskDisposition included in hash — FR-QUALITY-002: drift detectable via verdictHash", () => {
   const base = { reviewRequestId: "req-1", verdict: "pass" };
   const withRisk = {
     reviewRequestId: "req-1",
     verdict: "pass",
     riskDisposition: [{ risk: "high" }],
   };
-  assert.strictEqual(runHash(base), runHash(withRisk));
+  assert.notStrictEqual(runHash(base), runHash(withRisk));
+});
+
+test("changing riskDisposition changes hash", () => {
+  const base = {
+    reviewRequestId: "req-1",
+    verdict: "pass",
+    riskDisposition: [{ risk: "high", decision: "not_blocking" }],
+  };
+  const altered = {
+    ...base,
+    riskDisposition: [{ risk: "high", decision: "blocking" }],
+  };
+  assert.notStrictEqual(runHash(base), runHash(altered));
 });
 
 test("output is 64-char hex (full sha256)", () => {

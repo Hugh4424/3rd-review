@@ -37,6 +37,7 @@ for arg in "$@"; do
     --task-name=*) TASK_NAME="${arg#*=}" ;;
     --review-runner=*) REVIEW_RUNNER="${arg#*=}" ;;
     --max-revise-rounds=*) MAX_REVISE_ROUNDS="${arg#*=}" ;;
+    --skip-manifest) SKIP_MANIFEST=1 ;;
     *) echo "ERROR: unknown argument: $arg" >&2; exit 3 ;;
   esac
 done
@@ -286,6 +287,73 @@ PY
   # 当前轮 verdict.json + report.md 作为最新结果的稳定别名
   cp "$FINAL_VERDICT_FILE" "$REVIEWS_DIR/verdict.json"
   cp "$REPORT_FILE" "$REVIEWS_DIR/report.md"
+
+  # ── FR-FORGE-001: Generate snapshot-manifest sidecar (content-binding hash) ──
+  if [ "${SKIP_MANIFEST:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
+    MANIFEST_SCRIPT="$SCRIPT_DIR/scripts/generate-snapshot-manifest.mjs"
+    if [ -f "$MANIFEST_SCRIPT" ]; then
+      # Resolve reviewed file paths against dirname(INPUT) first, then cwd fallback.
+      # reviewSnapshot[].path values are relative to the input file's directory, not cwd.
+      INPUT_DIR="$(dirname "$INPUT_FILE")"
+
+      # Collect reviewed file paths from reviewSnapshot[].path and findings[].file.
+      # B3: Use bash array to avoid word-splitting on paths with spaces.
+      # Only pass --file= args for paths that actually exist on disk.
+      MANIFEST_FILE_ARGS=()
+      DROPPED_PATHS=""
+      while IFS= read -r -d '' f; do
+        case "$f" in
+          /*)
+            f_abs="$f"
+            if [ -f "$f_abs" ]; then
+              MANIFEST_FILE_ARGS+=("--file=$f_abs")
+            else
+              DROPPED_PATHS="$DROPPED_PATHS $f"
+            fi
+            ;;
+          *)
+            f_candidate="$INPUT_DIR/$f"
+            if [ ! -f "$f_candidate" ]; then
+              f_candidate="$(pwd)/$f"
+            fi
+            if [ -f "$f_candidate" ]; then
+              MANIFEST_FILE_ARGS+=("--file=$f_candidate")
+            else
+              DROPPED_PATHS="$DROPPED_PATHS $f"
+            fi
+            ;;
+        esac
+      done < <(python3 -c "
+import json, sys
+v = json.load(open('$REVIEWS_DIR/verdict.json'))
+rs = v.get('reviewSnapshot') or []
+paths = [e.get('path','') for e in rs if isinstance(e, dict)]
+findings = v.get('findings') or []
+finding_paths = [f.get('file','') for f in findings if isinstance(f, dict) and f.get('file')]
+all_paths = sorted(set(paths + finding_paths))
+for p in all_paths:
+    sys.stdout.write(p + '\0')
+" 2>/dev/null)
+
+      # Always call generator — even with empty file list — to bind the verdict (B1).
+      # B3: array elements are quoted individually, no word-splitting.
+      # Manifest failure is OBSERVABLE but NON-BLOCKING: warn to stderr, never escalate.
+      set +e
+      if [ "${#MANIFEST_FILE_ARGS[@]}" -gt 0 ]; then
+        node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" "${MANIFEST_FILE_ARGS[@]}" --repo-root="$INPUT_DIR"
+      else
+        node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" --repo-root="$INPUT_DIR"
+      fi
+      MANIFEST_RC=$?
+      set -e
+      if [ "$MANIFEST_RC" -ne 0 ]; then
+        echo "warning: snapshot-manifest generation failed (rc=$MANIFEST_RC) — verdict unaffected" >&2
+      fi
+      if [ -n "$DROPPED_PATHS" ]; then
+        echo "warning: snapshot-manifest: unresolvable reviewed paths (no file on disk):$DROPPED_PATHS" >&2
+      fi
+    fi
+  fi
 
   if [ "$VERDICT_VAL" = "revise_required" ]; then
     if [ "$ROUND" -ge "$MAX_REVISE_ROUNDS" ]; then
