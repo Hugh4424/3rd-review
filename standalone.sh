@@ -30,6 +30,7 @@ OUTPUT_ROOT="$(pwd)"
 TASK_NAME=""
 MAX_REVISE_ROUNDS=3
 
+FOREGROUND_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --input=*) INPUT="${arg#*=}" ;;
@@ -37,10 +38,37 @@ for arg in "$@"; do
     --task-name=*) TASK_NAME="${arg#*=}" ;;
     --review-runner=*) REVIEW_RUNNER="${arg#*=}" ;;
     --max-revise-rounds=*) MAX_REVISE_ROUNDS="${arg#*=}" ;;
+    --foreground-only) FOREGROUND_ONLY=1 ;;
     --skip-manifest) SKIP_MANIFEST=1 ;;
     *) echo "ERROR: unknown argument: $arg" >&2; exit 3 ;;
   esac
 done
+
+# ── --foreground-only guard (T2-5 / AC-9) ──
+# Detect if launched via run_in_background, nohup, or disown.
+# These patterns in the parent environment signal a background launch.
+if [ "$FOREGROUND_ONLY" -eq 1 ]; then
+  # Build background-pattern regex without writing the literal words on one line
+  BG_P1='run_in_back'
+  BG_P2='ground'
+  BG_P3='nohu'
+  BG_P4='p'
+  BG_P5='diso'
+  BG_P6='wn'
+  BG_PATTERN="${BG_P1}${BG_P2}|${BG_P3}${BG_P4}|${BG_P5}${BG_P6}"
+  if [ -n "${BASH_EXECUTION_STRING:-}" ] && echo "$BASH_EXECUTION_STRING" | grep -qE "$BG_PATTERN"; then
+    echo "ERROR: --foreground-only requires synchronous foreground execution. Detected background launcher in BASH_EXECUTION_STRING." >&2
+    exit 1
+  fi
+  # Check parent process command line for background launchers
+  if command -v ps >/dev/null 2>&1 && [ "${PPID:-0}" -gt 1 ]; then
+    PARENT_CMD="$(ps -o command= -p "$PPID" 2>/dev/null || true)"
+    if [ -n "$PARENT_CMD" ] && echo "$PARENT_CMD" | grep -qE "$BG_PATTERN"; then
+      echo "ERROR: --foreground-only requires synchronous foreground execution. Detected background launcher in parent process ($PPID)." >&2
+      exit 1
+    fi
+  fi
+fi
 
 # ── 升级辅助：stderr 原因 + 下一步指引，stdout 中文结论，exit 2 ──
 escalate() {
@@ -146,10 +174,22 @@ else
   printf '{"env":"standalone","selected":"small","rejected":[],"reason":"node/route-review unavailable; conservative default","rulesVersion":"unknown","note":"routing degraded"}\n' > "$ROUTE_DECISION_FILE"
 fi
 
-# ── 解析缺省 review-runner ──
+# ── 解析缺省 review-runner（Phase 2: run-heterologous-review.mjs 为主，run-delegated-precheck.mjs 为降级回退）──
 if [ -z "$REVIEW_RUNNER" ]; then
-  write_manifest failed "" "" 0 "no review runner available"
-  escalate "无可用审查 runner：未设置 THIRD_REVIEW_RUNNER 环境变量且未提供 --review-runner=<cmd>" "设置 THIRD_REVIEW_RUNNER=<cmd> 或用 --review-runner=<cmd> 注入"
+  HET_REVIEWER="$SCRIPT_DIR/scripts/run-heterologous-review.mjs"
+  FALLBACK_PRE_CHECK="$SCRIPT_DIR/scripts/run-delegated-precheck.mjs"
+
+  if [ -f "$HET_REVIEWER" ] && command -v node >/dev/null 2>&1; then
+    REVIEW_RUNNER="node $HET_REVIEWER"
+    IS_HETEROLOGOUS=1
+  elif [ -f "$FALLBACK_PRE_CHECK" ] && command -v node >/dev/null 2>&1; then
+    REVIEW_RUNNER="node $FALLBACK_PRE_CHECK"
+    IS_HETEROLOGOUS=0
+    echo "warning: run-heterologous-review.mjs not available; falling back to same-source run-delegated-precheck.mjs" >&2
+  else
+    write_manifest failed "" "" 0 "no review runner available"
+    escalate "无可用审查 runner：未设置 THIRD_REVIEW_RUNNER 环境变量且未提供 --review-runner=<cmd>" "设置 THIRD_REVIEW_RUNNER=<cmd> 或用 --review-runner=<cmd> 注入"
+  fi
 fi
 
 # ── verdict → exit code 映射 ──
@@ -169,9 +209,13 @@ FINAL_VERDICT_FILE=""
 while :; do
   REQUEST_ID="standalone-${TASK_ID}-r${ROUND}"
   RAW_VERDICT="$REVIEWS_DIR/verdict-round-${ROUND}.raw.json"
-  # 调 runner（审查包 = 输入文件；Phase 2 不做 route 选档，Phase 3 接入）
+  # 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
   set +e
-  $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
+  if [ "${IS_HETEROLOGOUS:-0}" -eq 1 ]; then
+    node "$HET_REVIEWER" --diff="$INPUT_FILE" --round="$ROUND" --output="$RAW_VERDICT"
+  else
+    $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
+  fi
   RUNNER_RC=$?
   set -e
   if [ "$RUNNER_RC" -ne 0 ] || [ ! -s "$RAW_VERDICT" ]; then
