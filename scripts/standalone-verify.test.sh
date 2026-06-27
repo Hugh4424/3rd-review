@@ -163,8 +163,49 @@ cmd_run() {
   echo "PASS: all $EXPECTED_CASE_COUNT cases match the five-tuple quality baseline over the standalone path"
 }
 
+# ── T0-1 decouple check: npm test output must NOT contain AGENTHUB paths ──
+# [FR-DECOUPLE-001/004]: standalone verify must confirm no agenthub monorepo leakage
+cmd_decouple() {
+  local tmp_out
+  tmp_out="$(mktemp)"
+  echo "=== standalone-verify --decouple (AGENTHUB-free check) ==="
+  cd "$SKILL_DIR"
+  npm run test:core > "$tmp_out" 2>&1; local rc=$?
+  cat "$tmp_out"
+  if grep -qi AGENTHUB "$tmp_out"; then
+    echo "FAIL: AGENTHUB reference found in test:core output" >&2
+    rm -f "$tmp_out"
+    exit 1
+  fi
+  rm -f "$tmp_out"
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: test:core exit code=$rc" >&2
+    exit 1
+  fi
+  echo "PASS: no AGENTHUB references in test:core output"
+}
+
+# ── T0-3 runtime-config decouple check: HOME=/tmp/clean must not resolve .agenthub ──
+# [FR-DECOUPLE-002]: resolve-review-runtime-config.mjs must NOT fall back to ~/.agenthub
+cmd_runtime_config() {
+  echo "=== standalone-verify --runtime-config (no ~/.agenthub paths) ==="
+  local out
+  out="$(HOME=/tmp/clean node "$SCRIPT_DIR/resolve-review-runtime-config.mjs" 2>&1)"
+  if [ $? -ne 0 ]; then
+    echo "FAIL: resolve-review-runtime-config.mjs threw error" >&2
+    exit 1
+  fi
+  if echo "$out" | grep -q '\.agenthub'; then
+    echo "FAIL: .agenthub path found in runtime config output" >&2
+    exit 1
+  fi
+  echo "PASS: no .agenthub paths in runtime config resolution"
+}
+
 case "${1:---run}" in
   --list) cmd_list ;;
   --run) cmd_run ;;
-  *) echo "Usage: $(basename "$0") [--list|--run]" >&2; exit 1 ;;
+  --decouple) cmd_decouple ;;
+  --runtime-config) cmd_runtime_config ;;
+  *) echo "Usage: $(basename "$0") [--list|--run|--decouple|--runtime-config]" >&2; exit 1 ;;
 esac

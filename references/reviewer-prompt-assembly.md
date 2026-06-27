@@ -19,7 +19,7 @@ Assemble the prompt: Verifier Instructions (short entry point + path list) + Run
 Before writing to `PROMPT_FILE`, you must resolve the runtime configuration for this round and append the JSON summary to the prompt. Resolution priority:
 
 1. Adapter explicit parameters: `--model` / `--effort` / `--config-file`
-2. User config: `$AGENTHUB_REVIEW_DISPATCH_CONFIG` or `~/.agenthub/review-dispatch-config.json`
+2. User config: `$AGENTHUB_REVIEW_DISPATCH_CONFIG` (compat seam) or `~/.config/3rd-review/review-dispatch-config.json`
 3. Repo temporary default config: `packages/core/agenthub/config/review-dispatch-default.json` (agenthub platform path; not in the standalone repo)
 
 Resolution command:

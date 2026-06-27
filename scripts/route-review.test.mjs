@@ -43,7 +43,7 @@ test("env=standalone when no task-dir", () => {
   const d = routeReview({ input: "hello", taskDir: null, diffLines: 0 });
   assert.equal(d.env, "standalone");
 });
-test("env=agenthub when task-dir has state", () => {
+test("env=detected when task-dir has state", () => {
   const d = routeReview({ input: "hello", taskDir: "/x", hasState: true, diffLines: 0 });
   assert.equal(d.env, "agenthub");
 });
@@ -792,6 +792,18 @@ test("T_DEGRADE_ROUND_FALLBACK_BASIS rounds missing the round field → basis us
   assert.strictEqual(d.escalate, true, `repeated blocking must escalate even without round fields; got escalate=${d.escalate}`);
   assert.ok(!/\?/.test(d.basis || ""), `basis must not contain '?' fallback; got ${d.basis}`);
   assert.match(d.basis || "", /rounds 1→2/, `basis must use 1-based consistent round numbers; got ${d.basis}`);
+});
+
+// ── T0-5 envOverride: explicit env bypasses filesystem detection ──
+// [FR-DECOUPLE-003]: routeReview must accept envOverride to allow
+// callers to set env without relying on .machine/source/state.json
+test("T0-5 envOverride forces env without reading filesystem state", () => {
+  const d = routeReview({ input: "hello", diffLines: 0, envOverride: "workflowhub" });
+  assert.equal(d.env, "workflowhub", `envOverride must set env, got ${d.env}`);
+  // Must be a valid RouteDecision with required fields
+  assert.ok("contentType" in d, "must have contentType");
+  assert.ok("scope" in d, "must have scope");
+  assert.ok("level" in d, "must have level");
 });
 
 console.log(`\nroute-review.test: ${pass} passed, ${fail} failed`);

@@ -9,4 +9,4 @@ The reviewer_output gate cross-checks review execution evidence against the revi
 - **Path 1+2 (codex / claude, registered verifiers)**: verification failure is a non-blocking diagnostic (`console.warn`; workflow continues).
 - **Path 3 (unknown provider, no registered verifier)**: `exit 2` fail-closed is retained — this is a genuine config error, not a tamper-proofing gap.
 
-The only genuine machine-enforced tamper-proof mechanism is the AJV schema (constraint 3). See the tamper-proof disclaimer section and `workflow-gate.ts:2937` (agenthub platform path; not in the standalone repo).
+The only genuine machine-enforced tamper-proof mechanism is the AJV schema (constraint 3). drift detection 见 scripts/verify-snapshot-manifest.mjs；见 FR-FORGE-001。

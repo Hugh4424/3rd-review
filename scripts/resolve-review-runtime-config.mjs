@@ -4,9 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const USER_CONFIG = path.join(os.homedir(), ".agenthub", "review-dispatch-config.json");
-const AGENTHUB_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
-const REPO_DEFAULT_CONFIG = path.join(AGENTHUB_ROOT, "config", "review-dispatch-default.json");
+const USER_CONFIG = process.env.REVIEW_DISPATCH_CONFIG || path.join(os.homedir(), ".config", "3rd-review", "review-dispatch-config.json");
+const REPO_DEFAULT_CONFIG = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "config", "review-dispatch-default.json");
 
 function argValue(name) {
   const prefix = `--${name}=`;

@@ -154,9 +154,9 @@ function detectLevel(contentType, scope, envProbe) {
   };
 }
 
-export function routeReview({ input = "", taskDir = null, hasState = undefined, diffLines = 0, providers = [], envProbe = undefined, fast = false, phaseType = undefined } = {}) {
+export function routeReview({ input = "", taskDir = null, hasState = undefined, diffLines = 0, providers = [], envProbe = undefined, fast = false, phaseType = undefined, envOverride = undefined } = {}) {
   const rules = loadRules();
-  const env = detectEnv({ taskDir, hasState });
+  const env = envOverride ?? detectEnv({ taskDir, hasState });
 
   // phaseType explicit marker: when passed, short-circuit content inference and route directly.
   // This avoids re-analyzing the diff and lets the caller declare the type authoritatively.

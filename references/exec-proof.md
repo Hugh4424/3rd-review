@@ -8,14 +8,9 @@ The three layers below are mechanisms for detecting the trustworthiness of an ex
 
 **Bypass event (2026-06-12)**: the orchestrator (main agent skill) manually authored a review JSON and used `--delegated-precheck=off` to skip the execution-layer validation. This bypass injected 5 `BYPASS` entries into workflow-issues.jsonl (issue-id: bypass-exec-nonce-phase6c-1~5). Neither the gate layer nor the persist layer detected it.
 
-**1. `_execNonce` + `reviewRecordHash` dual-field mechanism (added in Phase 6c, machine-enforced at the gate layer)**
+**1. Exec integrity (content-hash manifest)**
 
-`adapter review exec` populates `_execNonce` (random 16-byte hex) in the result-file on output, and simultaneously writes the nonce + reviewRecordHash (SHA256 of the core review fields, computed by `scripts/verdict-core-hash.mjs`) into the `.machine/source/.exec-nonces.jsonl` ledger. The gate layer (`validateExecProvenance` in `workflow-gate.ts`) performs NOT-gate validation at two points:
-
-- **reviewer_output gate** (first pass, `consumeNonce=false`): checks that the report has `_execNonce`, that the ledger can match it, and that the hash is consistent. Missing or mismatched → `exit 2` BLOCKED.
-- **post_review_pass gate** (before advancing after pass, `consumeNonce=true`): reloads round-N.json → repeats the above validation + marks the nonce as consumed (`.exec-nonces-consumed.jsonl`). Duplicate nonce consumption → `exit 2` BLOCKED (replay detection).
-
-`intake-text reviewMode` is exempt (missing `_execNonce` does not block).
+exec integrity 现由 content-hash manifest 提供（见 scripts/generate-snapshot-manifest.mjs）。审查产物的完整性由内容哈希清单保证，而非 nonce-chain 机制。
 
 **2. The only legitimate input at the gate layer is `adapter review` (the atomic exec+persist chain)**
 

@@ -17,19 +17,17 @@
 #   - stdout 中文结论（FR-GUARD-006），stderr 升级原因+下一步指引
 #
 # review-runner 契约：standalone 调用 <runner> --prompt-file=<审查包> --result-file=<out> --review-request-id=<id>
-#   runner 写出符合 verdict.schema.json 的 JSON 到 --result-file。缺省 runner 走 review-dispatch-adapter.sh exec（真实 provider）。
+#   runner 写出符合 verdict.schema.json 的 JSON 到 --result-file。runner 通过 THIRD_REVIEW_RUNNER 环境变量或 --review-runner=<cmd> 注入。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$SCRIPT_DIR"
-# repo root：skills/3rd-review/ 上溯 3 层到 agenthub，再上溯到仓库根（仅用于定位缺省 adapter；standalone 不依赖在 repo 内运行）
-AGENTHUB_DIR="$(cd "$SKILL_DIR/../.." && pwd)"
-DEFAULT_ADAPTER="$AGENTHUB_DIR/harness/review-dispatch-adapter.sh"
+
+REVIEW_RUNNER="${THIRD_REVIEW_RUNNER:-}"
 
 INPUT=""
 OUTPUT_ROOT="$(pwd)"
 TASK_NAME=""
-REVIEW_RUNNER=""
 MAX_REVISE_ROUNDS=3
 
 for arg in "$@"; do
@@ -149,12 +147,8 @@ fi
 
 # ── 解析缺省 review-runner ──
 if [ -z "$REVIEW_RUNNER" ]; then
-  if [ -x "$DEFAULT_ADAPTER" ] || [ -f "$DEFAULT_ADAPTER" ]; then
-    REVIEW_RUNNER="bash $DEFAULT_ADAPTER exec"
-  else
-    write_manifest failed "" "" 0 "no review runner available"
-    escalate "无可用审查 runner（缺省 adapter 不存在且未提供 --review-runner）" "安装审查员运行时或用 --review-runner=<cmd> 注入"
-  fi
+  write_manifest failed "" "" 0 "no review runner available"
+  escalate "无可用审查 runner：未设置 THIRD_REVIEW_RUNNER 环境变量且未提供 --review-runner=<cmd>" "设置 THIRD_REVIEW_RUNNER=<cmd> 或用 --review-runner=<cmd> 注入"
 fi
 
 # ── verdict → exit code 映射 ──

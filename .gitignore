@@ -6,3 +6,4 @@ node_modules/
 *.draft
 *.bak
 *.tmp
+.omc/
