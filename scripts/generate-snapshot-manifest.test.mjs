@@ -256,6 +256,59 @@ test("empty reviewedFiles → files is empty array", () => {
   }
 });
 
+// ── FR-FORGE-001 R2: verdictFile === reviewedFile (same absolute path) ──
+// Regression: commonAncestorDir over FULL FILE paths (not dirname) returns the file
+// itself as root → both paths become "" → verifier treats manifest as malformed.
+// Fix must compute common ancestor from DIRECTORY paths.
+
+test("FR-FORGE-001 R2: verdictFile === reviewed file (same abs path) → non-empty clean relative paths", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gsm-samefile-"));
+  try {
+    const verdictFile = join(dir, "verdict.json");
+    const content = JSON.stringify({ verdict: "pass", summary: "self-review" });
+    writeFileSync(verdictFile, content);
+
+    // Deliberately: the verdict IS the reviewed file — same absolute path
+    const manifest = generateManifest({
+      verdictFile,
+      reviewedFiles: [verdictFile],
+      repoRoot: dir,
+    });
+
+    const expectedHash = sha256(content);
+
+    // verdict_binding.verdict_file must be non-empty and clean (just the basename here)
+    assert.ok(typeof manifest.verdict_binding.verdict_file === "string", "verdict_file must be a string");
+    assert.ok(manifest.verdict_binding.verdict_file.length > 0, "verdict_file must be non-empty");
+    assert.ok(!manifest.verdict_binding.verdict_file.includes(".."), "verdict_file must not contain '..'");
+    assert.ok(!manifest.verdict_binding.verdict_file.startsWith("/"), "verdict_file must be relative");
+
+    // files[0] path must be clean relative and non-empty
+    assert.strictEqual(manifest.files.length, 1, "must have 1 file entry");
+    const entry = manifest.files[0];
+    assert.ok(entry.path.length > 0, "files[0].path must be non-empty");
+    assert.ok(!entry.path.includes(".."), "files[0].path must not contain '..'");
+    assert.ok(!entry.path.startsWith("/"), "files[0].path must be relative");
+
+    // Hash correctness
+    assert.strictEqual(entry.hash, expectedHash, "file hash must match");
+    assert.strictEqual(manifest.verdict_binding.hash, expectedHash, "verdict_binding.hash must match");
+
+    // Verify round-trip: manifest on disk is well-shaped and verifiable
+    const manifestPath = verdictFile + ".snapshot-manifest";
+    assert.ok(existsSync(manifestPath), "manifest must exist on disk");
+
+    // Verify the written manifest passes shape validation (no empty-string paths)
+    const written = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    assert.strictEqual(written.manifest_version, "1");
+    assert.ok(Array.isArray(written.files));
+    assert.ok(written.files.length > 0, "written files must be non-empty");
+    assert.ok(written.files[0].path.length > 0, "written files[0].path must be non-empty");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── B3 (Round 2): Space-in-path test ──
 
 test("B3: file path with space → correctly hashed (no split/ENOENT)", () => {

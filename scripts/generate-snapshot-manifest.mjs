@@ -10,14 +10,36 @@
 
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 /**
- * Normalize a file path to repo-root-relative, unix slashes, no leading slash.
+ * Compute the longest common filesystem ancestor of a list of absolute paths.
+ * Returns the common directory path (no trailing slash).  Floor at "/".
+ * At least two paths required; returns "/" when paths share only the root.
  */
-function normalizePath(filePath, repoRoot) {
+function commonAncestorDir(absPaths) {
+  if (absPaths.length < 2) return dirname(absPaths[0] || "/");
+  const parts = absPaths.map((p) => p.split("/"));
+  let commonLen = 0;
+  const minLen = Math.min(...parts.map((p) => p.length));
+  for (let i = 0; i < minLen; i++) {
+    const seg = parts[0][i];
+    if (parts.every((p) => p[i] === seg)) commonLen = i + 1;
+    else break;
+  }
+  // commonLen === 0 means "/" (absolute paths always share root empty prefix + first seg)
+  // Actually split("/foo/bar") → ["", "foo", "bar"] so seg at 0 is "" for all.
+  // commonLen will be at least 1 (the shared "").  If only "" is shared, return "/".
+  if (commonLen <= 1) return "/";
+  return parts[0].slice(0, commonLen).join("/");
+}
+
+/**
+ * Normalize a file path to root-relative, unix slashes, no leading slash.
+ */
+function normalizePath(filePath, root) {
   const absFile = resolve(filePath);
-  const absRoot = resolve(repoRoot);
+  const absRoot = root;
   let rel = relative(absRoot, absFile);
   if (sep !== "/") rel = rel.replaceAll(sep, "/");
   return rel;
@@ -33,15 +55,22 @@ function sha256(content) {
  * @param {{ verdictFile: string, reviewedFiles: string[], repoRoot: string }} params
  * @returns {object} the manifest object (also written to <verdictFile>.snapshot-manifest)
  */
-export function generateManifest({ verdictFile, reviewedFiles, repoRoot }) {
+export function generateManifest({ verdictFile, reviewedFiles, repoRoot: _callerRepoRoot }) {
+  // Compute effective root from DIRECTORY paths (not full file paths).
+  // Using dirname() prevents the bug where a file path itself becomes the
+  // common ancestor when verdictFile and a reviewed file are the same path,
+  // which would produce empty stored paths → manifest treated as malformed.
+  const absDirs = [dirname(resolve(verdictFile)), ...(reviewedFiles || []).map((f) => dirname(resolve(f)))];
+  const effectiveRoot = absDirs.length > 0 ? commonAncestorDir(absDirs) : dirname(resolve(verdictFile));
+
   const verdictContent = readFileSync(verdictFile, "utf-8");
-  const verdictRel = normalizePath(verdictFile, repoRoot);
+  const verdictRel = normalizePath(verdictFile, effectiveRoot);
   const verdictHash = sha256(verdictContent);
 
   const files = (reviewedFiles || []).map((f) => {
     const content = readFileSync(f);
     return {
-      path: normalizePath(f, repoRoot),
+      path: normalizePath(f, effectiveRoot),
       hash: sha256(content),
     };
   });

@@ -17,8 +17,8 @@
 // Never throws. Never produces non-zero exit code for drift.
 // Exit code 0 always — drift is informational, not blocking.
 
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 function sha256(content) {
@@ -26,6 +26,43 @@ function sha256(content) {
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Check whether absPath ends with relativePath on segment boundaries.
+ * e.g. "/a/b/abc/verdict.json" endsWith "bc/verdict.json" via String.endsWith
+ * BUT the segment boundary is at "/abc/" not "/bc/" — this rejects that false match.
+ * Also rejects leading ".." in relativePath and absolute relativePath.
+ */
+function isSegmentAnchored(absPath, relativePath) {
+  // Must be a relative descendant (no leading .., not absolute)
+  if (relativePath.startsWith(".." + sep) || relativePath.startsWith("/")) return false;
+  if (relativePath === "..") return false;
+
+  // Segment-wise suffix check: split both into path segments.
+  // The last N segments of absPath must exactly match all segments of relativePath.
+  const absSegs = absPath.split(sep);
+  const relSegs = relativePath.split(sep);
+  if (absSegs.length < relSegs.length) return false;
+  for (let i = 0; i < relSegs.length; i++) {
+    if (absSegs[absSegs.length - relSegs.length + i] !== relSegs[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Validate that a stored manifest path is a clean relative descendant
+ * (no leading "..", no internal ".." segments, not absolute).
+ */
+function isCleanDescendant(p) {
+  if (!p || typeof p !== "string") return false;
+  if (p.startsWith("/")) return false;
+  if (p.startsWith(".." + sep) || p === "..") return false;
+  // R3: Reject ANY path that contains a ".." segment (not just leading).
+  // join(repoRoot, "safe/../../evil") normalizes traversal above repoRoot.
+  // Manifest paths are always stored with "/" separators.
+  if (p.split("/").some(seg => seg === "..")) return false;
+  return true;
+}
 
 /**
  * Validate manifest object shape before any hash comparison.
@@ -115,42 +152,109 @@ export function verifyManifest({ verdictFile }) {
     };
   }
 
-  // Check verdict file hash against manifest.verdict_binding.hash
-  try {
-    const verdictContent = readFileSync(verdictFile, "utf-8");
-    const currentVerdictHash = sha256(verdictContent);
-    if (manifest.verdict_binding.hash !== currentVerdictHash) {
+  // Derive repo root via MANDATORY segment-wise anchoring.
+  // Use resolve(verdictFile) to get the canonical absolute path, then
+  // verify the manifest's verdict_file suffix-matches on segment boundaries.
+  // If anchoring fails (leading .., absolute, cross-segment false match),
+  // treat the manifest as unanchorable → drift.
+  // NEVER fall back to process.cwd().
+  const absVerdict = resolve(verdictFile);
+  let repoRoot = null; // null = not yet derived, "" = anchored at root
+
+  const verdictRel = manifest.verdict_binding.verdict_file;
+  if (isSegmentAnchored(absVerdict, verdictRel)) {
+    repoRoot = absVerdict.slice(0, absVerdict.length - (sep + verdictRel).length);
+    // When sliced to "" (root filesystem case), use "/" so join() produces absolute paths
+    if (repoRoot === "") repoRoot = "/";
+  }
+
+  // If verdict_file cannot be segment-wise anchored, mark the whole manifest
+  // as drift — NO cwd fallback.
+  if (repoRoot === null) {
+    file_status = "drift";
+    // Push all file paths as drifted since we cannot resolve them safely
+    for (const entry of (Array.isArray(manifest.files) ? manifest.files : [])) {
+      drifted_files.push(entry.path);
+    }
+  } else {
+    // R4: realpath repoRoot so symlink-based escape is blocked.
+    // Both sides must be realpath-resolved consistently to avoid false-drift
+    // from canonicalization differences (e.g. macOS /tmp vs /private/tmp).
+    let realRepoRoot;
+    try {
+      realRepoRoot = realpathSync(repoRoot);
+    } catch {
+      // Cannot realpath the anchored root — treat as unanchorable drift condition.
+      // Never throw (FR-FORGE-003).
+      file_status = "drift";
+      for (const entry of (Array.isArray(manifest.files) ? manifest.files : [])) {
+        drifted_files.push(entry.path);
+      }
+      return { file_status, verdict_status, drifted_files, verdict_drift };
+    }
+
+    // R5: Symmetric realpath containment for the VERDICT FILE itself.
+    // Before trusting the verdict content for hash comparison, realpath the
+    // verdictFile and verify the real path is UNDER realRepoRoot. If it
+    // symlink-escapes to outside repoRoot, treat as verdict drift (do NOT
+    // return ok). Same treatment as files[] entries in R4.
+    try {
+      const realVerdict = realpathSync(verdictFile);
+      const realRootWithSep = realRepoRoot.endsWith(sep) ? realRepoRoot : realRepoRoot + sep;
+      if (!realVerdict.startsWith(realRootWithSep) && realVerdict !== realRepoRoot) {
+        // Verdict file real path is outside repoRoot → verdict drift
+        verdict_status = "drift";
+        verdict_drift = true;
+      } else {
+        // Verdict file is within repoRoot — now safe to read and hash-compare
+        const verdictContent = readFileSync(verdictFile, "utf-8");
+        const currentVerdictHash = sha256(verdictContent);
+        if (manifest.verdict_binding.hash !== currentVerdictHash) {
+          verdict_status = "drift";
+          verdict_drift = true;
+        }
+      }
+    } catch {
+      // Verdict file unreadable or realpath failed → drift, never throw
       verdict_status = "drift";
       verdict_drift = true;
     }
-  } catch {
-    // If verdict file is unreadable after manifest was written, that's a drift condition
-    verdict_status = "drift";
-    verdict_drift = true;
-  }
 
-  // Derive repo root: verdictFile absolute path minus its relative path from manifest
-  let repoRoot = "";
-  if (manifest.verdict_binding && manifest.verdict_binding.verdict_file) {
-    const verdictRel = manifest.verdict_binding.verdict_file;
-    const absVerdict = verdictFile;
-    if (absVerdict.endsWith(verdictRel)) {
-      repoRoot = absVerdict.slice(0, absVerdict.length - verdictRel.length);
-    }
-  }
-
-  // Check each reviewed file hash
-  if (Array.isArray(manifest.files)) {
-    for (const entry of manifest.files) {
-      try {
-        const absPath = repoRoot ? join(repoRoot, entry.path) : entry.path;
-        const currentHash = sha256(readFileSync(absPath));
-        if (currentHash !== entry.hash) {
+    // Check each reviewed file hash
+    if (Array.isArray(manifest.files)) {
+      for (const entry of manifest.files) {
+        // Validate entry.path is a clean relative descendant
+        if (!isCleanDescendant(entry.path)) {
+          drifted_files.push(entry.path);
+          continue;
+        }
+        try {
+          const absPath = join(repoRoot, entry.path);
+          // R4: realpath the absPath to expand symlinks before bounds check.
+          // realpathSync throws on broken symlink / ENOENT → treat as drift.
+          let realAbsPath;
+          try {
+            realAbsPath = realpathSync(absPath);
+          } catch {
+            // Broken symlink, missing file — drift, never throw
+            drifted_files.push(entry.path);
+            continue;
+          }
+          // Defense-in-depth: verify realpath-resolved path is still under
+          // the realpath-resolved repoRoot.
+          const realRootWithSep = realRepoRoot.endsWith(sep) ? realRepoRoot : realRepoRoot + sep;
+          if (!realAbsPath.startsWith(realRootWithSep) && realAbsPath !== realRepoRoot) {
+            drifted_files.push(entry.path);
+            continue;
+          }
+          const currentHash = sha256(readFileSync(absPath));
+          if (currentHash !== entry.hash) {
+            drifted_files.push(entry.path);
+          }
+        } catch {
+          // File gone → drift
           drifted_files.push(entry.path);
         }
-      } catch {
-        // File gone → drift
-        drifted_files.push(entry.path);
       }
     }
   }
