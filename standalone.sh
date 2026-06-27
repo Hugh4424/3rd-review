@@ -258,11 +258,13 @@ print(' '.join(missing))
 
   FINAL_VERDICT_FILE="$REVIEWS_DIR/verdict-round-${ROUND}.json"
   REPORT_FILE="$REVIEWS_DIR/report-round-${ROUND}.md"
-  python3 - "$RAW_VERDICT" "$FINAL_VERDICT_FILE" "$TASK_ID" "$ROUND" "$REPORT_FILE" "$REVIEWS_DIR" <<'PY'
+  python3 - "$RAW_VERDICT" "$FINAL_VERDICT_FILE" "$TASK_ID" "$ROUND" "$REPORT_FILE" "$REVIEWS_DIR" "${SKIP_MANIFEST:-0}" <<'PY'
 import json, sys, os
-raw, out, task, rnd, report_file, reviews_dir = sys.argv[1:7]
+raw, out, task, rnd, report_file, reviews_dir, skip_manifest = sys.argv[1:8]
 v = json.load(open(raw))
 v["provenance"] = "single-context"   # FR-GUARD-003 / RD-3
+if skip_manifest == "1":
+    v["anti-forgery"] = "lightweight (no-manifest)"   # FR-FORGE-002
 report_rel = os.path.relpath(report_file, os.path.dirname(reviews_dir))
 v["reportPath"] = report_rel
 json.dump(v, open(out, "w"), ensure_ascii=False, indent=2)
