@@ -328,23 +328,50 @@ const VALID_VERDICTS = new Set(["pass", "revise_required", "escalate_to_human"])
  * double-quoted strings and backslash escapes.  Returns an array of substring
  * spans `{start, end}` (end is exclusive index of the closing `}`).
  *
- * We walk the input character-by-character so we correctly handle nested braces
- * inside string values (including arrays/objects in findings), and do NOT
- * mistake an opening `{` inside a string for the start of a new candidate.
+ * State-machine design (OUTSIDE / INSIDE):
+ * - OUTSIDE: no object is open.  Ignore EVERY char except `{`.  A `}`, `"`,
+ *   or `\` in noise text does nothing — depth can never go negative.  When we
+ *   see `{`, we start a candidate: capture startIdx, set depth=1, enter INSIDE.
+ * - INSIDE (depth >= 1): track strings properly so embedded braces / quotes
+ *   inside string values don't corrupt bookkeeping.
+ *   * Not-in-string: `"` → enter string; `{` → depth++; `}` → depth-- and if
+ *     depth reaches 0 close the candidate (record span, go OUTSIDE).
+ *   * In-string: only `\` (escape — skip the next char) and an unescaped `"`
+ *     (exits string) matter; all other chars (including `{` `}`) are literal.
+ * - A truncated trailing object (open `{` before end-of-input without a
+ *   matching close) is simply not recorded — correct, incomplete = no verdict.
+ *
+ * This is a standard balanced-delimiter scan.  The OUTSIDE/INSIDE split
+ * guarantees depth never goes negative, so stray `}` in provider log noise
+ * cannot corrupt the bookkeeping.
  */
 function findTopLevelJsonSpans(text) {
   const spans = [];
+  let state = "OUTSIDE";
+  let start = -1;
+  let depth = 0;
   let inString = false;
   let escape = false;
-  let depth = 0;
-  let start = -1;
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
 
+    if (state === "OUTSIDE") {
+      // Outside any object: ignore everything except an opening brace.
+      // Stray }, ", \ are noise — do nothing.
+      if (ch === "{") {
+        start = i;
+        depth = 1;
+        inString = false;
+        escape = false;
+        state = "INSIDE";
+      }
+      continue;
+    }
+
+    // ── INSIDE ──
     if (escape) {
-      // The previous char was backslash — this char is escaped in-string.
-      // Only relevant inside strings; outside strings it's harmless.
+      // Previous char was backslash — skip this char, it's escaped.
       escape = false;
       continue;
     }
@@ -354,25 +381,40 @@ function findTopLevelJsonSpans(text) {
       continue;
     }
 
-    if (ch === '"') {
-      inString = !inString;
+    if (inString) {
+      // Inside a string: only an unescaped " (which we already handled via
+      // escape check above) matters.  {, }, \ outside escape context are just
+      // string content.
+      if (ch === '"') inString = false;
       continue;
     }
 
-    if (inString) continue;
+    // Not in a string, inside an object
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
 
     if (ch === "{") {
-      if (depth === 0) start = i;
       depth++;
-    } else if (ch === "}") {
+      continue;
+    }
+
+    if (ch === "}") {
       depth--;
-      if (depth === 0 && start >= 0) {
+      if (depth === 0) {
         spans.push({ start, end: i + 1 });
+        state = "OUTSIDE";
         start = -1;
       }
+      // depth can never go below 0: we only decrement while INSIDE,
+      // and INSIDE is only entered when depth is set to exactly 1.
+      continue;
     }
   }
 
+  // Trailing open object (state===INSIDE && depth>0 at end of input):
+  // not recorded — incomplete, not a valid verdict.
   return spans;
 }
 
@@ -731,10 +773,15 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
     };
-	    // Diff here IS readable (the file exists) — the degraded path is about
-    // having no heterologous provider, not about the diff being bad.
-    // Keep running the threat auditor on the good file.
-    verdict.threatAuditor = runThreatAuditor(diffFile);
+    // Validate diff readability before running auditor, consistent with the
+    // unreadable-diff branch. Only run the auditor when there is a readable
+    // diff to audit; otherwise record ran:false with an unreadable reason.
+    try {
+      fs.readFileSync(diffFile, "utf8"); // validates readability
+      verdict.threatAuditor = runThreatAuditor(diffFile);
+    } catch {
+      verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (degraded path)" };
+    }
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }

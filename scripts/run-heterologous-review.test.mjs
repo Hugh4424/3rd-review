@@ -451,6 +451,76 @@ test("MIX-STDOUT(e): verdict field with bogus enum value → escalate_to_human",
 });
 
 // ═══════════════════════════════════════════════════════════════
+// SCANNER-STATE-MACHINE: findTopLevelJsonSpans rewrite — RED tests
+// ═══════════════════════════════════════════════════════════════
+// Root cause: old scanner tracked depth + inString but responded to
+// braces/quotes BEFORE any JSON candidate opened. Stray `}` in provider
+// log noise drove depth negative → real verdict `{...}` never recorded.
+// Stray `"` toggled inString before candidate started → real braces
+// inside-string → ignored. RED tests verify OUTSIDE/INSIDE fix.
+
+// (a) stray `}` BEFORE the real object — must find the verdict despite
+// negative-depth corruption in the old scanner.
+test("SCANNER(a): stray }} before real pass verdict → returns pass (depth never negative)", () => {
+  const noise = [
+    "noise }} stray",
+    '{"verdict":"pass","findings":[],"resolutionSummary":"ok","reviewSnapshot":{"path":"d","round":1,"truncated":false}}',
+  ].join("\n");
+
+  const result = buildVerdictFromStdout(noise, "codex", "/tmp/diff.md", 1);
+  assert.equal(result.verdict, "pass",
+    `expected pass but got ${result.verdict} (error: ${result.error || "none"})`);
+  assert.ok(Array.isArray(result.findings), "findings must be an array");
+});
+
+// (b) stray `"` in log noise before the object — old scanner would toggle
+// inString=true and treat the real verdict's `{` as inside-string → ignored.
+test("SCANNER(b): stray unclosed quote in noise before revise_required with nested findings → returns revise_required, findings intact", () => {
+  const noise = [
+    'log "unterminated quote here',
+    '{"verdict":"revise_required","findings":[{"severity":"high","file":"x","line":1,"issue":"y","recommendation":"fix"}],"resolutionSummary":"needs work","reviewSnapshot":{"path":"d","round":1,"truncated":false}}',
+  ].join("\n");
+
+  const result = buildVerdictFromStdout(noise, "codex", "/tmp/diff.md", 1);
+  assert.equal(result.verdict, "revise_required",
+    `expected revise_required but got ${result.verdict} (error: ${result.error || "none"})`);
+  assert.ok(Array.isArray(result.findings), "findings must be an array");
+  assert.equal(result.findings.length, 1, "should have 1 finding");
+  assert.equal(result.findings[0].severity, "high", "finding severity intact");
+  assert.equal(result.findings[0].file, "x", "finding file intact");
+});
+
+// (c) braces and quotes INSIDE a string VALUE must not affect depth tracking.
+// e.g. resolutionSummary contains `{x}` and escaped `\"`.
+test("SCANNER(c): string value containing braces {x} and escaped quote \\\" → parsed correctly", () => {
+  // Use noise prefix to force mixed-output scanner path (not the fast path)
+  const noise = [
+    "OpenAI Codex v0.135.0",
+    '{"verdict":"pass","resolutionSummary":"use {x} and \\"y\\"","findings":[],"reviewSnapshot":{"path":"d","round":1,"truncated":false}}',
+  ].join("\n");
+
+  const result = buildVerdictFromStdout(noise, "codex", "/tmp/diff.md", 1);
+  assert.equal(result.verdict, "pass",
+    `expected pass but got ${result.verdict} (error: ${result.error || "none"})`);
+  assert.equal(result.resolutionSummary, 'use {x} and "y"',
+    `resolutionSummary must survive brace/quote inside string, got: ${result.resolutionSummary}`);
+});
+
+// (d) NEGATIVE: pure noise with stray braces/quotes, no valid verdict JSON → escalate (B2 preserved)
+test("SCANNER(d): pure noise with stray { } and \" chars, no verdict JSON → escalate_to_human", () => {
+  const noise = [
+    "random { stray } text with \"quotes\" here",
+    "more noise }} ]",
+    "no real JSON object with a verdict field",
+  ].join("\n");
+
+  const result = buildVerdictFromStdout(noise, "codex", "/tmp/diff.md", 1);
+  assert.equal(result.verdict, "escalate_to_human",
+    `expected escalate_to_human but got ${result.verdict}`);
+  assert.ok(result.error, "must have error field explaining escalation");
+});
+
+// ═══════════════════════════════════════════════════════════════
 // ARTIFACT-HEADER-SELF-MATCH: resolveOmcArtifactContent line-anchored extraction
 // ═══════════════════════════════════════════════════════════════
 // RED: The omc advisor artifact ECHOES the full review input (the diff) inside
@@ -695,6 +765,30 @@ test("AC-7 SKIP: runThreatAuditor where auditor returns skip → ran:false, skip
 // Regression: degraded same-source with a REAL non-empty diff that the auditor
 // CAN audit → ran:true. The auditor must have real auditor files present to
 // produce a genuine audit (not a skip or missing-file error).
+// AC-7 THREAT-AUDITOR ORDERING: degraded-same-source path currently calls
+// runThreatAuditor(diffFile) BEFORE checking whether the diff is readable.
+// This is inconsistent with the unreadable-diff branch which deliberately
+// skips the auditor. Fix: degraded path must validate diff readability first.
+test("AC-7 ORDERING: degraded-same-source with UNREADABLE diff → ran:false, error 'unreadable'", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-ord-"));
+  const diffFile = path.join(tmpDir, "nonexistent-diff.md");
+  const outputFile = path.join(tmpDir, "verdict.json");
+
+  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+
+  const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
+  assert.equal(verdict.verdict, "escalate_to_human",
+    `expected escalate_to_human, got ${verdict.verdict}`);
+  assert.ok(verdict.threatAuditor, "verdict must have threatAuditor field");
+  assert.strictEqual(verdict.threatAuditor.ran, false,
+    `threatAuditor.ran must be false for unreadable diff in degraded path, got ran=${verdict.threatAuditor.ran}`);
+  assert.ok(verdict.threatAuditor.error, "threatAuditor error must describe why auditor was not run");
+  assert.ok(verdict.threatAuditor.error.includes("unreadable"),
+    `error must indicate diff unreadable, got: ${verdict.threatAuditor.error}`);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test("AC-7 REGRESSION: degraded same-source with real auditable diff → ran:true", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-reg-"));
   const diffFile = path.join(tmpDir, "diff.md");
