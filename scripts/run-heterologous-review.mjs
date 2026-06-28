@@ -729,7 +729,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
 function isMain() {
   if (!process.argv[1]) return false;
   try {
-    return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }

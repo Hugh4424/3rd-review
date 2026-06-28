@@ -8,9 +8,10 @@
 // Usage (CLI):
 //   node generate-snapshot-manifest.mjs --verdict=<path> --file=<path> [--file=<path>...] [--repo-root=<dir>]
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Compute the longest common filesystem ancestor of a list of absolute paths.
@@ -115,8 +116,15 @@ function parseCliArgs() {
   return { verdict, files, repoRoot };
 }
 
-const isMain = process.argv[1] && import.meta.url === new URL(process.argv[1], "file://").href;
-if (isMain) {
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+if (isMain()) {
   const { verdict, files, repoRoot } = parseCliArgs();
   if (!verdict) {
     console.error("usage: generate-snapshot-manifest.mjs --verdict=<path> --file=<path> [--file=<path>...] [--repo-root=<dir>]");

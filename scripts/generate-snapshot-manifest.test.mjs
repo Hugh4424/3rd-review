@@ -14,6 +14,8 @@ import { generateManifest } from "./generate-snapshot-manifest.mjs";
 import assert from "node:assert";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync } from "node:fs";
 import { join, sep, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 
@@ -368,6 +370,24 @@ test("B1/B3: empty reviewedFiles → manifest still generated with verdict bindi
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── REGRESSION: isMain() safe import with nonexistent argv[1] — no ENOENT crash ──
+// RED before fix: realpathSync(resolve(process.argv[1])) threw ENOENT at module top-level, crashing import.
+// GREEN after fix: isMain() is a guarded function with try/catch + argv check.
+test("isMain() safe import with nonexistent argv[1] — no ENOENT crash", () => {
+  const scriptPath = fileURLToPath(new URL("./generate-snapshot-manifest.mjs", import.meta.url));
+  const result = execFileSync(
+    process.execPath,
+    ["-e",
+     `process.argv[1]='/nonexistent/generate-snapshot-manifest-import-test.mjs';` +
+     `import('${scriptPath}')` +
+     `.then(()=>console.log('IMPORT_OK')).catch(e=>{console.error('IMPORT_FAIL');process.exit(1)})`
+    ],
+    { encoding: "utf8" }
+  ).trim();
+  assert.strictEqual(result, "IMPORT_OK",
+    `import must succeed even with nonexistent argv[1]; got ${result}`);
 });
 
 // ── Summary ──

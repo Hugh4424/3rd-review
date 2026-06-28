@@ -444,6 +444,42 @@ test("AC-7 NEGATIVE: runThreatAuditor with bogus auditorPath → ran:false (not 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+// ── AC-5: isMain() symlink-portability — CLI invoked through symlink path ──
+// RED: isMain() with plain path.resolve() returns false when invoked through a
+// symlink (macOS /tmp->/private/tmp, symlinked checkout), the CLI block never
+// runs, and the process silently exits.  Regression test for the same-class bug
+// that was fixed in route-review.mjs R3 (fs.realpathSync).
+test("AC-5-symlink: CLI --env-strip-check through symlinked path — isMain() must detect symlinked argv[1]", () => {
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "ac5-sym-"));
+  const symlinkPath = path.join(tmpBase, "3rd-review-link");
+  const projectRoot = path.resolve(__dirname, "..");
+
+  // Symlink the project root so relative imports (../subreviewers, ../config) still resolve.
+  fs.symlinkSync(projectRoot, symlinkPath);
+
+  try {
+    const scriptViaSymlink = path.join(symlinkPath, "scripts", "run-heterologous-review.mjs");
+    // Small diff for --env-strip-check (doesn't need a real diff, but the CLI
+    // arg parser expects --diff=; the --env-strip-check branch is hit before
+    // any diff is read, but we pass a placeholder to keep the parser happy).
+    const result = spawnSync(process.execPath, [scriptViaSymlink, "--env-strip-check"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    // isMain() must detect itself through the symlink and run the CLI block.
+    // The CLI block writes JSON to stdout and exits 0.
+    assert.equal(result.status, 0, `CLI through symlink must exit 0, got ${result.status}. stderr: ${result.stderr?.slice(0, 200) || "(none)"}`);
+    const stdout = (result.stdout || "").trim();
+    assert.ok(stdout.length > 0, "CLI through symlink must produce stdout (isMain() returned false if empty)");
+    // Verify it's valid JSON (child env dump).
+    const childEnv = JSON.parse(stdout);
+    assert.equal(typeof childEnv, "object", "stdout must be valid JSON (child env)");
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // Results
 // ═══════════════════════════════════════════════════════════════
