@@ -86,15 +86,16 @@ else
   fail "global skill file missing standalone.sh reference"
 fi
 
-# 9. The referenced standalone.sh path is executable
+# 9. standalone.sh is executable (resolve via realpath to handle symlinks)
 if [ -f "$GLOBAL_SKILL" ]; then
-  STANDALONE_PATH="$(grep -oE '/[^ ]+/standalone\.sh' "$GLOBAL_SKILL" | head -1)"
-  if [ -n "$STANDALONE_PATH" ] && [ -x "$STANDALONE_PATH" ]; then
-    pass "standalone.sh at referenced path is executable"
-  elif [ -n "$STANDALONE_PATH" ]; then
+  STANDALONE_DIR="$(dirname "$(realpath "$GLOBAL_SKILL")")"
+  STANDALONE_PATH="$STANDALONE_DIR/standalone.sh"
+  if [ -x "$STANDALONE_PATH" ]; then
+    pass "standalone.sh at '$STANDALONE_PATH' is executable"
+  elif [ -f "$STANDALONE_PATH" ]; then
     fail "standalone.sh at '$STANDALONE_PATH' exists but is NOT executable"
   else
-    fail "could not extract standalone.sh path from global skill file"
+    fail "standalone.sh not found at '$STANDALONE_PATH'"
   fi
 else
   echo "SKIP: standalone.sh executable check (global skill file missing)"

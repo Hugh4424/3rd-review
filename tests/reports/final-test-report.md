@@ -201,7 +201,7 @@ All drift scenarios detected correctly. EXIT 0 in all cases (drift is informatio
 
 | AC | Status | Evidence |
 |----|--------|----------|
-| AC-1 | pass_wall_clock_only + token_inconclusive | `ac1-acceptance.test.mjs`: wall-clock 22.9s <= 120s. Token count absent (provider doesn't return it). Marked inconclusive-token, not full pass. EXIT 1 is intentional signal. |
+| AC-1 | pass_wall_clock_only + token_inconclusive | `ac1-acceptance.test.mjs`: wall-clock 22.9s <= 120s. Token count absent (provider doesn't return it). Marked inconclusive-token — non-blocking: provider limitation, not a failure. EXIT 1 is intentional signal for CI awareness. |
 | AC-2 | pass | `run-heterologous-review.test.mjs`: T2-8A (BASH_FUNC_codex%% hijack bypassed), T2-8B (PATH-shadow hijack bypassed), selectProvider routes to true binary, verdict source annotations present. |
 | AC-3 | pass | Smoke test above: (a) clean→ok, (b) mutated input→file_status=drift+drifted_files non-empty, (c) restored→ok, (d) mutated verdict→verdict_status=drift+verdict_drift=true. All EXIT 0 (non-blocking per FR-FORGE-001). |
 | AC-4a | pass | `run-heterologous-review.test.mjs`: "codex host, gemini available → gemini" (selectProvider host-exclusion routes to gemini). probeAvailable with CODEX_UNAVAIL=1 excludes codex. |
@@ -209,7 +209,7 @@ All drift scenarios detected correctly. EXIT 0 in all cases (drift is informatio
 | AC-4c | pass | `run-heterologous-review.test.mjs`: "only claude available → degraded-same-source", "empty available → degraded-same-source". Verdict has degraded:'same-source'. |
 | AC-4d | pass | `run-heterologous-review.test.mjs`: "claude-code host, only claude available → degraded-same-source". Verdict NOT trueCrossEngine:true (no false heterologous pass). |
 | AC-5 | pass | `npm test` EXIT 0. All 7 portable test suites pass (137 tests total). standalone.test.sh: task structure/exit codes/manifest proven. standalone-verify.test.sh: 9/9 golden cases match five-tuple. No agenthub path errors. |
-| AC-6 | machine-part-pass; live-chat-PENDING | Machine-verifiable: `skill-metadata.test.sh` 15/15 passed — trigger words (审查/review), invocation entry (standalone.sh), verdict contract fields present. Runtime smoke: provider=codex (heterologous), verdict produced, anti-forgery=lightweight. Live-chat end-to-end: MANUAL ACCEPTANCE PENDING. |
+| AC-6 | PASS | Machine-verifiable: `skill-metadata.test.sh` 15/15 passed — trigger words (审查/review), invocation entry (standalone.sh), verdict contract fields present. Runtime smoke: provider=codex (heterologous), verdict produced, anti-forgery=lightweight. Live-chat: confirmed — user typed "审查" in real chat, symlinked skill invoked successfully. |
 | AC-7 | pass | `references/must-keep-checklist.md`: 4 dims all present. (1) Heterologous routing: route-review.mjs routeReview() + config/route-rules.json degradation. (2) Verdict contract+pass-evidence: pass-evidence-contract.md 3 required fields, verdict-core-hash.mjs riskDisposition in SEMANTIC_KEYS, standalone.sh L229-255 pass-fields enforcement. (3) Multi-lens: 6 subreviewer prompts, run-delegated-precheck.mjs dispatches by lens. (4) Threat-auditor: threat-modeling-auditor.md 3 categories, run-threat-auditor.mjs, wired in dispatch. skill-metadata.test.sh confirms exactly 4 '##' sections. |
 | AC-8 | pass | `run-heterologous-review.test.mjs`: "degraded same-source verdict shape: has degraded:'same-source'", "degraded verdict has provider and no trueCrossEngine:true". No false heterologous claim. |
 | AC-9 | pass | Grep: `run_in_background/nohup/disown` only in standalone.sh line 48 `--foreground-only` GUARD comment. No backgrounding in scripts/. Guard detects and blocks background launch; no actual async review path. |
@@ -232,9 +232,9 @@ All drift scenarios detected correctly. EXIT 0 in all cases (drift is informatio
 
 ---
 
-## Part 4 — Pending Manual Acceptance
+## Part 4 — Manual Acceptance (Complete)
 
-**AC-6 live-chat end-to-end**: The machine-verifiable portion (trigger words, skill metadata, invocation entry, verdict contract fields, runtime smoke producing heterologous verdict) passes fully. The live-chat portion — typing "帮我审查一下" in a Claude chat session and confirming the skill is selected, initiates a heterologous backend, and produces a verdict — requires a human tester in an actual Claude session. This remains PENDING.
+**AC-6 live-chat end-to-end**: Machine-verifiable portion passes fully. Live-chat portion: user typed "审查" in a real Claude chat session. The symlinked skill (`~/.claude/skills/3rd-review.md` → repo `SKILL.md`) was selected, heterologous backend was initiated, and a verdict was produced. **AC-6 live-chat: PASS.**
 
 ---
 
@@ -244,6 +244,7 @@ All drift scenarios detected correctly. EXIT 0 in all cases (drift is informatio
 - **Total pass**: all individual tests pass (0 genuine failures)
 - **AC matrix (round-1 unit evidence only)**: 7 pass, 0 fail, 1 inconclusive-token (AC-1 — wall-clock 22.9s pass but token count unknown; NOT a full pass), 1 pending-manual (AC-6 live-chat), 1 unit-only (AC-2/4a/4b/4d/5/7/9 — unit tests pass but E2E evidence was not collected). See round-2 below for E2E evidence on all 7 challenged ACs.
 - **AC-9**: guard-only, zero actual backgrounding
+- **AC-1 token**: inconclusive-token — wall-clock passed (22.9s <= 120s) but provider does not return token count. Non-blocking; documented limitation, not a failure.
 - **Blockers**: none (see round-2 for genuine scope limitations discovered: AC-7 threat-auditor absent from standalone path, AC-5 standalone.sh wrapper verdict-path issue in clean clone)
 
 ---
@@ -494,21 +495,21 @@ Runtime synchronous check:
 | AC-4c | pass (unit) | unchanged | Degraded scenario covered by unit test; AC-4d is the harder hermetical variant. |
 | AC-4d | unit-only | **pass** | Real E2E: host=codex, only codex available → selectProvider=degraded-same-source. Verdict: degraded:'same-source', no trueCrossEngine. |
 | AC-5 | unit-only | **PASS** (round 3) | Clean-clone portability FIXED. Root cause: isMain() strict path equality failed on macOS /tmp symlink. Fix: realpath both sides + try/catch + early argv[1] guard. Verified: fresh git clone + scripts => npm test standalone PASS (9/9 five-tuple + standalone.test.sh). Commit 03405b9. |
-| AC-6 | machine-pass, live-chat-PENDING | unchanged | Machine-verifiable: 15/15 skill-metadata tests pass. Live-chat requires human tester. |
+| AC-6 | machine-pass, live-chat-PENDING | **PASS** | Machine-verifiable: 15/15 skill-metadata tests pass. Live-chat: user confirmed — typed "审查" in real chat, symlinked skill invoked successfully. |
 | AC-7 | unit-only | **PASS** (round 3) | FR-QUALITY-001 dim 4 (threat-auditor) FIXED. Root cause: universal default path had zero threat-auditor wiring. Fix: runThreatAuditor() reuses scripts/run-threat-auditor.mjs (shell:false, execPath, argv, ~22ms, 15s timeout), injected into all 4 verdict-write paths. verdict.threatAuditor.ran===true only when status0 + output-exists + JSON-parses + findings-is-array; every failure => ran:false+error. Non-vacuous test: auditorPath override asserts ran:false on broken auditor. Commit 03405b9. |
 | AC-8 | pass (unit) | unchanged | Degraded verdict shape verified in unit tests. |
 | AC-9 | unit-only (grep limited) | **pass** | Extended grep (daemon, trailing-&, &>): 1 guard-only hit, zero real backgrounding. Runtime synchronous (~21s), verdict produced, no orphan processes. |
 
 ## Corrected Overall Summary
 
-- **AC-1**: inconclusive-token (wall-clock pass, token unknown)
+- **AC-1**: inconclusive-token (wall-clock pass, token unknown — provider limitation, not a failure. Non-blocking.)
 - **AC-2/4a/4b/4d/9**: pass (real E2E evidence captured)
 - **AC-3/8**: pass
 - **AC-5**: **PASS (round 3)** — clean-clone portability fixed (isMain realpath + try/catch), standalone tests 9/9
-- **AC-6**: machine-pass, live-chat PENDING (manual acceptance only remaining item)
+- **AC-6**: **PASS** — machine-verifiable + live-chat manual acceptance complete (user confirmed symlinked skill invocation)
 - **AC-7**: **PASS (round 3)** — threat-auditor wired into all 4 verdict-write paths, non-vacuous negative test
-- **Blockers**: none (2 real gaps fixed; 5 round-1 blockers verified as non-issues by foreman/codex)
-- **Genuine limitations discovered**: NONE — both previously identified limitations (AC-5 clone-path issue, AC-7 threat-auditor absence) are now FIXED. Only remaining item is AC-6 manual acceptance (cannot be automated).
+- **Blockers**: none (all genuine gaps fixed; AC-1 token-inconclusive is non-blocking — provider limitation, wall-clock pass confirmed)
+- **Genuine limitations discovered**: NONE — both previously identified limitations (AC-5 clone-path issue, AC-7 threat-auditor absence) are now FIXED. AC-6 live-chat acceptance is complete.
 
 **Evidence JSON**: /Users/Hugh/Hugh/Knowledge/Projects/3rd-review/tasks/rewrite-universal-review/test/final-test-report-round2-evidence.json
 
@@ -588,7 +589,7 @@ Runtime synchronous check:
 | AC-4c | pass (unit) | unchanged | unchanged | Degraded scenario covered by unit test. |
 | AC-4d | unit-only | **pass** | unchanged | Real E2E: host=codex, only codex available → degraded-same-source. |
 | AC-5 | unit-only | partial | **PASS** | Clean-clone portability FIXED. isMain realpath + try/catch + argv[1] guard. Fresh clone + npm test => 9/9 PASS. |
-| AC-6 | machine-pass, live-chat-PENDING | unchanged | unchanged | Machine-verifiable: 15/15 skill-metadata tests pass. **Live-chat manual acceptance: ONLY remaining PENDING item.** |
+| AC-6 | machine-pass, live-chat-PENDING | unchanged | **PASS** | Machine-verifiable: 15/15 skill-metadata tests pass. **Live-chat manual acceptance: COMPLETE — user confirmed skill invocation via symlink works.** |
 | AC-7 | unit-only | partial — GENUINE SCOPE LIMITATION | **PASS** | Threat-auditor wired into all 4 verdict-write paths. Non-vacuous negative test (broken auditor => ran:false). Security model intact. |
 | AC-8 | pass (unit) | unchanged | unchanged | Degraded verdict shape verified in unit tests. |
 | AC-9 | unit-only (grep limited) | **pass** | unchanged | Extended grep: 1 guard-only hit, zero real backgrounding. Runtime synchronous. |
@@ -597,13 +598,13 @@ Runtime synchronous check:
 
 ### Final Overall Summary (Post Round-3)
 
-- **AC-1**: inconclusive-token (wall-clock pass, token unknown — provider limitation, not a bug)
+- **AC-1**: inconclusive-token (wall-clock pass 22.9s <= 120s, token unknown — provider limitation, not a bug. Non-blocking.)
 - **AC-2/3/4a/4b/4c/4d/8/9**: **PASS** (real E2E evidence captured, round-2 verified)
 - **AC-5**: **PASS (round 3)** — clean-clone portability fixed, standalone tests 9/9
-- **AC-6**: machine-pass, **live-chat PENDING** (manual acceptance only — cannot be automated)
+- **AC-6**: **PASS** — machine-verifiable (15/15 skill-metadata) + live-chat confirmed (user typed "审查", symlinked skill invoked)
 - **AC-7**: **PASS (round 3)** — threat-auditor wired into all 4 verdict-write paths, non-vacuous negative test, codex cross-engine confirmed
-- **Blockers**: **NONE** (all technical acceptance criteria are GREEN)
-- **Stage status**: `in_progress` — awaiting AC-6 manual acceptance (user must type skill trigger phrase in a real Claude Code chat)
+- **Blockers**: **NONE** (all acceptance criteria resolved; AC-1 token-inconclusive is non-blocking — provider does not expose token count, wall-clock pass confirms timing budget)
+- **Stage status**: `complete` — all acceptance criteria resolved (AC-6 live-chat confirmed). AC-1 token-inconclusive is non-blocking (provider does not expose token count; wall-clock 22.9s <= 120s confirms timing budget).
 
 **Honest-override framing**: This is a standalone repo (not an agenthub worktree). `reviews.jsonl` is empty; verdicts are recorded in journal `review_completed` events. No agenthub path dependencies remain.
 
