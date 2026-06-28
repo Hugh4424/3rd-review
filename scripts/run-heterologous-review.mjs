@@ -321,16 +321,122 @@ function truncateDiff(content, budget) {
  * Parse provider output into a verdict object.
  * Tries JSON first, falls back to text-based verdict extraction.
  */
-function buildVerdictFromStdout(stdout, provider, diffFile, round) {
+const VALID_VERDICTS = new Set(["pass", "revise_required", "escalate_to_human"]);
+
+/**
+ * Scan mixed text for balanced top-level `{...}` JSON candidates, respecting
+ * double-quoted strings and backslash escapes.  Returns an array of substring
+ * spans `{start, end}` (end is exclusive index of the closing `}`).
+ *
+ * We walk the input character-by-character so we correctly handle nested braces
+ * inside string values (including arrays/objects in findings), and do NOT
+ * mistake an opening `{` inside a string for the start of a new candidate.
+ */
+function findTopLevelJsonSpans(text) {
+  const spans = [];
+  let inString = false;
+  let escape = false;
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escape) {
+      // The previous char was backslash — this char is escaped in-string.
+      // Only relevant inside strings; outside strings it's harmless.
+      escape = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      if (inString) escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        spans.push({ start, end: i + 1 });
+        start = -1;
+      }
+    }
+  }
+
+  return spans;
+}
+
+/**
+ * Walk candidate JSON spans, parse each, and return the LAST one that:
+ *  - parses as valid JSON
+ *  - is an object
+ *  - has a string `verdict` field with one of pass|revise_required|escalate_to_human
+ */
+function extractVerdictJson(text, spans) {
+  // Scan backwards — the provider's real answer is typically last
+  for (let idx = spans.length - 1; idx >= 0; idx--) {
+    const { start, end } = spans[idx];
+    let candidate;
+    try {
+      candidate = JSON.parse(text.slice(start, end));
+    } catch {
+      continue;
+    }
+    if (
+      candidate !== null &&
+      typeof candidate === "object" &&
+      !Array.isArray(candidate) &&
+      typeof candidate.verdict === "string" &&
+      VALID_VERDICTS.has(candidate.verdict)
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse provider output into a verdict object.
+ * Tries JSON first, falls back to text-based verdict extraction.
+ *
+ * B2: ONLY valid JSON with a recognized verdict enum is accepted.
+ * Non-JSON / empty / garbage / missing-verdict / bogus-enum output is NEVER a pass.
+ */
+export function buildVerdictFromStdout(stdout, provider, diffFile, round) {
   const text = (stdout || "").trim();
 
-  // ONLY valid JSON is accepted as a real verdict.
-  // Non-JSON / empty / garbage output is NEVER a pass (B2).
+  // Fast path: clean JSON output (majority of well-behaved providers)
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      typeof parsed.verdict === "string" &&
+      VALID_VERDICTS.has(parsed.verdict)
+    ) {
+      return parsed;
+    }
+    // Falls through — non-object, array, missing/invalid verdict → escalate
   } catch {
-    // Not JSON — escalate, do NOT guess "pass"
+    // Not clean JSON — scan for JSON objects in mixed output
   }
+
+  // Mixed-output extraction: find balanced `{...}` spans and pick the last
+  // valid verdict-bearing one (providers emit the final answer last).
+  const spans = findTopLevelJsonSpans(text);
+  const extracted = extractVerdictJson(text, spans);
+  if (extracted) return extracted;
 
   return {
     verdict: "escalate_to_human",
@@ -351,11 +457,14 @@ function buildVerdictFromStdout(stdout, provider, diffFile, round) {
 
 /**
  * Try to extract token usage from the provider response.
+ * Uses the same mixed-output extraction logic as buildVerdictFromStdout.
  */
-function extractTokenUsage(stdout) {
+export function extractTokenUsage(stdout) {
+  const text = (stdout || "").trim();
+
+  // Fast path: clean JSON
   try {
-    const parsed = JSON.parse(stdout.trim());
-    // Check common token usage field paths
+    const parsed = JSON.parse(text);
     if (parsed.usage?.total_tokens) return { total: parsed.usage.total_tokens };
     if (parsed.tokenUsage?.total) return { total: parsed.tokenUsage.total };
     if (parsed.reviewSnapshot?.tokenUsage?.total) {
@@ -363,8 +472,20 @@ function extractTokenUsage(stdout) {
     }
     return { total: null };
   } catch {
-    return { total: null };
+    // Fall through to mixed-output extraction
   }
+
+  // Scan for the verdict JSON in mixed output (same extraction)
+  const spans = findTopLevelJsonSpans(text);
+  const extracted = extractVerdictJson(text, spans);
+  if (extracted) {
+    if (extracted.usage?.total_tokens) return { total: extracted.usage.total_tokens };
+    if (extracted.tokenUsage?.total) return { total: extracted.tokenUsage.total };
+    if (extracted.reviewSnapshot?.tokenUsage?.total) {
+      return { total: extracted.reviewSnapshot.tokenUsage.total };
+    }
+  }
+  return { total: null };
 }
 
 /**
@@ -417,6 +538,69 @@ function runViaOmcAdvisor(advisorPath, provider, prompt, env) {
   };
 }
 
+/**
+ * The omc advisor writes its output to a .md artifact file and prints the
+ * artifact path to stdout.  Extract the raw provider text from that file
+ * (## Raw output section, inside ```text ... ``` fence), or return stdout
+ * as-is if it does not look like an artifact path.
+ */
+export function resolveOmcArtifactContent(stdout) {
+  const trimmed = (stdout || "").trim();
+  // If stdout is valid JSON (direct provider output), return as-is
+  try { JSON.parse(trimmed); return trimmed; } catch { /* not JSON — check artifact */ }
+
+  // If stdout is a single .md file path that exists, extract Raw output from it
+  const lines = trimmed.split(/\r?\n/);
+  const isSinglePath = lines.length === 1 && trimmed.endsWith(".md") && !trimmed.includes("{");
+  if (!isSinglePath) return trimmed;
+
+  try {
+    if (!fs.existsSync(trimmed)) return trimmed;
+    const artifact = fs.readFileSync(trimmed, "utf8");
+    const artifactLines = artifact.split(/\r?\n/);
+
+    // LINE-ANCHORED: find the LAST line that is exactly "## Raw output" (after trim).
+    // Earlier matches inside echoed diff text (prefixed by + or indentation) are ignored.
+    let rawHeadingLineIdx = -1;
+    for (let i = artifactLines.length - 1; i >= 0; i--) {
+      if (artifactLines[i].trim() === "## Raw output") {
+        rawHeadingLineIdx = i;
+        break;
+      }
+    }
+
+    if (rawHeadingLineIdx < 0) return trimmed;
+
+    // Find the ```text fence AFTER this heading (line-anchored).
+    // A ```text line must be at the start of its line (only optional whitespace).
+    let fenceOpenIdx = -1;
+    for (let i = rawHeadingLineIdx + 1; i < artifactLines.length; i++) {
+      if (/^\s*```text\s*$/.test(artifactLines[i])) {
+        fenceOpenIdx = i;
+        break;
+      }
+    }
+
+    if (fenceOpenIdx < 0) return trimmed;
+
+    // Collect content lines inside the fence until a line-anchored closing ``` or ##
+    const rawLines = [];
+    for (let i = fenceOpenIdx + 1; i < artifactLines.length; i++) {
+      const line = artifactLines[i];
+      // Line-anchored closing fence or next ## header stops extraction
+      if (/^\s*```\s*$/.test(line)) break;
+      if (/^\s*##\s/.test(line)) break;
+      rawLines.push(line);
+    }
+
+    const extracted = rawLines.join("\n").trim();
+    if (!extracted) return trimmed;
+    return extracted;
+  } catch {
+    return trimmed;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // runThreatAuditor
 // ═══════════════════════════════════════════════════════════════
@@ -431,7 +615,7 @@ function runViaOmcAdvisor(advisorPath, provider, prompt, env) {
  * @param {object} [opts]
  * @param {string} [opts.auditorPath] - override path to run-threat-auditor.mjs (for testing)
  * @param {string} [opts.auditorMdPath] - override path to threat-modeling-auditor.md (for testing)
- * @returns {{ran: boolean, findings: Array<{severity:string,category:string,description:string}>, categories: string[], error?: string, status?: number|null, stderr?: string}}
+ * @returns {{ran: boolean, findings: Array<{severity:string,category:string,description:string}>, categories: string[], error?: string, status?: number|null, stderr?: string, skipped?: boolean}}
  */
 export function runThreatAuditor(diffFile, opts = {}) {
   const auditorMdPath = opts.auditorMdPath ?? path.resolve(
@@ -463,10 +647,16 @@ export function runThreatAuditor(diffFile, opts = {}) {
       try {
         const out = JSON.parse(fs.readFileSync(tmpOutput, "utf8"));
         if (Array.isArray(out.findings)) {
+          if (out.status === "skip") {
+            // AC-7: skip means the auditor did NOT actually audit anything (no
+            // auditable spec). Reporting ran:true with empty findings would mask
+            // a non-audit as a real audit — dishonest. Return ran:false.
+            return { ran: false, findings: [], skipped: true, error: "threat-auditor skipped: no auditable spec", status: result.status };
+          }
           return {
             ran: true,
             findings: out.findings,
-            categories: out.status === "skip" ? [] : ["forgery-bypass", "proof-independence", "schema-drift"],
+            categories: ["forgery-bypass", "proof-independence", "schema-drift"],
           };
         }
         // findings is not an array → auditor ran but produced malformed output
@@ -541,6 +731,9 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
     };
+	    // Diff here IS readable (the file exists) — the degraded path is about
+    // having no heterologous provider, not about the diff being bad.
+    // Keep running the threat auditor on the good file.
     verdict.threatAuditor = runThreatAuditor(diffFile);
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
@@ -565,7 +758,10 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
     };
-    verdict.threatAuditor = runThreatAuditor(diffFile);
+    // Diff is unreadable — the auditor has nothing to audit.
+    // Spawning it on a known-unreadable file is pointless and would produce
+    // misleading skip→ran results (AC-7). Record ran:false directly.
+    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (escalate path)" };
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -613,13 +809,14 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   const result = runViaOmcAdvisor(advisorPath, selected, prompt, childEnv);
   const usedAdvisor = true;
 
-  // ── Parse output ──
-  const { stdout, stderr, status, error } = result;
-  const combined = [stdout, stderr].filter(Boolean).join("\n");
+  // ── Resolve omc artifact: advisor stdout is the .md artifact path ──
+  const resolvedOutput = resolveOmcArtifactContent(result.stdout);
+  const { stderr, status, error } = result;
 
+  // ── Parse output ──
   let verdict;
   try {
-    verdict = buildVerdictFromStdout(stdout || combined, selected, diffFile, round);
+    verdict = buildVerdictFromStdout(resolvedOutput, selected, diffFile, round);
   } catch {
     verdict = {
       verdict: "escalate_to_human",
@@ -638,11 +835,11 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   }
 
   // ── B2: if child exited non-zero or output is empty, escalate ──
-  if (status !== 0 || !stdout || stdout.trim().length === 0) {
+  if (status !== 0 || !resolvedOutput || resolvedOutput.length === 0) {
     verdict = {
       verdict: "escalate_to_human",
       provider: selected,
-      error: error || `exit=${status}, empty=${!stdout || stdout.trim().length === 0}`,
+      error: error || `exit=${status}, empty=${!resolvedOutput || resolvedOutput.length === 0}`,
       reviewSnapshot: [{
         path: path.basename(diffFile),
         round,
@@ -687,7 +884,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   }
 
   // Token usage extraction
-  const tokenUsage = extractTokenUsage(stdout);
+  const tokenUsage = extractTokenUsage(resolvedOutput);
   if (!verdict.reviewSnapshot) {
     verdict.reviewSnapshot = {
       diffFile: path.basename(diffFile),
