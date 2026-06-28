@@ -846,5 +846,24 @@ test("T0-5 envOverride forces env without reading filesystem state", () => {
   assert.ok("level" in d, "must have level");
 });
 
+// ── BLOCKING 1 FIX: isMain() must not throw ENOENT on import when argv[1] is nonexistent ──
+// AC-5 realpath fix preserves /tmp→/private/tmp symlink resolution AND stops the import crash.
+// RED before fix: isMain() threw ENOENT, crashing the import. GREEN after fix: import succeeds.
+test("isMain() safe import with nonexistent argv[1] — no ENOENT crash", () => {
+  const result = execFileSync(
+    process.execPath,
+    ["-e",
+     `process.argv[1]='/nonexistent/route-review-import-test.mjs';` +
+     `import('${_ftu(new URL("./route-review.mjs", import.meta.url))}')` +
+     `.then(()=>console.log('IMPORT_OK')).catch(e=>{console.error('IMPORT_FAIL');process.exit(1)})`
+    ],
+    { encoding: "utf8" }
+  ).trim();
+  assert.equal(result, "IMPORT_OK",
+    `import must succeed even with nonexistent argv[1]; got ${result}`);
+  // Verify the module actually loads: routeReview should be accessible
+  assert.ok(typeof routeReview === "function", "routeReview must be importable");
+});
+
 console.log(`\nroute-review.test: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

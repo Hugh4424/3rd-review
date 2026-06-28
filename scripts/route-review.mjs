@@ -621,7 +621,12 @@ export function applyPostRoundDegradation(history = [], currentDecision = {}, op
 
 // ── CLI ──
 function isMain() {
-  return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 if (isMain()) {
   const args = process.argv.slice(2);

@@ -13,6 +13,7 @@ import {
   selectProvider,
   probeAvailable,
   runReview,
+  runThreatAuditor,
 } from "./run-heterologous-review.mjs";
 import assert from "node:assert";
 import fs from "node:fs";
@@ -365,6 +366,82 @@ test("probeAvailable with CODEX_UNAVAIL=1 excludes codex", () => {
   // that filtering happens in runReview. Just verify probeAvailable runs.
   const available = probeAvailable(env);
   assert.ok(Array.isArray(available));
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AC-7: threat-auditor in verdict (RED → GREEN)
+// FR-QUALITY-001 dim 4: threat-auditor must run in ALL modes,
+// including degraded same-source and escalate paths.
+// BLOCKING 2 FIX: ran:true ONLY when auditor REALLY completes with parseable output.
+// A broken auditor must yield ran:false (not fake ran:true).
+// ═══════════════════════════════════════════════════════════════
+
+function buildDegradedEnv() {
+  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", PATH: "/nonexistent" };
+  for (const k of ["HOME", "TERM", "LANG"]) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
+  return env;
+}
+
+test("AC-7: degraded same-source verdict MUST contain threatAuditor with ran:true and findings array (real auditor present)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-deg-"));
+  const diffFile = path.join(tmpDir, "diff.md");
+  const outputFile = path.join(tmpDir, "verdict.json");
+  fs.writeFileSync(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
+
+  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+
+  const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
+  assert.ok(verdict.threatAuditor, "verdict must have threatAuditor field");
+  assert.equal(verdict.threatAuditor.ran, true,
+    "threatAuditor.ran must be true — auditor must have RUN with real auditor files present");
+  assert.ok(Array.isArray(verdict.threatAuditor.findings),
+    "threatAuditor.findings must be an array");
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("AC-7: escalate verdict (diff read failure) MUST also contain threatAuditor field", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-esc-"));
+  const diffFile = path.join(tmpDir, "nonexistent-diff.md");
+  const outputFile = path.join(tmpDir, "verdict.json");
+
+  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+
+  const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
+  assert.equal(verdict.verdict, "escalate_to_human",
+    "expected escalate_to_human for nonexistent diff file");
+  assert.ok(verdict.threatAuditor, "verdict must have threatAuditor field even in escalate mode");
+  assert.ok(typeof verdict.threatAuditor.ran === "boolean",
+    "threatAuditor.ran must be a boolean");
+  assert.ok(Array.isArray(verdict.threatAuditor.findings),
+    "threatAuditor.findings must be an array");
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// BLOCKING 2 NEGATIVE TEST: when auditor cannot run (bogus script path), ran:false
+// Uses the auditorPath override seam added to runThreatAuditor().
+test("AC-7 NEGATIVE: runThreatAuditor with bogus auditorPath → ran:false (not fake ran:true)", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-neg-"));
+  const diffFile = path.join(tmpDir, "diff.md");
+  fs.writeFileSync(diffFile, "# test\n");
+
+  const result = runThreatAuditor(diffFile, {
+    auditorPath: path.join(tmpDir, "nonexistent-auditor.mjs"),
+    auditorMdPath: path.join(tmpDir, "nonexistent-auditor.md"),
+  });
+
+  assert.strictEqual(result.ran, false,
+    `ran must be false when auditor script is nonexistent; got ran=${result.ran}`);
+  assert.ok(Array.isArray(result.findings),
+    "findings must still be an array on failure");
+  assert.ok(result.error, "error field must describe the failure");
+  assert.ok(result.error.includes("spawn") || result.error.includes("non-zero") || result.error.includes("output"),
+    `error must describe actual failure reason, got: ${result.error}`);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 // ═══════════════════════════════════════════════════════════════

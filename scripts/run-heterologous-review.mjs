@@ -11,7 +11,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ═══════════════════════════════════════════════════════════════
 // Constants
@@ -73,12 +76,7 @@ function buildTrustedPath() {
 // works now and is override-ready when the config key is added later.
 const DEFAULT_DIFF_CHAR_BUDGET = 120000;
 
-const ROUTE_RULES_PATH = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "config",
-  "route-rules.json"
-);
+const ROUTE_RULES_PATH = path.join(__dirname, "..", "config", "route-rules.json");
 
 function loadRouteRules() {
   try {
@@ -420,6 +418,75 @@ function runViaOmcAdvisor(advisorPath, provider, prompt, env) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// runThreatAuditor
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Run the deterministic threat-auditor oracle (run-threat-auditor.mjs) against
+ * the review input. Returns {ran, findings, categories} for injection into the
+ * verdict. ran:true ONLY when the auditor REALLY completed with parseable output.
+ * Local/deterministic — no external provider calls (AC-1 timing safe).
+ *
+ * @param {string} diffFile - path to the diff file (may not exist in escalate paths)
+ * @param {object} [opts]
+ * @param {string} [opts.auditorPath] - override path to run-threat-auditor.mjs (for testing)
+ * @param {string} [opts.auditorMdPath] - override path to threat-modeling-auditor.md (for testing)
+ * @returns {{ran: boolean, findings: Array<{severity:string,category:string,description:string}>, categories: string[], error?: string, status?: number|null, stderr?: string}}
+ */
+export function runThreatAuditor(diffFile, opts = {}) {
+  const auditorMdPath = opts.auditorMdPath ?? path.resolve(
+    __dirname, "..", "subreviewers", "threat-modeling-auditor.md"
+  );
+  const scriptPath = opts.auditorPath ?? path.resolve(__dirname, "run-threat-auditor.mjs");
+  const tmpOutput = path.join(os.tmpdir(), `ta-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
+
+  let result;
+  try {
+    result = spawnSync(
+      process.execPath,
+      [scriptPath, `--spec=${diffFile}`, `--auditor=${auditorMdPath}`, `--output=${tmpOutput}`],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        timeout: 15_000,
+      }
+    );
+  } catch {
+    // spawn threw (e.g. invalid args)
+    try { fs.unlinkSync(tmpOutput); } catch {}
+    return { ran: false, findings: [], error: "threat-auditor spawn failed", status: null, stderr: "" };
+  }
+
+  try {
+    if (result.status === 0 && fs.existsSync(tmpOutput)) {
+      try {
+        const out = JSON.parse(fs.readFileSync(tmpOutput, "utf8"));
+        if (Array.isArray(out.findings)) {
+          return {
+            ran: true,
+            findings: out.findings,
+            categories: out.status === "skip" ? [] : ["forgery-bypass", "proof-independence", "schema-drift"],
+          };
+        }
+        // findings is not an array → auditor ran but produced malformed output
+        return { ran: false, findings: [], error: "threat-auditor output missing findings array", status: result.status, stderr: (result.stderr || "").slice(0, 500) };
+      } catch {
+        // JSON parse failed → auditor ran but produced unparseable output
+        return { ran: false, findings: [], error: "threat-auditor produced unparseable output", status: result.status, stderr: (result.stderr || "").slice(0, 500) };
+      }
+    }
+    // status !== 0 OR output file missing
+    const reason = result.status !== 0
+      ? `threat-auditor exited non-zero (status=${result.status})`
+      : "threat-auditor produced no output file";
+    return { ran: false, findings: [], error: reason, status: result.status, stderr: (result.stderr || "").slice(0, 500) };
+  } finally {
+    try { fs.unlinkSync(tmpOutput); } catch {}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // runReview
 // ═══════════════════════════════════════════════════════════════
 
@@ -474,6 +541,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
     };
+    verdict.threatAuditor = runThreatAuditor(diffFile);
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -497,6 +565,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
     };
+    verdict.threatAuditor = runThreatAuditor(diffFile);
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -536,6 +605,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
     console.error(
       `[run-heterologous-review] omc advisor not found; escalating to human (direct-binary fallback removed for security — B1).`
     );
+    verdict.threatAuditor = runThreatAuditor(diffFile);
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -643,6 +713,9 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   verdict.trueCrossEngine = true;
   verdict.reviewMode = "omc-ask";
 
+  // AC-7 / FR-QUALITY-001 dim 4: run threat-auditor in ALL review modes
+  verdict.threatAuditor = runThreatAuditor(diffFile);
+
   // Write
   fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
 
@@ -654,9 +727,12 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
 // ═══════════════════════════════════════════════════════════════
 
 function isMain() {
-  return process.argv[1] && path.resolve(process.argv[1]) === path.resolve(
-    new URL(import.meta.url).pathname
-  );
+  if (!process.argv[1]) return false;
+  try {
+    return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 
 if (isMain()) {
