@@ -1,27 +1,22 @@
 ---
 name: 3rd-review
-description: Universal third-party code/document review dispatch. Use when the user asks to review code/a plan/a design, or when an agent must NOT self-review/self-approve and you need an independent (cross-source, e.g. codex/gemini) verdict with pass/revise/escalate outcomes.
+description: Review code, plans, or designs with an independent verdict. Use when the user asks for a code/plan/design review, or when an agent must NOT self-review/self-approve. Results in pass/revise/escalate outcomes.
+triggers:
+  - 审查
+  - review
+  - 帮我审查一下
+  - third-party review
+  - 代码审查
+mode: lightweight
 ---
 
 # 3rd-review — review dispatch (thin shell)
 
 > This file is the skeleton the main session reads. Execution detail used only by reviewers/scripts lives in `references/` — the main session does not read it; sub-agents/scripts load it on demand. Full index at the end.
 
-## 触发词（全局 Claude skill）
+## Triggers
 
-本技能注册为全局 Claude skill，输入以下任意触发词自动选中该技能：
-
-- `审查`
-- `review`
-- `帮我审查一下`
-- `third-party review`
-- `代码审查`
-
-当用户在对话中输入上述触发词时，Claude Code 自动路由到本技能，调用 `standalone.sh --skip-manifest` 执行异源审查。
-
-## When to trigger
-
-When the user asks for an independent review of code, a plan, a design, or any output that must not be self-reviewed/self-approved.
+Registered as a global skill. These phrases route here: `审查`, `review`, `帮我审查一下`, `third-party review`, `代码审查`. On match, invoke `standalone.sh --skip-manifest` (lightweight mode). The frontmatter `triggers`/`mode` keys mirror this for symlinked registration. Lightweight mode (`--skip-manifest`) skips the snapshot-manifest sidecar and tags the verdict `anti-forgery: lightweight (no-manifest)`; omit `--skip-manifest` for full stage-gate mode.
 
 ## What it does
 
@@ -43,25 +38,17 @@ Dispatches a full heterologous review chain: input ingestion → route classific
 
 > **重要：审查必须前台同步执行，禁止 run_in_background / nohup。** 审查是阻塞操作——调用方需等待裁决结果才能决定下一步（pass/revise/escalate）。后台化会丢失退出码和裁决信号，导致 pass/revise/escalate 三态不可区分。
 
-## Routing (authoritative classifier is route-review.mjs; this section is the decision sequence)
+## Routing (authoritative classifier: `scripts/route-review.mjs`)
 
-The authoritative review-method `level` (cross-source R2/R1, same-source R6) is produced by the pure classifier `scripts/route-review.mjs`. Before dispatching any review, decide in three steps:
+Three decision steps:
 
-**Step 1 · Environment** (any external CLI present):
-- Probe two external CLIs: `command -v codex` and `command -v gemini` (or another cross-source tool).
-- **Both fail** (`ENV_PROBE_RESULT=no_external_cli`) → downgrade to **R6 same-source clean sub-agent** (Agent tool, fresh independent context — satisfies hard rail #4).
-- Either available → go to step 2.
+**Step 1 · Environment**: probe `command -v codex` and `command -v gemini`. Both fail → R6 same-source clean sub-agent with fresh independent context — an explicit no-external-CLI **downgrade**, recorded as `downgraded`. This is a degraded fallback, NOT full cross-source independence; use only when no external CLI exists. Either available → step 2.
 
-**Step 2 · Content + progress** (cross-source R2/R1 vs R6):
-- **Level is the classifier's authority; the shell does not restate thresholds.** Feed the **real diff / source files / review package** to `route-review.mjs`; it produces `RouteDecision.level` (R6/R2/R1) from content type + scope + risk keywords. Do not restate the medium/large line thresholds or escalation rules here — that is the code's job, and prose restating code inevitably drifts.
-- **Input rule (the one thing the main agent must remember here)**: feed a real diff/source files, **not** a "review my XYZ plan" natural-language description — plain text is classified text-record/small and routes to R6. That is not a cross-source failure, it's wrong input. Docs-only/tiny/trivial changes *should* be R6; no cross-source overhead needed. **When calling `route-review.mjs` directly you must also pass the real `--diff-lines=N`** (default 0 → a code diff is judged trivial → R6); or go through the standalone entry, which counts lines for you — don't call the classifier bare and drop the line count.
-- **Progress-driven downgrade** (multi-round): round one follows the classifier (medium-and-up is cross-source); later rounds' downgrade is decided authoritatively by `applyPostRoundDegradation` from the **prior round's finding count + whether any was blocking** (see `references/verdict-dispatch.md`). The shell does not restate the thresholds. Hard rails never downgrade (FR-REVIEW-004/005).
+**Step 2 · Content + progress**: **Level is the classifier's authority; the shell does not restate thresholds.** Feed a **real diff / source files / review package**, not a "review my XYZ plan" text — plain-text is classified text-record/small → R6 (wrong input, not a cross-source failure). When calling `route-review.mjs` directly, pass the real `--diff-lines=N` (default 0 → a code diff is misjudged trivial → R6); or use `standalone.sh`, which counts lines for you. Multi-round: later rounds downgrade by `applyPostRoundDegradation` from prior finding count + blocking (see `references/verdict-dispatch.md`). Hard rails never downgrade.
 
-**Step 3 · Entry point**:
-- **standalone.sh** (default, universal): invokes `run-heterologous-review.mjs` — cross-engine review via `omc ask` backend, excluding the current host. No agenthub dependency.
-- **Custom runner**: set `THIRD_REVIEW_RUNNER` env var or pass `--review-runner=<cmd>` to standalone.sh.
+**Step 3 · Entry point**: **standalone.sh** (default) invokes `run-heterologous-review.mjs` via `omc ask`. Or set `THIRD_REVIEW_RUNNER` / `--review-runner=<cmd>`.
 
-Thresholds and downgrade forms: `scripts/route-review.mjs`, `references/execution-steps.md`, `references/delta-package-rules.md` ("no-CLI downgrade form, FR-REVIEW-003"), `references/verdict-dispatch.md` ("dynamic escalation rules").
+Thresholds/downgrade forms: `scripts/route-review.mjs`, `references/execution-steps.md`, `references/delta-package-rules.md`, `references/verdict-dispatch.md`.
 
 ## Standalone entrypoint
 
@@ -87,7 +74,7 @@ A pass must include `reviewSnapshot[]` (objective, coverage-bearing), `riskDispo
 
 Review rounds have no fixed cap; escalation is decided in the reviewer-skill layer, not by a workflow-engine counter. The same unresolved blocking finding (same file / same class / same core description) recurring up to a threshold → `escalate_to_human`, signalling a human is needed. Each round, find the root cause before fixing; switching review form does not relax the rails. Full dynamic escalation rules (exact thresholds, root-cause-first, form-switch constraints): `references/verdict-dispatch.md`.
 
-## Hard rails (no form may bypass these)
+## Ironclad hard rails — no bypass, no relaxation, no form may dodge
 
 1. Minimum regression coverage: each round covers ≥80% of changed lines across all changed files in the phase.
 2. Mandatory full review of high-risk dimensions: high-risk parts get a complete review, never a downgraded sample.
