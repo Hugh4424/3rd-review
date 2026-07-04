@@ -12,7 +12,7 @@
 #   - run-manifest.json 状态机：in_progress → completed | failed
 #   - O5 版本锚点（FR-PORT-007）：git 可用记 sha，否则 manual-<UTC>
 #   - 调 review-runner 产 verdict，注入 provenance=single-context（FR-GUARD-003）
-#   - revise 循环上限（D25/O18，默认 3），达上限输出未决项清单+人工选择要求，escalate
+#   - revise 循环无轮次强制上限；revise_required 时持续迭代直到 pass 或真实 escalate_to_human 触发
 #   - 退出码契约（FR-GUARD-001）：0=pass，1=revise_required，2=escalate_to_human；其他非零=执行错误
 #   - stdout 中文结论（FR-GUARD-006），stderr 升级原因+下一步指引
 #
@@ -402,15 +402,7 @@ for p in all_paths:
   fi
 
   if [ "$VERDICT_VAL" = "revise_required" ]; then
-    if [ "$ROUND" -ge "$MAX_REVISE_ROUNDS" ]; then
-      # 达上限：输出未决项清单 + 要求人工选择（D25/O18）
-      write_manifest failed "escalate_to_human" 2 "$ROUND" "revise loop hit cap ($MAX_REVISE_ROUNDS rounds)"
-      {
-        echo "未决项：连续 ${ROUND} 轮 revise_required 未收敛，已达上限 ${MAX_REVISE_ROUNDS}。"
-        echo "最新裁决产物：${FINAL_VERDICT_FILE}"
-      } >&2
-      escalate "revise 循环达上限 ${MAX_REVISE_ROUNDS} 轮仍未通过" "人工检查最新 verdict 与审查输入，决定继续修复、放宽要求或终止"
-    fi
+    echo "revise_required：第 ${ROUND} 轮未通过，继续修订并重新审查。" >&2
     ROUND=$((ROUND+1))
     continue
   fi
