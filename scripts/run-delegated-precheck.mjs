@@ -6,8 +6,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
+const SKILL_ROOT = path.resolve(__dirname, "..");
+
 // ── Route-rules config (loaded once, FR-LENS-002) ──
-const ROUTE_RULES_PATH = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "config", "route-rules.json");
+const ROUTE_RULES_PATH = path.join(SKILL_ROOT, "config", "route-rules.json");
 let _routeRulesCache = null;
 function loadRouteRules() {
   if (!_routeRulesCache) {
@@ -31,8 +34,7 @@ export function getLensTriggerConfig() {
 
 // ── Known false-positives config (FR-BUN-001/002, additive default-off filter) ──
 const KNOWN_FALSE_POSITIVES_PATH = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
-  "..",
+  SKILL_ROOT,
   "config",
   "known-false-positives.json",
 );
@@ -999,6 +1001,10 @@ function repoFile(...parts) {
   return path.resolve(process.cwd(), ...parts);
 }
 
+function skillFile(...parts) {
+  return path.resolve(SKILL_ROOT, ...parts);
+}
+
 function headingBlock(text, pattern, maxChars) {
   const lines = String(text || "").split(/\r?\n/);
   const start = lines.findIndex((line) => pattern.test(line));
@@ -1017,7 +1023,7 @@ function headingBlock(text, pattern, maxChars) {
 
 function contractContext(kind) {
   const workflowContract = readIfExists(repoFile("packages/core/agenthub/workflows/vibecoding/contract.md"));
-  const codeContract = readIfExists(repoFile("packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer-contract.md"));
+  const codeContract = readIfExists(skillFile("verifiers/vibecoding/code-reviewer-contract.md"));
   const chunks = [];
   if (kind === "required-skill") {
     chunks.push(headingBlock(workflowContract, /^## 强制技能门禁/, 9000));
@@ -1592,8 +1598,8 @@ function planRequiredSkillContext(originalPrompt) {
   // Emit plan-reviewer-specific required skill contract reference and skill list.
   const checkpoint = extractPromptField(originalPrompt, "checkpoint") || "";
   if (!checkpoint.toLowerCase().startsWith("plan")) return "";
-  const contractPath = "packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/plan-reviewer-contract.md";
-  const planContract = readIfExists(repoFile(contractPath));
+  const contractPath = "verifiers/vibecoding/plan-reviewer-contract.md";
+  const planContract = readIfExists(skillFile(contractPath));
   const contractChunk = planContract
     ? bounded(planContract, 6000)
     : "(plan-reviewer-contract.md unavailable)";

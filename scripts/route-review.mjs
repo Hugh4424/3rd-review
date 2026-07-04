@@ -13,12 +13,77 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { detectHost as defaultDetectHost } from "./detect-host.mjs";
+import { queryAvailableEngine as defaultQueryAvailableEngine } from "./stdio-advisor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.join(__dirname, "..", "config", "route-rules.json");
+const ENGINE_ALIASES = new Map([
+  ["claude", "claude"],
+  ["claude-code", "claude"],
+  ["anthropic", "claude"],
+  ["codex", "codex"],
+  ["openai", "codex"],
+  ["kimi", "kimi"],
+  ["moonshot", "kimi"],
+  ["cursor", "cursor"],
+  ["opencode", "opencode"],
+  ["open-code", "opencode"],
+  ["antigravity", "antigravity"],
+  ["google", "antigravity"],
+]);
+const NORMALIZED_ENGINES = new Set([
+  "claude",
+  "codex",
+  "kimi",
+  "cursor",
+  "opencode",
+  "antigravity",
+]);
 
 function loadRules() {
   return JSON.parse(fs.readFileSync(RULES_PATH, "utf8"));
+}
+
+export function normalizeReviewEngineId(value) {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase();
+  if (!key || key === "unknown") return null;
+  if (NORMALIZED_ENGINES.has(key)) return key;
+  return ENGINE_ALIASES.get(key) ?? null;
+}
+
+function assertTrueCrossEngine({ hostEngine, reviewEngine }) {
+  const host = normalizeReviewEngineId(hostEngine);
+  if (!host) {
+    throw new Error(`Unable to determine host_engine for true_cross_engine check: ${String(hostEngine || "")}`);
+  }
+  const review = normalizeReviewEngineId(reviewEngine);
+  if (!review) {
+    throw new Error(`unrecognized review_engine for true_cross_engine check: ${String(reviewEngine || "")}`);
+  }
+  if (host === review) {
+    throw new Error(`true_cross_engine=false: same-source host_engine=${host} review_engine=${review}`);
+  }
+  return { host_engine: host, review_engine: review, true_cross_engine: true };
+}
+
+function reportField(report, field) {
+  if (!report || typeof report !== "object") return undefined;
+  if (report[field] !== undefined) return report[field];
+  if (report.metadata && typeof report.metadata === "object" && report.metadata[field] !== undefined) {
+    return report.metadata[field];
+  }
+  if (report.verdict && typeof report.verdict === "object" && report.verdict[field] !== undefined) {
+    return report.verdict[field];
+  }
+  return undefined;
+}
+
+function writeJsonIfRequested(file, value) {
+  if (!file) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
 }
 
 // ── 环境探测层（与策略层分离）──
@@ -243,6 +308,220 @@ export function enforceCleanContext(routeDecision = {}) {
     decision.cleanContextRequired = true;
   }
   return decision;
+}
+
+function downgradeReportShape({
+  downgradeReason,
+  basedOnRound,
+  basedOnReportPath,
+  hardRailsPreserved,
+  cleanContextRequired,
+}) {
+  return {
+    downgrade_reason: String(downgradeReason || ""),
+    based_on_round: basedOnRound,
+    based_on_report_path: basedOnReportPath,
+    hard_rails_preserved: hardRailsPreserved !== false,
+    clean_context_required: cleanContextRequired !== false,
+  };
+}
+
+const REVIEW_STRENGTH = {
+  same_source_subagent: 1,
+  cross_source_no_subagent: 2,
+  cross_source_with_subagent: 3,
+};
+
+function isWeakerReviewDecision(nextDecision = {}, currentDecision = {}) {
+  if (nextDecision.escalate === true) return false;
+  const nextStrength = REVIEW_STRENGTH[nextDecision.level];
+  const currentStrength = REVIEW_STRENGTH[currentDecision.level];
+  if (nextStrength === undefined || currentStrength === undefined) return false;
+  return nextStrength < currentStrength;
+}
+
+export function evaluateDowngradeGate({
+  basedOnReportPath,
+  basedOnRound,
+  currentDecision = {},
+  escalate = false,
+} = {}) {
+  if (escalate) {
+    return {
+      allowed: false,
+      report: downgradeReportShape({
+        downgradeReason: "escalate_to_human: no downgrade basis report",
+        basedOnRound: null,
+        basedOnReportPath: null,
+        hardRailsPreserved: true,
+        cleanContextRequired: true,
+      }),
+    };
+  }
+
+  const reasons = [];
+  let report = null;
+  if (!basedOnReportPath || !fs.existsSync(basedOnReportPath)) {
+    reasons.push("based_on_report_path must exist");
+  } else {
+    try {
+      report = JSON.parse(fs.readFileSync(basedOnReportPath, "utf8"));
+    } catch {
+      reasons.push("based_on_report_path must be parseable JSON");
+    }
+  }
+
+  if (basedOnRound !== 1) {
+    reasons.push("based_on_round must equal 1");
+  }
+
+  if (report) {
+    const reportRound = reportField(report, "round");
+    if (Number(reportRound) !== 1) {
+      reasons.push("report.round must equal 1");
+    }
+    const source = reportField(report, "source");
+    const trueCross = reportField(report, "true_cross_engine");
+    if (source !== "heterologous") {
+      reasons.push("source=heterologous required");
+    }
+    if (trueCross !== true) {
+      reasons.push("true_cross_engine=true required");
+    }
+  }
+
+  const allowed = reasons.length === 0;
+  return {
+    allowed,
+    report: downgradeReportShape({
+      downgradeReason: allowed
+        ? "accepted: based_on_report_path parseable, based_on_round=1, source=heterologous, true_cross_engine=true"
+        : `rejected: ${reasons.join("; ")}`,
+      basedOnRound,
+      basedOnReportPath: basedOnReportPath || null,
+      hardRailsPreserved: true,
+      cleanContextRequired: currentDecision.cleanContextRequired !== false,
+    }),
+  };
+}
+
+export function applyPostRoundDegradationWithGate(history = [], currentDecision = {}, opts = {}) {
+  const postRoundDecision = applyPostRoundDegradation(history, currentDecision, opts);
+  if (!isWeakerReviewDecision(postRoundDecision, currentDecision)) {
+    return postRoundDecision;
+  }
+
+  const gate = evaluateDowngradeGate({
+    basedOnReportPath: opts.basedOnReportPath,
+    basedOnRound: opts.basedOnRound,
+    currentDecision,
+    escalate: opts.escalate === true,
+  });
+  writeJsonIfRequested(opts.downgradeReportPath, gate.report);
+  if (!gate.allowed) {
+    return {
+      ...currentDecision,
+      downgradeRejected: true,
+      downgradeReason: gate.report.downgrade_reason,
+    };
+  }
+  return postRoundDecision;
+}
+
+export async function dispatchReviewRound({
+  input = "",
+  taskDir = null,
+  diffLines = 0,
+  round = 1,
+  sessionStatePath,
+  offlineEnginesPath,
+  detectHostFn = defaultDetectHost,
+  queryAvailableEngineFn = defaultQueryAvailableEngine,
+  runner,
+  reportPath = null,
+  downgradeReportPath = null,
+} = {}) {
+  if (typeof runner !== "function") {
+    throw new Error("dispatchReviewRound requires a runner function");
+  }
+  if (round !== 1) {
+    throw new Error("dispatchReviewRound is a first-round dispatcher; expected round=1");
+  }
+
+  const hostEngine = normalizeReviewEngineId(await detectHostFn(sessionStatePath));
+  if (!hostEngine) {
+    throw new Error("unknown host engine: unable to continue review dispatch");
+  }
+
+  let reviewEngine = null;
+  const scheduling = await queryAvailableEngineFn({
+    hostEngine,
+    round: 1,
+    offlineEnginesPath,
+  });
+  if (scheduling && scheduling.escalate === true) {
+    const gate = evaluateDowngradeGate({ escalate: true });
+    writeJsonIfRequested(downgradeReportPath, gate.report);
+    return {
+      status: "escalate_to_human",
+      host_engine: hostEngine,
+      review_engine: null,
+      true_cross_engine: false,
+      reason: "no heterologous review engine available",
+    };
+  }
+  reviewEngine = normalizeReviewEngineId(scheduling && (scheduling.engine || scheduling.review_engine));
+
+  if (!reviewEngine) {
+    throw new Error("unrecognized review_engine from scheduler");
+  }
+  const cross = assertTrueCrossEngine({ hostEngine, reviewEngine });
+
+  const raw = await runner({
+    input,
+    taskDir,
+    diffLines,
+    round,
+    hostEngine,
+    reviewEngine,
+  });
+  const result = raw && typeof raw === "object" ? { ...raw } : { status: "pass" };
+  const report = result.report && typeof result.report === "object" ? { ...result.report } : {};
+  const metadata = report.metadata && typeof report.metadata === "object" ? { ...report.metadata } : {};
+  const runnerReviewEngine =
+    metadata.review_engine ??
+    report.review_engine ??
+    result.review_engine ??
+    result.reviewEngine;
+  if (runnerReviewEngine !== undefined) {
+    const normalizedRunnerEngine = normalizeReviewEngineId(runnerReviewEngine);
+    if (!normalizedRunnerEngine) {
+      throw new Error(`unrecognized review_engine for true_cross_engine check: ${String(runnerReviewEngine || "")}`);
+    }
+    if (normalizedRunnerEngine !== reviewEngine) {
+      throw new Error(
+        `runner review_engine mismatch: scheduler selected ${reviewEngine}, runner returned ${normalizedRunnerEngine}`
+      );
+    }
+  }
+
+  report.source = "heterologous";
+  report.metadata = {
+    ...metadata,
+    host_engine: cross.host_engine,
+    review_engine: cross.review_engine,
+    true_cross_engine: cross.true_cross_engine,
+  };
+
+  const dispatched = {
+    ...result,
+    report,
+    host_engine: cross.host_engine,
+    review_engine: cross.review_engine,
+    true_cross_engine: cross.true_cross_engine,
+  };
+  writeJsonIfRequested(reportPath, report);
+  return dispatched;
 }
 
 // ── countExternalCodex (FR-TRACE-001, 验收维度A 数据源) ──
@@ -658,6 +937,9 @@ if (isMain()) {
   // When --checkpoint is absent, no filter is applied (backward compat: existing behavior).
   const historyArg = get("history");
   const checkpointArg = get("checkpoint");
+  const basedOnReportPath = get("based-on-report") || get("based-on-report-path");
+  const basedOnRoundArg = get("based-on-round");
+  const downgradeReportPath = get("downgrade-report");
   let history = [];
   if (historyArg) {
     try {
@@ -675,7 +957,13 @@ if (isMain()) {
   }
 
   const baseDecision = enforceCleanContext(routeReview({ input, taskDir, diffLines, envProbe, fast }));
-  const decision = applyPostRoundDegradation(history, baseDecision);
+  const decision = history.length > 0
+    ? applyPostRoundDegradationWithGate(history, baseDecision, {
+        basedOnReportPath,
+        basedOnRound: basedOnRoundArg !== undefined ? Number(basedOnRoundArg) : undefined,
+        downgradeReportPath,
+      })
+    : applyPostRoundDegradation(history, baseDecision);
   const out = get("out");
   const json = JSON.stringify(decision, null, 2);
   if (out) fs.writeFileSync(out, json + "\n");
