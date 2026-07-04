@@ -668,7 +668,7 @@ function inferAutomaticLensPlan(originalPrompt, checkpointId) {
   // Strong-signal-v4: plan checkpoint suppresses weak text signals for test-acceptance and design detection.
   // acceptance-baseline.md, spec.md, decision-log.md, "acceptance criteria" in plan review body
   // must not trigger acceptance lens or design-intent lens.
-  const isPlan = checkpoint.startsWith("plan") || /review kind:\s*plan\b|##\s+Plan Review Package\b|##\s+Plan\b/i.test(text);
+  const isPlan = checkpoint.startsWith("build-plan") || checkpoint.startsWith("plan") || /review kind:\s*plan\b|##\s+Plan Review Package\b|##\s+Plan\b/i.test(text);
   // Strong-signal-v4 extension: a design checkpoint must also suppress weak test-acceptance text
   // signals. A design spec legitimately contains "acceptance criteria" (验收清单); without this guard
   // design-review fires the test-acceptance-only evidence-freshness lens, which returns
@@ -1591,7 +1591,8 @@ function planTracebilitySourceSlice(originalPrompt) {
 function planRequiredSkillContext(originalPrompt) {
   // Emit build-plan-reviewer-specific required skill contract reference and skill list.
   const checkpoint = extractPromptField(originalPrompt, "checkpoint") || "";
-  if (!checkpoint.toLowerCase().startsWith("plan")) return "";
+  const cp = checkpoint.toLowerCase();
+  if (!cp.startsWith("build-plan") && !cp.startsWith("plan")) return "";
   const contractPath = "verifiers/vibecoding/build-plan-reviewer-contract.md";
   const planContract = readIfExists(repoFile(contractPath));
   const contractChunk = planContract
