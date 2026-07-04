@@ -1,0 +1,38 @@
+[
+  {
+    "id": "claude",
+    "provider": "anthropic",
+    "model": "claude",
+    "available": true
+  },
+  {
+    "id": "codex",
+    "provider": "openai",
+    "model": "codex",
+    "available": true
+  },
+  {
+    "id": "kimi",
+    "provider": "moonshot",
+    "model": "kimi",
+    "available": true
+  },
+  {
+    "id": "cursor",
+    "provider": "cursor",
+    "model": "cursor",
+    "available": true
+  },
+  {
+    "id": "opencode",
+    "provider": "opencode",
+    "model": "opencode",
+    "available": true
+  },
+  {
+    "id": "antigravity",
+    "provider": "google",
+    "model": "antigravity",
+    "available": true
+  }
+]

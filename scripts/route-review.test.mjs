@@ -9,7 +9,12 @@
 //   - env/strategy SEPARATION: changing env must NOT change contentType/scope
 //   - reproducibility: same input → identical route_decision (pure function)
 //   - thresholds come from route-rules.json (single source), not hard-coded
-import { routeReview, applyPostRoundDegradation } from "./route-review.mjs";
+import {
+  routeReview,
+  applyPostRoundDegradation,
+  applyPostRoundDegradationWithGate,
+  dispatchReviewRound,
+} from "./route-review.mjs";
 import assert from "node:assert";
 import { readFileSync as _readFileSync } from "node:fs";
 import { fileURLToPath as _ftuRules } from "node:url";
@@ -23,9 +28,15 @@ function loadRulesForTest() {
 }
 
 let pass = 0, fail = 0;
+const cases = [];
 function test(name, fn) {
-  try { fn(); pass++; console.log(`  [PASS] ${name}`); }
-  catch (e) { fail++; console.error(`  [FAIL] ${name} — ${e.message}`); }
+  cases.push({ name, fn });
+}
+async function runTests() {
+  for (const { name, fn } of cases) {
+    try { await fn(); pass++; console.log(`  [PASS] ${name}`); }
+    catch (e) { fail++; console.error(`  [FAIL] ${name} — ${e.message}`); }
+  }
 }
 
 // ── source hygiene: no raw NUL bytes (binary-file poisoning of the routing file) ──
@@ -381,7 +392,7 @@ test("T_DEGRADE_004 non-diff design input → judge by finding count + severity,
 // that --history is parsed, history is loaded, and applyPostRoundDegradation
 // is applied before outputting the route decision.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath as _ftu } from "node:url";
@@ -394,6 +405,21 @@ function runCLI(args) {
   return JSON.parse(out);
 }
 
+function writeCliGateBasis(tmp, overrides = {}) {
+  const reportFile = join(tmp, `basis-${Math.random().toString(16).slice(2)}.json`);
+  writeFileSync(reportFile, JSON.stringify({
+    round: 1,
+    source: "heterologous",
+    metadata: { true_cross_engine: true },
+    ...overrides,
+  }));
+  return [
+    `--based-on-report=${reportFile}`,
+    "--based-on-round=1",
+    `--downgrade-report=${join(tmp, "downgrade-report.json")}`,
+  ];
+}
+
 test("T006 --history=<empty-file> no-op: level unchanged from full-scope baseline", () => {
   const tmp = mkdtempSync(join(tmpdir(), "rr-test-"));
   try {
@@ -401,7 +427,7 @@ test("T006 --history=<empty-file> no-op: level unchanged from full-scope baselin
     const inputFile = join(tmp, "input.txt");
     writeFileSync(histFile, ""); // empty history
     writeFileSync(inputFile, "```diff\n@@\n+change"); // triggers code-diff
-    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`]);
+    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`, ...writeCliGateBasis(tmp)]);
     // No history → applyPostRoundDegradation returns original decision → must be full scope
     assert.strictEqual(d.level, "cross_source_with_subagent",
       `empty history must not downgrade; got level=${d.level}`);
@@ -418,7 +444,7 @@ test("T006 --history with no-blocking finding on last round → level downgraded
     const inputFile = join(tmp, "input.txt");
     writeFileSync(histFile, histEntry + "\n");
     writeFileSync(inputFile, "```diff\n@@\n+change");
-    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`]);
+    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`, ...writeCliGateBasis(tmp)]);
     assert.strictEqual(d.level, "cross_source_no_subagent",
       `no-blocking finding in history must downgrade one tier R1→R2; got level=${d.level}`);
     assert.ok(d.basis && /degrad/i.test(d.basis),
@@ -436,7 +462,7 @@ test("T006 --history with >1 blocking → level stays cross_source_with_subagent
     const inputFile = join(tmp, "input.txt");
     writeFileSync(histFile, histEntry + "\n");
     writeFileSync(inputFile, "```diff\n@@\n+change");
-    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`]);
+    const d = runCLI([`--input=${inputFile}`, "--diff-lines=5000", `--history=${histFile}`, ...writeCliGateBasis(tmp)]);
     assert.strictEqual(d.level, "cross_source_with_subagent",
       `≥2 findings incl blocking must keep full scope; got level=${d.level}`);
   } finally {
@@ -453,6 +479,46 @@ test("T006 no --history flag: behavior identical to before (regression guard)", 
     // Without --history there is no degradation; baseline for large diff is R1
     assert.strictEqual(d.level, "cross_source_with_subagent",
       `no --history flag must not degrade; got level=${d.level}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 CLI --history uses downgrade gate and rejects same-source basis before downgrade", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-cli-gate-"));
+  try {
+    const histEntry = JSON.stringify({ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] });
+    const histFile = join(tmp, "history.jsonl");
+    const inputFile = join(tmp, "input.txt");
+    const basisFile = join(tmp, "same-source-report.json");
+    const downgradeReport = join(tmp, "downgrade-report.json");
+    writeFileSync(histFile, histEntry + "\n");
+    writeFileSync(inputFile, "```diff\n@@\n+large change");
+    writeFileSync(basisFile, JSON.stringify({
+      round: 1,
+      source: "same_source",
+      metadata: { true_cross_engine: false },
+    }));
+    const d = runCLI([
+      `--input=${inputFile}`,
+      "--diff-lines=5000",
+      `--history=${histFile}`,
+      `--based-on-report=${basisFile}`,
+      "--based-on-round=1",
+      `--downgrade-report=${downgradeReport}`,
+    ]);
+    assert.strictEqual(d.level, "cross_source_with_subagent",
+      `same-source basis must fail closed and keep R1, got ${d.level}`);
+    assert.strictEqual(d.downgradeRejected, true, "CLI decision must expose downgradeRejected=true");
+    const report = JSON.parse(_readFileSync(downgradeReport, "utf8"));
+    assert.match(report.downgrade_reason, /source=heterologous|true_cross_engine=true/i);
+    assert.deepStrictEqual(Object.keys(report).sort(), [
+      "based_on_report_path",
+      "based_on_round",
+      "clean_context_required",
+      "downgrade_reason",
+      "hard_rails_preserved",
+    ].sort());
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -506,6 +572,7 @@ test("T_CHECKPOINT_ISO CLI: --checkpoint isolates history — phase-1 round=1 NO
       "--diff-lines=5000", // large → R1 baseline
       `--history=${histFile}`,
       "--checkpoint=code-review-phase-1", // current checkpoint: different from history record
+      ...writeCliGateBasis(tmp),
     ]);
     assert.strictEqual(d.level, "cross_source_with_subagent",
       `round=1 of phase-1 must NOT be degraded by phase-0 history; got level=${d.level} basis=${d.basis}`);
@@ -533,6 +600,7 @@ test("T_CHECKPOINT_ISO CLI: same-checkpoint history still degrades (positive cas
       "--diff-lines=5000",
       `--history=${histFile}`,
       "--checkpoint=code-review-phase-1", // same checkpoint → history should still apply
+      ...writeCliGateBasis(tmp),
     ]);
     assert.strictEqual(d.level, "cross_source_no_subagent",
       `same-checkpoint history with no-blocking finding must still degrade one tier R1→R2; got level=${d.level}`);
@@ -543,8 +611,9 @@ test("T_CHECKPOINT_ISO CLI: same-checkpoint history still degrades (positive cas
   }
 });
 
-test("T_CHECKPOINT_ISO CLI: no --checkpoint flag → no filtering (backward compat: existing behavior preserved)", () => {
-  // Without --checkpoint, the filter does not apply; old records without checkpoint field still degrade.
+test("T_CHECKPOINT_ISO CLI: no --checkpoint flag → no filtering when downgrade gate basis is valid", () => {
+  // Without --checkpoint, the filter does not apply; old records without checkpoint field still degrade
+  // when the downgrade gate has a valid heterologous round-1 basis report.
   const tmp = mkdtempSync(join(tmpdir(), "rr-cpiso-compat-"));
   try {
     const histEntry = JSON.stringify({
@@ -561,7 +630,8 @@ test("T_CHECKPOINT_ISO CLI: no --checkpoint flag → no filtering (backward comp
       `--input=${inputFile}`,
       "--diff-lines=5000",
       `--history=${histFile}`,
-      // No --checkpoint: backward compat — treat full history as applicable
+      ...writeCliGateBasis(tmp),
+      // No --checkpoint: treat full history as applicable
     ]);
     assert.strictEqual(d.level, "cross_source_no_subagent",
       `without --checkpoint, old records (no checkpoint field) must still trigger one-tier degradation R1→R2; got level=${d.level}`);
@@ -865,5 +935,463 @@ test("isMain() safe import with nonexistent argv[1] — no ENOENT crash", () => 
   assert.ok(typeof routeReview === "function", "routeReview must be importable");
 });
 
+// ── Phase-2 T006: standalone path resolution for delegated precheck contracts ──
+test("T006 delegated precheck reads vibecoding contracts from standalone skill root, not monorepo packages path", () => {
+  const dir = _dn(_ftuRules(import.meta.url));
+  const src = _readFileSync(_rs(dir, "run-delegated-precheck.mjs"), "utf8");
+  assert.match(src, /SKILL_ROOT/, "run-delegated-precheck.mjs must define a skill-root anchor");
+  assert.doesNotMatch(
+    src,
+    /repoFile\("packages\/core\/agenthub\/skills\/3rd-review\/verifiers\/vibecoding\/code-reviewer-contract\.md"\)/,
+    "code reviewer contract must not be read through monorepo packages/core path",
+  );
+  assert.doesNotMatch(
+    src,
+    /repoFile\(contractPath\)/,
+    "plan reviewer contract must not be read through monorepo packages/core path",
+  );
+});
+
+// ── Phase-2 T007: host detection, first-round scheduling, metadata ownership, true cross-engine ──
+test("T007 dispatchReviewRound fail-fast on unknown host and does not query, run, or write reports", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-host-"));
+  try {
+    const reportPath = join(tmp, "report.json");
+    let queried = false;
+    let ran = false;
+    await assert.rejects(
+      () => dispatchReviewRound({
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "unknown",
+        queryAvailableEngineFn: async () => { queried = true; return { engine: "codex" }; },
+        runner: async () => { ran = true; return { status: "pass", report: {} }; },
+        reportPath,
+      }),
+      /unknown host|Unable to detect host/i,
+    );
+    assert.equal(queried, false, "unknown host must stop before scheduler query");
+    assert.equal(ran, false, "unknown host must stop before runner execution");
+    assert.equal(existsSync(reportPath), false, "unknown host must not write report files");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 first-round scheduler escalation returns escalate_to_human without pass or runner execution", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-sched-"));
+  try {
+    let ran = false;
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async ({ hostEngine, round }) => {
+        assert.equal(hostEngine, "claude");
+        assert.equal(round, 1);
+        return { escalate: true };
+      },
+      runner: async () => { ran = true; return { status: "pass", report: {} }; },
+      downgradeReportPath: join(tmp, "downgrade.json"),
+    });
+    assert.equal(ran, false, "scheduler escalation must not call runner");
+    assert.equal(result.status, "escalate_to_human");
+    assert.notEqual(result.status, "pass", "scheduler escalation must not produce pass");
+    const downgrade = JSON.parse(_readFileSync(join(tmp, "downgrade.json"), "utf8"));
+    assert.equal(downgrade.based_on_report_path, null, "scheduler escalation downgrade report must null report path");
+    assert.equal(downgrade.based_on_round, null, "scheduler escalation downgrade report must null round");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 dispatcher owns review_engine metadata after runner returns and records true_cross_engine", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-meta-"));
+  try {
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async ({ reviewEngine }) => {
+        assert.equal(reviewEngine, "codex");
+        return { status: "pass", report: { metadata: { runner_only: true }, source: "heterologous" } };
+      },
+      reportPath: join(tmp, "review-report.json"),
+    });
+    assert.equal(result.report.metadata.runner_only, true);
+    assert.equal(result.report.metadata.host_engine, "claude");
+    assert.equal(result.report.metadata.review_engine, "codex");
+    assert.equal(result.report.metadata.true_cross_engine, true);
+    const written = JSON.parse(_readFileSync(join(tmp, "review-report.json"), "utf8"));
+    assert.equal(written.metadata.review_engine, "codex", "dispatcher must persist review_engine metadata");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 dispatcher owns report.source after true cross-engine succeeds", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-source-"));
+  try {
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "pass", report: { source: "same_source", metadata: {} } }),
+      reportPath: join(tmp, "review-report.json"),
+    });
+    assert.equal(result.report.source, "heterologous", "dispatcher must normalize source to heterologous");
+    const written = JSON.parse(_readFileSync(join(tmp, "review-report.json"), "utf8"));
+    assert.equal(written.source, "heterologous", "persisted report source must be heterologous");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 true_cross_engine fail-fast rejects same or unrecognized review engine", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-cross-"));
+  try {
+    await assert.rejects(
+      () => dispatchReviewRound({
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "claude",
+        queryAvailableEngineFn: async () => ({ engine: "codex" }),
+        runner: async () => ({ status: "pass", report: { metadata: { review_engine: "claude" } } }),
+        reportPath: join(tmp, "same.json"),
+      }),
+      /true_cross_engine|same-source|runner review_engine mismatch/i,
+    );
+    assert.equal(existsSync(join(tmp, "same.json")), false, "same-source failure must not write pass report");
+    await assert.rejects(
+      () => dispatchReviewRound({
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "claude",
+        queryAvailableEngineFn: async () => ({ engine: "codex" }),
+        runner: async () => ({ status: "pass", report: { metadata: { review_engine: "bogus-ai" } } }),
+      }),
+      /unrecognized review_engine/i,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 scheduler-selected review_engine is authoritative; runner metadata mismatch is rejected", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-forge-"));
+  try {
+    await assert.rejects(
+      () => dispatchReviewRound({
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "claude",
+        queryAvailableEngineFn: async () => ({ engine: "codex" }),
+        runner: async () => ({
+          status: "pass",
+          report: { metadata: { review_engine: "kimi" }, source: "heterologous" },
+        }),
+        reportPath: join(tmp, "forged.json"),
+      }),
+      /runner review_engine mismatch/i,
+    );
+    assert.equal(existsSync(join(tmp, "forged.json")), false, "mismatched runner metadata must not write report");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 same-source scheduler output fails before runner and report writes", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-same-sched-"));
+  try {
+    let ran = false;
+    await assert.rejects(
+      () => dispatchReviewRound({
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "claude",
+        queryAvailableEngineFn: async () => ({ engine: "claude" }),
+        runner: async () => { ran = true; return { status: "pass", report: {} }; },
+        reportPath: join(tmp, "same-scheduler.json"),
+      }),
+      /true_cross_engine|same-source/i,
+    );
+    assert.equal(ran, false, "same-source scheduler output must fail before runner execution");
+    assert.equal(existsSync(join(tmp, "same-scheduler.json")), false, "same-source scheduler output must not write report");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 dispatchReviewRound is explicit first-round dispatcher and rejects later rounds clearly", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-round-"));
+  try {
+    await assert.rejects(
+      () => dispatchReviewRound({
+        round: 2,
+        sessionStatePath: join(tmp, "session-state.json"),
+        offlineEnginesPath: join(tmp, "offline-engines.json"),
+        detectHostFn: async () => "claude",
+        queryAvailableEngineFn: async () => ({ engine: "codex" }),
+        runner: async () => ({ status: "pass", report: {} }),
+      }),
+      /first-round dispatcher|round=1/i,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 downgrade gate rejects non-heterologous report before FR-DEG downgrade and writes 5-field report", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-gate-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    const downgradeReportPath = join(tmp, "downgrade-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "same_source",
+      metadata: { true_cross_engine: false },
+    }));
+    const base = routeReview({ input: "```diff\n@@", diffLines: 5000 });
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      base,
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+        downgradeReportPath,
+      },
+    );
+    assert.equal(gated.level, "cross_source_with_subagent", "gate rejection must keep baseline level before FR-DEG downgrade");
+    assert.equal(gated.downgradeRejected, true, "gate rejection must be explicit");
+    const report = JSON.parse(_readFileSync(downgradeReportPath, "utf8"));
+    assert.deepStrictEqual(Object.keys(report).sort(), [
+      "based_on_report_path",
+      "based_on_round",
+      "clean_context_required",
+      "downgrade_reason",
+      "hard_rails_preserved",
+    ].sort());
+    assert.equal(report.based_on_report_path, basedOnReportPath);
+    assert.equal(report.based_on_round, 1);
+    assert.equal(report.hard_rails_preserved, true);
+    assert.equal(report.clean_context_required, true);
+    assert.match(report.downgrade_reason, /source=heterologous|true_cross_engine=true/i);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 downgrade gate rejects basis report whose own round is not 1", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-gate-round-"));
+  try {
+    const basedOnReportPath = join(tmp, "round2-report.json");
+    const downgradeReportPath = join(tmp, "downgrade-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 2,
+      source: "heterologous",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+        downgradeReportPath,
+      },
+    );
+    assert.equal(gated.level, "cross_source_with_subagent", "round-2 basis report must not unlock downgrade");
+    assert.equal(gated.downgradeRejected, true, "round mismatch must be explicit");
+    const report = JSON.parse(_readFileSync(downgradeReportPath, "utf8"));
+    assert.match(report.downgrade_reason, /report\.round|round/i);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 invalid downgrade gate preserves repeated-blocking escalation", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-gate-escalate-"));
+  try {
+    const basedOnReportPath = join(tmp, "same-source-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "same_source",
+      metadata: { true_cross_engine: false },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [
+        { round: 1, level: "cross_source_with_subagent", findings: [{ severity: "blocking", file: "src/a.js", blockerClass: "correctness", issue: "drops verdict" }] },
+        { round: 2, level: "cross_source_with_subagent", findings: [{ severity: "blocking", file: "src/a.js", blockerClass: "correctness", issue: "drops verdict" }] },
+      ],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+      },
+    );
+    assert.equal(gated.escalate, true, "invalid downgrade basis must not suppress repeated-blocking escalation");
+    assert.equal(gated.downgradeRejected, undefined, "non-downgrade escalation must bypass downgrade rejection");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T007 downgrade gate accepts round-1 heterologous true-cross report and allows FR-DEG downgrade", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-p2-gate-pass-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    const downgradeReportPath = join(tmp, "downgrade-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "heterologous",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+        downgradeReportPath,
+      },
+    );
+    assert.equal(gated.level, "cross_source_no_subagent", "accepted gate must allow normal FR-DEG downgrade");
+    const report = JSON.parse(_readFileSync(downgradeReportPath, "utf8"));
+    assert.match(report.downgrade_reason, /accepted|allowed/i);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── T_DISPATCH_ROUND_STAMP: Finding 1 fix — report.round stamped by dispatcher ──
+test("T_DISPATCH_ROUND_STAMP dispatchReviewRound stamps report.round=1 on written report", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-round-stamp-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "pass" }),
+      reportPath,
+    });
+    assert.equal(result.report.round, 1, `report.round must be stamped 1 by dispatcher, got ${result.report.round}`);
+    const written = JSON.parse(_readFileSync(reportPath, "utf8"));
+    assert.equal(written.round, 1, `written report.round must equal 1, got ${written.round}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_ROUND_STAMP round-1 report passes evaluateDowngradeGate when other conditions met", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-round1-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "pass" }),
+      reportPath,
+    });
+    // Now use the written report as downgrade basis — gate must accept it
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath: reportPath,
+        basedOnRound: 1,
+        downgradeReportPath: join(tmp, "downgrade.json"),
+      },
+    );
+    assert.equal(gated.downgradeRejected, undefined, `gate must accept dispatcher-written report (round=1 stamped), got downgradeRejected=${gated.downgradeRejected}`);
+    assert.equal(gated.level, "cross_source_no_subagent", `accepted gate must allow FR-DEG downgrade, got ${gated.level}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── T_DISPATCH_STATUS_GATE: Finding 2 fix — report.status stamped + gate rejects non-pass ──
+test("T_DISPATCH_STATUS_GATE dispatchReviewRound stamps report.status from runner result", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-status-stamp-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "revise_required" }),
+      reportPath,
+    });
+    assert.equal(result.report.status, "revise_required", `report.status must be stamped from runner result, got ${result.report.status}`);
+    const written = JSON.parse(_readFileSync(reportPath, "utf8"));
+    assert.equal(written.status, "revise_required", `written report.status must equal runner status, got ${written.status}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_STATUS_GATE evaluateDowngradeGate rejects report with status outside allowlist (revise_required)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-status-bad-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    const downgradeReportPath = join(tmp, "downgrade-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "heterologous",
+      status: "revise_required",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+        downgradeReportPath,
+      },
+    );
+    assert.equal(gated.level, "cross_source_with_subagent", "non-pass status must block downgrade");
+    assert.equal(gated.downgradeRejected, true, "gate must explicitly reject non-pass status report");
+    const report = JSON.parse(_readFileSync(downgradeReportPath, "utf8"));
+    assert.match(report.downgrade_reason, /report\.status|completed\/passing|status/i, `downgrade_reason must cite status rejection, got ${report.downgrade_reason}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_STATUS_GATE evaluateDowngradeGate rejects report with status escalate_to_human", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-status-escalate-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "heterologous",
+      status: "escalate_to_human",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      { basedOnReportPath, basedOnRound: 1 },
+    );
+    assert.equal(gated.downgradeRejected, true, "escalate_to_human status must be rejected by gate");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+await runTests();
 console.log(`\nroute-review.test: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
