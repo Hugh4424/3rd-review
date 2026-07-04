@@ -11,17 +11,17 @@ const AGENTHUB = resolve(__dirname, '../../..'); // packages/core/agenthub
 
 const NEW_FILES = [
   'base-verifier.md',
-  'vibecoding/code-reviewer.md',
-  'vibecoding/code-reviewer-contract.md',
-  'vibecoding/design-reviewer.md',
-  'vibecoding/design-reviewer-contract.md',
-  'vibecoding/plan-reviewer.md',
-  'vibecoding/plan-reviewer-contract.md',
-  'vibecoding/test-acceptance-reviewer.md',
-  'vibecoding/test-acceptance-reviewer-contract.md',
-  'vibecoding/intake-direction-reviewer.md',
-  'vibecoding/intake-detail-reviewer.md',
-  'vibecoding/intake-reviewer-contract.md',
+  'vibecoding/build-code-reviewer.md',
+  'vibecoding/build-code-reviewer-contract.md',
+  'vibecoding/build-spec-reviewer.md',
+  'vibecoding/build-spec-reviewer-contract.md',
+  'vibecoding/build-plan-reviewer.md',
+  'vibecoding/build-plan-reviewer-contract.md',
+  'vibecoding/verify-code-reviewer.md',
+  'vibecoding/verify-code-reviewer-contract.md',
+  'vibecoding/make-decision-direction-reviewer.md',
+  'vibecoding/make-decision-detail-reviewer.md',
+  'vibecoding/make-decision-reviewer-contract.md',
 ];
 
 describe('Phase 1: review files migrated to two-layer verifiers/ structure', () => {

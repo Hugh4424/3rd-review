@@ -1589,14 +1589,14 @@ function planTracebilitySourceSlice(originalPrompt) {
 }
 
 function planRequiredSkillContext(originalPrompt) {
-  // Emit plan-reviewer-specific required skill contract reference and skill list.
+  // Emit build-plan-reviewer-specific required skill contract reference and skill list.
   const checkpoint = extractPromptField(originalPrompt, "checkpoint") || "";
   if (!checkpoint.toLowerCase().startsWith("plan")) return "";
   const contractPath = "verifiers/vibecoding/build-plan-reviewer-contract.md";
   const planContract = readIfExists(repoFile(contractPath));
   const contractChunk = planContract
     ? bounded(planContract, 6000)
-    : "(plan-reviewer-contract.md unavailable)";
+    : "(build-plan-reviewer-contract.md unavailable)";
   return [
     `## Plan Review Required Skill Contract`,
     `authoritativeContract: ${contractPath}`,

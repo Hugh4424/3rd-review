@@ -122,12 +122,12 @@ Extract the review kind prefix from `--checkpoint-id` (exact, e.g. `code-review-
 
 | checkpoint-id prefix | verifier prompt | verifier contract |
 |---|---|---|
-| `code-review` | `verifiers/vibecoding/code-reviewer.md` | `verifiers/vibecoding/code-reviewer-contract.md` |
-| `design` | `verifiers/vibecoding/design-reviewer.md` | `verifiers/vibecoding/design-reviewer-contract.md` |
-| `plan` | `verifiers/vibecoding/plan-reviewer.md` | `verifiers/vibecoding/plan-reviewer-contract.md` |
-| `test-acceptance` | `verifiers/vibecoding/test-acceptance-reviewer.md` | `verifiers/vibecoding/test-acceptance-reviewer-contract.md` |
-| `intake-direction-review` | `verifiers/vibecoding/intake-direction-reviewer.md` | `verifiers/vibecoding/intake-reviewer-contract.md` |
-| `intake-detail-review` | `verifiers/vibecoding/intake-detail-reviewer.md` | `verifiers/vibecoding/intake-reviewer-contract.md` |
+| `build-code` | `verifiers/vibecoding/build-code-reviewer.md` | `verifiers/vibecoding/build-code-reviewer-contract.md` |
+| `build-spec` | `verifiers/vibecoding/build-spec-reviewer.md` | `verifiers/vibecoding/build-spec-reviewer-contract.md` |
+| `build-plan` | `verifiers/vibecoding/build-plan-reviewer.md` | `verifiers/vibecoding/build-plan-reviewer-contract.md` |
+| `verify-code` | `verifiers/vibecoding/verify-code-reviewer.md` | `verifiers/vibecoding/verify-code-reviewer-contract.md` |
+| `make-decision-direction` | `verifiers/vibecoding/make-decision-direction-reviewer.md` | `verifiers/vibecoding/make-decision-reviewer-contract.md` |
+| `make-decision-detail` | `verifiers/vibecoding/make-decision-detail-reviewer.md` | `verifiers/vibecoding/make-decision-reviewer-contract.md` |
 
 The prompt inlines only the short entry point; the three full verifier files are listed in the Verifier Instruction Manifest: `verifiers/base-verifier.md`, `verifiers/vibecoding/{verifier-contract}`, `verifiers/vibecoding/{verifier-prompt}`. The short entry point must include: review kind, reviewRequestId, verdict schema output requirements, required skills, the rule that blocking findings may only come from contract rules, and the requirement to read the Required Read Set. If any verifier file is missing → `escalate_to_human`. Fall back to inlining all three originals only when the reviewer runtime cannot read repo files, and record a `fallbackCostNote`.
 
@@ -152,7 +152,7 @@ The Required Read Set is drawn from: code-review changed hunks, boundary/forbidd
 
 Each fact carries a `source` (which command/file it came from) and a `collectedAt` (ISO timestamp).
 
-**Reviewer contract**: the verifier contract specifies that when Host-Verified Facts are present, do not re-run the evidence command — read-plausibility check is sufficient (**this exemption covers only the re-running of host-verified evidence commands; it does not exempt the requirement to read ≥80% of changed lines**). Contradiction → `escalate_to_human` (fail-closed). See `packages/core/agenthub/workflows/vibecoding/code-reviewer-contract.md` *(agenthub platform path; not in the standalone repo)* and `test-acceptance-reviewer-contract.md` *(agenthub platform path; not in the standalone repo)*.
+**Reviewer contract**: the verifier contract specifies that when Host-Verified Facts are present, do not re-run the evidence command — read-plausibility check is sufficient (**this exemption covers only the re-running of host-verified evidence commands; it does not exempt the requirement to read ≥80% of changed lines**). Contradiction → `escalate_to_human` (fail-closed). See `packages/core/agenthub/workflows/vibecoding/build-code-reviewer-contract.md` *(agenthub platform path; not in the standalone repo)* and `verify-code-reviewer-contract.md` *(agenthub platform path; not in the standalone repo)*.
 
 ### Step 3.5: Sub-reviewer Parallel Pre-review + Bundle Generation (mandatory)
 

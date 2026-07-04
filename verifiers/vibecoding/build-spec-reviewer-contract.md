@@ -1,6 +1,6 @@
 # Design Review Contract
 
-> This file defines the inspection dimensions for the design-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
+> This file defines the inspection dimensions for the build-spec-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
 ## Three-Axis Review
 

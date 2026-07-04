@@ -1,6 +1,6 @@
 # Test Acceptance Review Contract
 
-> This file defines the inspection dimensions for the test-acceptance-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
+> This file defines the inspection dimensions for the verify-code-reviewer. Findings outside this contract may only be marked `minor`, never `blocking`.
 
 ## Three-Axis Review
 

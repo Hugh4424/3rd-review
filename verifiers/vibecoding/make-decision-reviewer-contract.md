@@ -138,7 +138,7 @@ If a framework challenge is valid → may be marked blocking (handled within the
 
 ## Detail Section (applies to intake-detail-review)
 
-> **Note**: intake-detail-review is a comprehensive review that covers four dimensions in a single pass: Blindspot, Detail, Drift, and Scope. This section defines the rules for each dimension; the complete review checklist is in `intake-detail-reviewer.md`.
+> **Note**: intake-detail-review is a comprehensive review that covers four dimensions in a single pass: Blindspot, Detail, Drift, and Scope. This section defines the rules for each dimension; the complete review checklist is in `make-decision-detail-reviewer.md`.
 
 ### Five-Axis Review
 
