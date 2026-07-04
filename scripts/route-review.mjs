@@ -382,11 +382,16 @@ export function evaluateDowngradeGate({
     }
     const source = reportField(report, "source");
     const trueCross = reportField(report, "true_cross_engine");
+    const reportStatus = reportField(report, "status");
+    const STATUS_ALLOWLIST = ["pass", "completed", undefined];
     if (source !== "heterologous") {
       reasons.push("source=heterologous required");
     }
     if (trueCross !== true) {
       reasons.push("true_cross_engine=true required");
+    }
+    if (!STATUS_ALLOWLIST.includes(reportStatus)) {
+      reasons.push(`report.status=${reportStatus} not in completed/passing allowlist`);
     }
   }
 
@@ -505,6 +510,8 @@ export async function dispatchReviewRound({
     }
   }
 
+  report.round = round;
+  report.status = result.status ?? "pass";
   report.source = "heterologous";
   report.metadata = {
     ...metadata,

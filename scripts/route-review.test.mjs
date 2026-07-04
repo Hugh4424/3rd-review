@@ -1268,6 +1268,130 @@ test("T007 downgrade gate accepts round-1 heterologous true-cross report and all
   }
 });
 
+// ── T_DISPATCH_ROUND_STAMP: Finding 1 fix — report.round stamped by dispatcher ──
+test("T_DISPATCH_ROUND_STAMP dispatchReviewRound stamps report.round=1 on written report", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-round-stamp-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "pass" }),
+      reportPath,
+    });
+    assert.equal(result.report.round, 1, `report.round must be stamped 1 by dispatcher, got ${result.report.round}`);
+    const written = JSON.parse(_readFileSync(reportPath, "utf8"));
+    assert.equal(written.round, 1, `written report.round must equal 1, got ${written.round}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_ROUND_STAMP round-1 report passes evaluateDowngradeGate when other conditions met", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-round1-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "pass" }),
+      reportPath,
+    });
+    // Now use the written report as downgrade basis — gate must accept it
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath: reportPath,
+        basedOnRound: 1,
+        downgradeReportPath: join(tmp, "downgrade.json"),
+      },
+    );
+    assert.equal(gated.downgradeRejected, undefined, `gate must accept dispatcher-written report (round=1 stamped), got downgradeRejected=${gated.downgradeRejected}`);
+    assert.equal(gated.level, "cross_source_no_subagent", `accepted gate must allow FR-DEG downgrade, got ${gated.level}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ── T_DISPATCH_STATUS_GATE: Finding 2 fix — report.status stamped + gate rejects non-pass ──
+test("T_DISPATCH_STATUS_GATE dispatchReviewRound stamps report.status from runner result", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-status-stamp-"));
+  try {
+    const reportPath = join(tmp, "review-report.json");
+    const result = await dispatchReviewRound({
+      round: 1,
+      sessionStatePath: join(tmp, "session-state.json"),
+      offlineEnginesPath: join(tmp, "offline-engines.json"),
+      detectHostFn: async () => "claude",
+      queryAvailableEngineFn: async () => ({ engine: "codex" }),
+      runner: async () => ({ status: "revise_required" }),
+      reportPath,
+    });
+    assert.equal(result.report.status, "revise_required", `report.status must be stamped from runner result, got ${result.report.status}`);
+    const written = JSON.parse(_readFileSync(reportPath, "utf8"));
+    assert.equal(written.status, "revise_required", `written report.status must equal runner status, got ${written.status}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_STATUS_GATE evaluateDowngradeGate rejects report with status outside allowlist (revise_required)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-status-bad-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    const downgradeReportPath = join(tmp, "downgrade-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "heterologous",
+      status: "revise_required",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      {
+        basedOnReportPath,
+        basedOnRound: 1,
+        downgradeReportPath,
+      },
+    );
+    assert.equal(gated.level, "cross_source_with_subagent", "non-pass status must block downgrade");
+    assert.equal(gated.downgradeRejected, true, "gate must explicitly reject non-pass status report");
+    const report = JSON.parse(_readFileSync(downgradeReportPath, "utf8"));
+    assert.match(report.downgrade_reason, /report\.status|completed\/passing|status/i, `downgrade_reason must cite status rejection, got ${report.downgrade_reason}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("T_DISPATCH_STATUS_GATE evaluateDowngradeGate rejects report with status escalate_to_human", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-gate-status-escalate-"));
+  try {
+    const basedOnReportPath = join(tmp, "round1-report.json");
+    writeFileSync(basedOnReportPath, JSON.stringify({
+      round: 1,
+      source: "heterologous",
+      status: "escalate_to_human",
+      metadata: { true_cross_engine: true },
+    }));
+    const gated = applyPostRoundDegradationWithGate(
+      [{ round: 1, level: "cross_source_with_subagent", findings: [{ severity: "minor" }] }],
+      routeReview({ input: "```diff\n@@", diffLines: 5000 }),
+      { basedOnReportPath, basedOnRound: 1 },
+    );
+    assert.equal(gated.downgradeRejected, true, "escalate_to_human status must be rejected by gate");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 await runTests();
 console.log(`\nroute-review.test: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
