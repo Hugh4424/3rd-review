@@ -38,6 +38,7 @@ for arg in "$@"; do
     --task-name=*) TASK_NAME="${arg#*=}" ;;
     --review-runner=*) REVIEW_RUNNER="${arg#*=}" ;;
     --max-revise-rounds=*) MAX_REVISE_ROUNDS="${arg#*=}" ;;
+    --checkpoint=*) CHECKPOINT="${arg#*=}" ;;
     --foreground-only) FOREGROUND_ONLY=1 ;;
     --skip-manifest) SKIP_MANIFEST=1 ;;
     *) echo "ERROR: unknown argument: $arg" >&2; exit 3 ;;
@@ -212,7 +213,7 @@ while :; do
   # 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
   set +e
   if [ "${IS_HETEROLOGOUS:-0}" -eq 1 ]; then
-    node "$HET_REVIEWER" --diff="$INPUT_FILE" --round="$ROUND" --output="$RAW_VERDICT"
+    node "$HET_REVIEWER" --diff="$INPUT_FILE" --round="$ROUND" --output="$RAW_VERDICT" ${CHECKPOINT:+--checkpoint="$CHECKPOINT"}
   else
     $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
   fi

@@ -1017,7 +1017,7 @@ function headingBlock(text, pattern, maxChars) {
 
 function contractContext(kind) {
   const workflowContract = readIfExists(repoFile("packages/core/agenthub/workflows/vibecoding/contract.md"));
-  const codeContract = readIfExists(repoFile("packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/code-reviewer-contract.md"));
+  const codeContract = readIfExists(repoFile("verifiers/vibecoding/build-code-reviewer-contract.md"));
   const chunks = [];
   if (kind === "required-skill") {
     chunks.push(headingBlock(workflowContract, /^## 强制技能门禁/, 9000));
@@ -1592,7 +1592,7 @@ function planRequiredSkillContext(originalPrompt) {
   // Emit plan-reviewer-specific required skill contract reference and skill list.
   const checkpoint = extractPromptField(originalPrompt, "checkpoint") || "";
   if (!checkpoint.toLowerCase().startsWith("plan")) return "";
-  const contractPath = "packages/core/agenthub/skills/3rd-review/verifiers/vibecoding/plan-reviewer-contract.md";
+  const contractPath = "verifiers/vibecoding/build-plan-reviewer-contract.md";
   const planContract = readIfExists(repoFile(contractPath));
   const contractChunk = planContract
     ? bounded(planContract, 6000)

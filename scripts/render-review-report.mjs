@@ -66,10 +66,11 @@ function titleForCheckpoint(checkpoint, stages) {
     const s = checkpoint.replace('code-review-phase-','').replace('code-review-','');
     return `代码审查 Phase ${s}`;
   }
-  if (checkpoint.startsWith('design')) return '设计审查';
-  if (checkpoint.startsWith('plan')) return '方案审查';
-  if (checkpoint.startsWith('test-acceptance')) return '验收审查';
-  if (checkpoint.startsWith('intake')) return '需求登记审查';
+  if (checkpoint.startsWith('build-spec') || checkpoint.startsWith('design')) return '设计审查';
+  if (checkpoint.startsWith('build-plan') || checkpoint.startsWith('plan')) return '方案审查';
+  if (checkpoint.startsWith('build-code')) return '实现审查';
+  if (checkpoint.startsWith('verify-code') || checkpoint.startsWith('test-acceptance')) return '验收审查';
+  if (checkpoint.startsWith('make-decision') || checkpoint.startsWith('intake')) return '需求决策审查';
   return checkpoint;
 }
 

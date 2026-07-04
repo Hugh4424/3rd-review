@@ -531,12 +531,39 @@ export function extractTokenUsage(stdout) {
 }
 
 /**
+ * Resolve verifier and contract file paths for a given workflowhub stage checkpoint.
+ * Returns { reviewerText, contractText } — either may be empty string if files not found.
+ */
+function loadVerifierContext(checkpoint) {
+  const STAGE_MAP = {
+    "make-decision": ["make-decision-direction-reviewer.md", "make-decision-reviewer-contract.md"],
+    "build-spec":    ["build-spec-reviewer.md",              "build-spec-reviewer-contract.md"],
+    "build-plan":    ["build-plan-reviewer.md",              "build-plan-reviewer-contract.md"],
+    "build-code":    ["build-code-reviewer.md",              "build-code-reviewer-contract.md"],
+    "verify-code":   ["verify-code-reviewer.md",             "verify-code-reviewer-contract.md"],
+  };
+  const verifiersDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "verifiers", "vibecoding");
+  const stage = checkpoint ? String(checkpoint).toLowerCase() : "";
+  const entry = Object.entries(STAGE_MAP).find(([key]) => stage.startsWith(key));
+  if (!entry) return { reviewerText: "", contractText: "" };
+  const [, [reviewerFile, contractFile]] = entry;
+  const readSafe = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
+  return {
+    reviewerText: readSafe(path.join(verifiersDir, reviewerFile)),
+    contractText: readSafe(path.join(verifiersDir, contractFile)),
+  };
+}
+
+/**
  * Try to build a review prompt from the diff content.
  */
-function buildReviewPrompt(diffContent, provider, diffFile, round, truncated) {
+function buildReviewPrompt(diffContent, provider, diffFile, round, truncated, checkpoint) {
   // truncated comes from truncateDiff() — the single source of truth (B4)
-  // Use a minimal review prompt that asks for a verdict JSON
-  return `Review the following diff and return a JSON object with these fields:
+  const { reviewerText, contractText } = loadVerifierContext(checkpoint);
+  const verifierSection = reviewerText
+    ? `\n\n---\n## REVIEWER ROLE\n\n${reviewerText}${contractText ? `\n\n---\n## REVIEWER CONTRACT\n\n${contractText}` : ""}\n\n---\n`
+    : "";
+  return `${verifierSection}Review the following diff and return a JSON object with these fields:
   - "verdict": one of "pass", "revise_required", "escalate_to_human"
   - "findings": array of {severity, file, line, issue, recommendation}
   - "resolutionSummary": brief summary string
@@ -732,7 +759,7 @@ export function runThreatAuditor(diffFile, opts = {}) {
  * @param {object} [opts.envOverride] - env override (for testing)
  * @returns {object} verdict object
  */
-export function runReview({ diffFile, round, outputFile, envOverride }) {
+export function runReview({ diffFile, round, outputFile, envOverride, checkpoint }) {
   const sourceEnv = envOverride ?? process.env;
   const host = detectHost(sourceEnv);
 
@@ -817,7 +844,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   const { content: truncatedDiff, truncated } = truncateDiff(diffContent, budget);
 
   // ── Build prompt ──
-  const prompt = buildReviewPrompt(truncatedDiff, selected, diffFile, round, truncated);
+  const prompt = buildReviewPrompt(truncatedDiff, selected, diffFile, round, truncated, checkpoint);
 
   // ── Build child env (whitelist) ──
   const childEnv = buildChildEnv(selected, sourceEnv);
@@ -999,14 +1026,15 @@ if (isMain()) {
   const diffFile = getArg("diff");
   const outputFile = getArg("output");
   const round = parseInt(getArg("round") || "1", 10);
+  const checkpoint = getArg("checkpoint");
 
   if (!diffFile || !outputFile) {
-    console.error("Usage: run-heterologous-review.mjs --diff=<file> --round=<n> --output=<file> [--env-strip-check]");
+    console.error("Usage: run-heterologous-review.mjs --diff=<file> --round=<n> --output=<file> [--checkpoint=<stage>] [--env-strip-check]");
     process.exit(1);
   }
 
   try {
-    runReview({ diffFile, round, outputFile });
+    runReview({ diffFile, round, outputFile, checkpoint });
     process.exit(0);
   } catch (e) {
     console.error(`[run-heterologous-review] Fatal error: ${e.message}`);
