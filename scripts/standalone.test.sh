@@ -179,8 +179,27 @@ set -e
 rm -rf "$ROOT4"
 [ "$RC4" -eq 2 ] || fail "missing input should escalate (exit 2), got $RC4"
 
+# ── case 5 (static): --checkpoint is parsed from args and forwarded to het reviewer call ──
+# standalone.sh uses ${CHECKPOINT:+--checkpoint="$CHECKPOINT"} on the `node "$HET_REVIEWER" ...`
+# line. This static regression verifies:
+#   (a) --checkpoint=* is parsed into CHECKPOINT in the arg-parsing loop
+#   (b) ${CHECKPOINT:+--checkpoint="$CHECKPOINT"} (or equivalent) appears on the HET_REVIEWER call
+
+# (a) --checkpoint=* must be parsed
+grep -qE '^\s*--checkpoint=\*\)' "$STANDALONE" \
+  || fail "case5a: standalone.sh does not parse --checkpoint=* argument"
+
+# (b) CHECKPOINT must be forwarded to the node het-reviewer call using conditional expansion
+grep -qE 'node.*HET_REVIEWER.*CHECKPOINT' "$STANDALONE" \
+  || fail "case5b: standalone.sh does not forward \$CHECKPOINT to the node \$HET_REVIEWER call"
+
+# (c) The forwarding must use the safe ${CHECKPOINT:+...} form (not bare $CHECKPOINT which would
+#     add an empty --checkpoint= on unset)
+grep -qE '\$\{CHECKPOINT:\+' "$STANDALONE" \
+  || fail "case5c: standalone.sh does not use \${CHECKPOINT:+...} conditional expansion for --checkpoint forwarding"
+
 if [ "$FAIL" -ne 0 ]; then
   echo "=== standalone.sh tests FAILED ===" >&2
   exit 1
 fi
-echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, revise cap"
+echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, revise cap, checkpoint forwarding"

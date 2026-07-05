@@ -17,6 +17,7 @@ import {
   buildVerdictFromStdout,
   extractTokenUsage,
   resolveOmcArtifactContent,
+  loadVerifierContext,
 } from "./run-heterologous-review.mjs";
 import assert from "node:assert";
 import fs from "node:fs";
@@ -925,6 +926,98 @@ test("AC-5-symlink: CLI --env-strip-check through symlinked path — isMain() mu
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// loadVerifierContext — unit tests (checkpoint routing coverage)
+// ═══════════════════════════════════════════════════════════════
+
+test("loadVerifierContext: checkpoint='build-plan' loads both reviewer and contract files", () => {
+  const ctx = loadVerifierContext("build-plan");
+  assert.ok(
+    typeof ctx.reviewerText === "string",
+    "reviewerText must be a string"
+  );
+  assert.ok(
+    typeof ctx.contractText === "string",
+    "contractText must be a string"
+  );
+  // Both files must have real content (not empty) because the verifier files exist on disk
+  assert.ok(
+    ctx.reviewerText.length > 0,
+    "build-plan-reviewer.md must not be empty"
+  );
+  assert.ok(
+    ctx.contractText.length > 0,
+    "build-plan-reviewer-contract.md must not be empty"
+  );
+});
+
+test("loadVerifierContext: checkpoint='build-plan' reviewerText contains build-plan-reviewer content", () => {
+  const ctx = loadVerifierContext("build-plan");
+  // The reviewer file should reference plan-related concepts
+  const reviewerLower = ctx.reviewerText.toLowerCase();
+  assert.ok(
+    reviewerLower.length > 50,
+    "build-plan reviewer text must be substantive (>50 chars)"
+  );
+});
+
+test("loadVerifierContext: checkpoint='build-plan-v2' prefix-matches build-plan entry", () => {
+  // stage.startsWith(key) means 'build-plan-v2' should resolve to build-plan
+  const ctx = loadVerifierContext("build-plan-v2");
+  assert.ok(
+    ctx.reviewerText.length > 0,
+    "build-plan prefix match should load reviewer file"
+  );
+  assert.ok(
+    ctx.contractText.length > 0,
+    "build-plan prefix match should load contract file"
+  );
+});
+
+test("loadVerifierContext: unknown checkpoint returns empty strings (graceful fallback)", () => {
+  const ctx = loadVerifierContext("no-such-stage-xyz");
+  assert.ok(
+    typeof ctx.reviewerText === "string",
+    "unknown checkpoint reviewerText must be string"
+  );
+  assert.ok(
+    typeof ctx.contractText === "string",
+    "unknown checkpoint contractText must be string"
+  );
+  // No matching entry in STAGE_MAP → readSafe on nonexistent paths → empty strings
+  assert.strictEqual(
+    ctx.reviewerText,
+    "",
+    "unknown checkpoint should yield empty reviewerText"
+  );
+  assert.strictEqual(
+    ctx.contractText,
+    "",
+    "unknown checkpoint should yield empty contractText"
+  );
+});
+
+test("loadVerifierContext: null/undefined checkpoint returns empty strings (graceful fallback)", () => {
+  const ctxNull = loadVerifierContext(null);
+  const ctxUndef = loadVerifierContext(undefined);
+  assert.strictEqual(ctxNull.reviewerText, "", "null checkpoint reviewerText should be empty");
+  assert.strictEqual(ctxNull.contractText, "", "null checkpoint contractText should be empty");
+  assert.strictEqual(ctxUndef.reviewerText, "", "undefined checkpoint reviewerText should be empty");
+  assert.strictEqual(ctxUndef.contractText, "", "undefined checkpoint contractText should be empty");
+});
+
+test("loadVerifierContext: checkpoint='build-code' loads build-code reviewer files", () => {
+  const ctx = loadVerifierContext("build-code");
+  assert.ok(ctx.reviewerText.length > 0, "build-code reviewer file must have content");
+  assert.ok(ctx.contractText.length > 0, "build-code contract file must have content");
+});
+
+test("loadVerifierContext: checkpoint='verify-code' loads verify-code reviewer files", () => {
+  const ctx = loadVerifierContext("verify-code");
+  assert.ok(ctx.reviewerText.length > 0, "verify-code reviewer file must have content");
+  assert.ok(ctx.contractText.length > 0, "verify-code contract file must have content");
 });
 
 // ═══════════════════════════════════════════════════════════════

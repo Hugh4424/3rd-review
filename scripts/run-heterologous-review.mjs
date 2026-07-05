@@ -534,7 +534,7 @@ export function extractTokenUsage(stdout) {
  * Resolve verifier and contract file paths for a given workflowhub stage checkpoint.
  * Returns { reviewerText, contractText } — either may be empty string if files not found.
  */
-function loadVerifierContext(checkpoint) {
+export function loadVerifierContext(checkpoint) {
   const STAGE_MAP = {
     "make-decision": ["make-decision-direction-reviewer.md", "make-decision-reviewer-contract.md"],
     "build-spec":    ["build-spec-reviewer.md",              "build-spec-reviewer-contract.md"],
