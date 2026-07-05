@@ -782,6 +782,10 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
 
   // ── Degraded path: same-source ──
   if (selected === "degraded-same-source") {
+    // Load checkpoint-specific reviewer/contract even on degraded path so the
+    // R6 same-source sub-agent receives the correct verifier prompt (FR-ROUTE-003).
+    const { reviewerText: degradedReviewerText, contractText: degradedContractText } =
+      loadVerifierContext(checkpoint);
     const verdict = {
       verdict: "escalate_to_human",
       provider: "degraded-same-source",
@@ -799,6 +803,8 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
         "No heterologous provider available; review degraded to same-source. Manual review required.",
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
+      ...(degradedReviewerText ? { reviewerPrompt: degradedReviewerText } : {}),
+      ...(degradedContractText ? { contractPrompt: degradedContractText } : {}),
     };
     // Validate diff readability before running auditor, consistent with the
     // unreadable-diff branch. Only run the auditor when there is a readable
@@ -981,7 +987,12 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
     verdict.findings = [];
   }
 
-  verdict.trueCrossEngine = true;
+  // Only mark trueCrossEngine when the advisor actually produced output (status=0, non-empty).
+  // A B2 escalate (non-zero exit or empty output) means no real cross-engine review ran.
+  const advisorSucceeded = status === 0 && resolvedOutput && resolvedOutput.length > 0;
+  if (advisorSucceeded) {
+    verdict.trueCrossEngine = true;
+  }
   verdict.reviewMode = "omc-ask";
 
   // AC-7 / FR-QUALITY-001 dim 4: run threat-auditor in ALL review modes
