@@ -9,7 +9,9 @@
 #   - Chinese conclusion printed to stdout (FR-GUARD-006)
 #   - O5 version anchor (FR-PORT-007): git sha when available, else manual-<UTC>
 #   - provenance=single-context written into verdict.json (FR-GUARD-003)
-#   - revise loop cap (D25/O18): max_revise_rounds=3, escalate at cap
+#   - no internal revise loop (FR-THIRDREVIEW-003): single call per invocation, verdict
+#     decides the exit code directly — round management belongs to the wh-review integration
+#     entry point, not this engine (AC-THIRDREVIEW3-1 static check, AC-THIRDREVIEW3-2 behavior)
 #
 # A pluggable --review-runner is injected (REVIEW_RUNNER stub) so the verdict is
 # deterministic and reproducible without provider login / network / LLM variance.
@@ -137,7 +139,10 @@ fi
 # Chinese conclusion to stdout
 printf '%s' "$OUT1" | grep -qE '[一-龥]' || fail "no Chinese conclusion printed to stdout"
 
-# ── case 2: revise_required verdict -> stub always revises -> cap at 3 -> escalate exit 2 ──
+# ── case 2 (AC-THIRDREVIEW3-2, behavior): revise_required verdict -> single call, immediate
+# exit 1, exactly one verdict-round-1.raw.json produced, no verdict-round-2.raw.json ever
+# appears. FR-THIRDREVIEW-003 requires the revise loop to be structurally gone, not capped —
+# a stub that always returns revise_required must terminate the process on the first call.
 ROOT2="$(mktemp -d)"
 STUB2="$(mktemp)"
 make_stub revise_required "$STUB2"
@@ -145,11 +150,17 @@ set +e
 bash "$STANDALONE" --input="$INPUT" --output-root="$ROOT2" --review-runner="$STUB2" >/tmp/sa-out2 2>/tmp/sa-err2
 RC2=$?
 set -e
-# perpetual revise should hit max_revise_rounds=3 and escalate (exit 2), not loop forever
-[ "$RC2" -eq 2 ] || fail "perpetual revise should escalate (exit 2) at cap, got $RC2"
+[ "$RC2" -eq 1 ] || fail "revise_required should exit 1 immediately (single-shot call, no internal loop), got $RC2"
 grep -qE '[一-龥]' /tmp/sa-out2 || fail "case2 no Chinese conclusion"
-# escalation reason + next-step on stderr
-grep -qiE 'escalat|人工|未决|max|上限' /tmp/sa-err2 /tmp/sa-out2 || fail "case2 no escalation reason / next-step"
+
+TASK_DIR2="$(find "$ROOT2/tasks" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)"
+if [ -n "$TASK_DIR2" ]; then
+  [ -f "$TASK_DIR2/reviews/verdict-round-1.raw.json" ] || fail "case2: verdict-round-1.raw.json should have been produced by the single call"
+  [ -f "$TASK_DIR2/reviews/verdict-round-2.raw.json" ] && fail "case2: verdict-round-2.raw.json must NOT exist — no revise loop, exactly one call per invocation"
+else
+  fail "case2: no task dir created"
+fi
+rm -rf "$ROOT2"
 
 # ── case 3: non-git output dir -> versionAnchor = manual-<UTC> (FR-PORT-007) ──
 ROOT3="$(mktemp -d)"
@@ -198,85 +209,25 @@ grep -qE 'node.*HET_REVIEWER.*CHECKPOINT' "$STANDALONE" \
 grep -qE '\$\{CHECKPOINT:\+' "$STANDALONE" \
   || fail "case5c: standalone.sh does not use \${CHECKPOINT:+...} conditional expansion for --checkpoint forwarding"
 
-# ── stub runner (mutating): simulates a genuine revision each round by appending a
-# marker to --prompt-file before answering, so the input-unchanged detector never fires
-# and only the --max-revise-rounds hard cap can be responsible for stopping the loop.
-make_stub_mutating() {
-  local verdict="$1" stub="$2"
-  cat > "$stub" <<STUB
-#!/bin/bash
-set -euo pipefail
-RESULT=""
-RID=""
-PROMPT=""
-for a in "\$@"; do
-  case "\$a" in
-    --prompt-file=*) PROMPT="\${a#*=}" ;;
-    --result-file=*) RESULT="\${a#*=}" ;;
-    --review-request-id=*) RID="\${a#*=}" ;;
-  esac
-done
-echo "revision-marker-\$RANDOM-\$\$" >> "\$PROMPT"
-cat > "\$RESULT" <<JSON
-{
-  "reviewRequestId": "\$RID",
-  "verdict": "$verdict",
-  "findings": [],
-  "resolutionSummary": "stub review for test"
-}
-JSON
-STUB
-  chmod +x "$stub"
-}
-
-# ── case 6 (TDD regression): --max-revise-rounds must be a real hard cap. Even when the
-# reviewee genuinely revises --input every round (so fingerprint/content churn never lets
-# the loop settle), round MAX_REVISE_ROUNDS must still force escalate — it must not depend
-# on repeated-finding detection to terminate.
-ROOT6="$(mktemp -d)"
-STUB6="$(mktemp)"
-INPUT6="$(mktemp)"
-cp "$INPUT" "$INPUT6"
-make_stub_mutating revise_required "$STUB6"
-set +e
-bash "$STANDALONE" --input="$INPUT6" --output-root="$ROOT6" --review-runner="$STUB6" --max-revise-rounds=2 >/tmp/sa-out6 2>/tmp/sa-err6
-RC6=$?
-set -e
-[ "$RC6" -eq 2 ] || fail "case6: --max-revise-rounds=2 with genuine per-round revision should escalate (exit 2), got $RC6"
-TASK_DIR6="$(find "$ROOT6/tasks" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)"
-if [ -n "$TASK_DIR6" ]; then
-  [ -f "$TASK_DIR6/reviews/verdict-round-1.raw.json" ] || fail "case6: round 1 should have run"
-  [ -f "$TASK_DIR6/reviews/verdict-round-2.raw.json" ] || fail "case6: round 2 should have run (max-revise-rounds=2)"
-  [ -f "$TASK_DIR6/reviews/verdict-round-3.raw.json" ] && fail "case6: round 3 must NOT run — --max-revise-rounds=2 must hard-stop after round 2"
-else
-  fail "case6: no task dir created"
+# ── case AC-THIRDREVIEW3-1 (static): standalone.sh must not contain a revise-loop construct
+# that re-invokes the review runner when verdict=revise_required. FR-THIRDREVIEW-003 requires
+# the loop to be structurally absent, not merely capped — assert every load-bearing idiom of
+# the old loop (infinite while, continue, round counter, round-cap flag) is gone entirely.
+if grep -qE '\bcontinue\b' "$STANDALONE"; then
+  fail "AC-THIRDREVIEW3-1: standalone.sh still contains a bash 'continue' (revise loop must be structurally removed, not capped)"
 fi
-grep -qiE 'max|上限' /tmp/sa-err6 || fail "case6: escalation reason should mention the max-revise-rounds cap"
-rm -rf "$ROOT6" "$INPUT6"
-
-# ── case 7 (TDD regression): if --input is byte-identical to the previous round (caller
-# never actually revised the reviewee), standalone.sh must escalate immediately on round 2
-# instead of burning another real review-runner call — no unbounded spin on static input.
-ROOT7="$(mktemp -d)"
-STUB7="$(mktemp)"
-make_stub revise_required "$STUB7"
-set +e
-bash "$STANDALONE" --input="$INPUT" --output-root="$ROOT7" --review-runner="$STUB7" >/tmp/sa-out7 2>/tmp/sa-err7
-RC7=$?
-set -e
-[ "$RC7" -eq 2 ] || fail "case7: unchanged input across rounds should escalate (exit 2), got $RC7"
-TASK_DIR7="$(find "$ROOT7/tasks" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)"
-if [ -n "$TASK_DIR7" ]; then
-  [ -f "$TASK_DIR7/reviews/verdict-round-1.raw.json" ] || fail "case7: round 1 should have run"
-  [ -f "$TASK_DIR7/reviews/verdict-round-2.raw.json" ] && fail "case7: round 2 must NOT invoke review-runner again on unchanged input"
-else
-  fail "case7: no task dir created"
+if grep -qE 'while[[:space:]]*(:|true)[[:space:]]*;[[:space:]]*do' "$STANDALONE"; then
+  fail "AC-THIRDREVIEW3-1: standalone.sh still contains an infinite while-loop idiom (revise loop must be structurally removed)"
 fi
-grep -q '输入内容与上一轮完全一致' /tmp/sa-err7 || fail "case7: missing 'input unchanged since previous round' escalation message"
-rm -rf "$ROOT7"
+if grep -qiE 'max.?revise.?rounds' "$STANDALONE"; then
+  fail "AC-THIRDREVIEW3-1: standalone.sh still references max-revise-rounds (round-cap patch must be fully removed per FR-THIRDREVIEW-003)"
+fi
+if grep -qE 'ROUND[[:space:]]*=[[:space:]]*\$\(\(ROUND' "$STANDALONE"; then
+  fail "AC-THIRDREVIEW3-1: standalone.sh still increments a round counter (revise loop state must be structurally removed)"
+fi
 
 if [ "$FAIL" -ne 0 ]; then
   echo "=== standalone.sh tests FAILED ===" >&2
   exit 1
 fi
-echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, revise cap, checkpoint forwarding"
+echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, single-shot revise (no internal loop), checkpoint forwarding"

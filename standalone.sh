@@ -3,7 +3,7 @@
 #
 # 用法：
 #   standalone.sh --input=<路径或-> [--output-root=<目录,缺省 cwd>] [--task-name=<可选>]
-#                 [--review-runner=<cmd>] [--max-revise-rounds=N]
+#                 [--review-runner=<cmd>]
 #
 # 职责（薄适配，审查策略在 SKILL.md，不在此重复）：
 #   - 上下文护栏：输入必须存在可读，否则 escalate（exit 2）
@@ -11,9 +11,9 @@
 #   - O9 任务名：sanitized-slug + UTC + 短随机 id，不覆盖已有
 #   - run-manifest.json 状态机：in_progress → completed | failed
 #   - O5 版本锚点（FR-PORT-007）：git 可用记 sha，否则 manual-<UTC>
-#   - 调 review-runner 产 verdict，注入 provenance=single-context（FR-GUARD-003）
-#   - revise 循环硬上限 --max-revise-rounds（默认 3）：到达上限仍未 pass，强制 escalate_to_human；
-#     同时逐轮比对 --input 内容 hash，若与上一轮完全一致（未实质修订）立即 escalate，不空转真实审查调用
+#   - 调 review-runner 产 verdict 一次，注入 provenance=single-context（FR-GUARD-003）；
+#     不做内部 revise 循环、不做轮次上限判断（FR-THIRDREVIEW-003：轮次管理属于集成入口 wh-review，
+#     不属于本引擎）——runner 返回什么裁决，本脚本据此裁决并立即退出进程
 #   - 退出码契约（FR-GUARD-001）：0=pass，1=revise_required，2=escalate_to_human；其他非零=执行错误
 #   - stdout 中文结论（FR-GUARD-006），stderr 升级原因+下一步指引
 #
@@ -29,7 +29,6 @@ REVIEW_RUNNER="${THIRD_REVIEW_RUNNER:-}"
 INPUT=""
 OUTPUT_ROOT="$(pwd)"
 TASK_NAME=""
-MAX_REVISE_ROUNDS=3
 
 FOREGROUND_ONLY=0
 for arg in "$@"; do
@@ -38,7 +37,6 @@ for arg in "$@"; do
     --output-root=*) OUTPUT_ROOT="${arg#*=}" ;;
     --task-name=*) TASK_NAME="${arg#*=}" ;;
     --review-runner=*) REVIEW_RUNNER="${arg#*=}" ;;
-    --max-revise-rounds=*) MAX_REVISE_ROUNDS="${arg#*=}" ;;
     --checkpoint=*) CHECKPOINT="${arg#*=}" ;;
     --foreground-only) FOREGROUND_ONLY=1 ;;
     --skip-manifest) SKIP_MANIFEST=1 ;;
@@ -137,21 +135,19 @@ fi
 MANIFEST="$TASK_PATH/run-manifest.json"
 STARTED_AT="$(now_utc)"
 
-# ── run-manifest 状态机：in_progress ──
+# ── run-manifest 状态机：in_progress（单次调用，无轮次概念——FR-THIRDREVIEW-003）──
 write_manifest() {
-  local status="$1" verdict="${2:-}" exit_code="${3:-}" revise_rounds="${4:-0}" failure_reason="${5:-}"
+  local status="$1" verdict="${2:-}" exit_code="${3:-}" failure_reason="${4:-}"
   python3 - "$MANIFEST" "$TASK_ID" "$status" "$STARTED_AT" "$VERSION_ANCHOR" \
-    "$INPUT_LABEL" "$verdict" "$exit_code" "$revise_rounds" "$MAX_REVISE_ROUNDS" "$failure_reason" <<'PY'
+    "$INPUT_LABEL" "$verdict" "$exit_code" "$failure_reason" <<'PY'
 import json, sys, datetime
-(path, task, status, started, anchor, inp, verdict, exit_code, rr, mrr, fail) = sys.argv[1:12]
+(path, task, status, started, anchor, inp, verdict, exit_code, fail) = sys.argv[1:10]
 m = {
   "taskName": task,
   "status": status,
   "startedAt": started,
   "versionAnchor": anchor,
   "input": inp,
-  "maxReviseRounds": int(mrr),
-  "reviseRounds": int(rr),
 }
 if status in ("completed", "failed"):
   m["endedAt"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -204,55 +200,35 @@ verdict_to_exit() {
   esac
 }
 
-# ── revise 循环（D25/O18，硬上限 MAX_REVISE_ROUNDS）──
-# hash_file: 逐轮比对 --input 内容是否发生实质变化，防止对静态未修订输入空转真实审查调用。
-hash_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-ROUND=1
+# ── 单次调用 review-runner（FR-THIRDREVIEW-003：无 revise 循环、无轮次上限）──
 FINAL_VERDICT=""
 FINAL_VERDICT_FILE=""
-PREV_INPUT_HASH=""
-while :; do
-  # 输入未变化检测：第 2 轮起，若本轮 --input 内容与上一轮完全相同（调用方未真正修订被审对象），
-  # 直接 escalate，不再耗费一次真实 review-runner 调用做无意义空转。
-  CURRENT_INPUT_HASH="$(hash_file "$INPUT_FILE")"
-  if [ "$ROUND" -gt 1 ] && [ "$CURRENT_INPUT_HASH" = "$PREV_INPUT_HASH" ]; then
-    write_manifest failed "escalate_to_human" 2 "$((ROUND-1))" "input unchanged since previous round (round $ROUND)"
-    escalate "输入内容与上一轮完全一致，未检测到实质修订，需人工/调用方先修改被审对象再重新调用，不做无意义空转" \
-      "先实际修改 --input 指向的被审对象内容，再重新调用 standalone.sh 发起下一轮审查"
-  fi
-  PREV_INPUT_HASH="$CURRENT_INPUT_HASH"
 
-  REQUEST_ID="standalone-${TASK_ID}-r${ROUND}"
-  RAW_VERDICT="$REVIEWS_DIR/verdict-round-${ROUND}.raw.json"
-  # 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
-  set +e
-  if [ "${IS_HETEROLOGOUS:-0}" -eq 1 ]; then
-    node "$HET_REVIEWER" --diff="$INPUT_FILE" --round="$ROUND" --output="$RAW_VERDICT" ${CHECKPOINT:+--checkpoint="$CHECKPOINT"}
-  else
-    $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
-  fi
-  RUNNER_RC=$?
-  set -e
-  if [ "$RUNNER_RC" -ne 0 ] || [ ! -s "$RAW_VERDICT" ]; then
-    write_manifest failed "" "" "$((ROUND-1))" "review runner failed (rc=$RUNNER_RC) at round $ROUND"
-    escalate "审查 runner 执行失败（round ${ROUND}, rc=${RUNNER_RC}）" "检查 runner 命令与审查员运行时可用性"
-  fi
+REQUEST_ID="standalone-${TASK_ID}-r1"
+RAW_VERDICT="$REVIEWS_DIR/verdict-round-1.raw.json"
+# 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
+set +e
+if [ "${IS_HETEROLOGOUS:-0}" -eq 1 ]; then
+  node "$HET_REVIEWER" --diff="$INPUT_FILE" --round=1 --output="$RAW_VERDICT" ${CHECKPOINT:+--checkpoint="$CHECKPOINT"}
+else
+  $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
+fi
+RUNNER_RC=$?
+set -e
+if [ "$RUNNER_RC" -ne 0 ] || [ ! -s "$RAW_VERDICT" ]; then
+  write_manifest failed "" "" "review runner failed (rc=$RUNNER_RC)"
+  escalate "审查 runner 执行失败（rc=${RUNNER_RC}）" "检查 runner 命令与审查员运行时可用性"
+fi
 
-  # 提取裁决 + 注入 provenance=single-context，写最终 verdict.json
-  VERDICT_VAL="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict',''))" "$RAW_VERDICT")"
+# 提取裁决 + 注入 provenance=single-context，写最终 verdict.json
+VERDICT_VAL="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict',''))" "$RAW_VERDICT")"
 
-  # pass 必带三字段校验（FR-GUARD-007）：reviewSnapshot / riskDisposition / worktreeInventory。
-  # 缺任一即 fail-fast —— 一个空 pass 不得被当作通过（README/SKILL 的信任承诺由此兑现）。
-  # standalone 路径一律不补，runner 必须自带三字段（gated 平台路径才有条件补，区别见
-  # references/pass-evidence-contract.md）。riskDisposition 任何路径都不补（补=伪造）。
-  if [ "$VERDICT_VAL" = "pass" ]; then
-    MISSING_FIELDS="$(python3 -c "
+# pass 必带三字段校验（FR-GUARD-007）：reviewSnapshot / riskDisposition / worktreeInventory。
+# 缺任一即 fail-fast —— 一个空 pass 不得被当作通过（README/SKILL 的信任承诺由此兑现）。
+# standalone 路径一律不补，runner 必须自带三字段（gated 平台路径才有条件补，区别见
+# references/pass-evidence-contract.md）。riskDisposition 任何路径都不补（补=伪造）。
+if [ "$VERDICT_VAL" = "pass" ]; then
+  MISSING_FIELDS="$(python3 -c "
 import json, sys
 v = json.load(open(sys.argv[1]))
 missing = []
@@ -270,16 +246,16 @@ if (not isinstance(wi, dict)
     missing.append('worktreeInventory')
 print(' '.join(missing))
 " "$RAW_VERDICT")"
-    if [ -n "$MISSING_FIELDS" ]; then
-      write_manifest failed "escalate_to_human" 2 "$ROUND" "pass missing required evidence fields: $MISSING_FIELDS"
-      escalate "runner 返回 pass 但缺少必带证据字段：${MISSING_FIELDS}" \
-        "pass 必须带 reviewSnapshot/riskDisposition/worktreeInventory；让 runner 产出这些字段，或人工复核该裁决是否可信"
-    fi
+  if [ -n "$MISSING_FIELDS" ]; then
+    write_manifest failed "escalate_to_human" 2 "pass missing required evidence fields: $MISSING_FIELDS"
+    escalate "runner 返回 pass 但缺少必带证据字段：${MISSING_FIELDS}" \
+      "pass 必须带 reviewSnapshot/riskDisposition/worktreeInventory；让 runner 产出这些字段，或人工复核该裁决是否可信"
   fi
+fi
 
-  FINAL_VERDICT_FILE="$REVIEWS_DIR/verdict-round-${ROUND}.json"
-  REPORT_FILE="$REVIEWS_DIR/report-round-${ROUND}.md"
-  python3 - "$RAW_VERDICT" "$FINAL_VERDICT_FILE" "$TASK_ID" "$ROUND" "$REPORT_FILE" "$REVIEWS_DIR" "${SKIP_MANIFEST:-0}" <<'PY'
+FINAL_VERDICT_FILE="$REVIEWS_DIR/verdict-round-1.json"
+REPORT_FILE="$REVIEWS_DIR/report-round-1.md"
+python3 - "$RAW_VERDICT" "$FINAL_VERDICT_FILE" "$TASK_ID" 1 "$REPORT_FILE" "$REVIEWS_DIR" "${SKIP_MANIFEST:-0}" <<'PY'
 import json, sys, os
 raw, out, task, rnd, report_file, reviews_dir, skip_manifest = sys.argv[1:8]
 v = json.load(open(raw))
@@ -351,46 +327,46 @@ else:
 lines.append("")
 open(report_file, "w").write("\n".join(lines) + "\n")
 PY
-  # 当前轮 verdict.json + report.md 作为最新结果的稳定别名
-  cp "$FINAL_VERDICT_FILE" "$REVIEWS_DIR/verdict.json"
-  cp "$REPORT_FILE" "$REVIEWS_DIR/report.md"
+# 当前 verdict.json + report.md 作为最新结果的稳定别名
+cp "$FINAL_VERDICT_FILE" "$REVIEWS_DIR/verdict.json"
+cp "$REPORT_FILE" "$REVIEWS_DIR/report.md"
 
-  # ── FR-FORGE-001: Generate snapshot-manifest sidecar (content-binding hash) ──
-  if [ "${SKIP_MANIFEST:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
-    MANIFEST_SCRIPT="$SCRIPT_DIR/scripts/generate-snapshot-manifest.mjs"
-    if [ -f "$MANIFEST_SCRIPT" ]; then
-      # Resolve reviewed file paths against dirname(INPUT) first, then cwd fallback.
-      # reviewSnapshot[].path values are relative to the input file's directory, not cwd.
-      INPUT_DIR="$(dirname "$INPUT_FILE")"
+# ── FR-FORGE-001: Generate snapshot-manifest sidecar (content-binding hash) ──
+if [ "${SKIP_MANIFEST:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
+  MANIFEST_SCRIPT="$SCRIPT_DIR/scripts/generate-snapshot-manifest.mjs"
+  if [ -f "$MANIFEST_SCRIPT" ]; then
+    # Resolve reviewed file paths against dirname(INPUT) first, then cwd fallback.
+    # reviewSnapshot[].path values are relative to the input file's directory, not cwd.
+    INPUT_DIR="$(dirname "$INPUT_FILE")"
 
-      # Collect reviewed file paths from reviewSnapshot[].path and findings[].file.
-      # B3: Use bash array to avoid word-splitting on paths with spaces.
-      # Only pass --file= args for paths that actually exist on disk.
-      MANIFEST_FILE_ARGS=()
-      DROPPED_PATHS=""
-      while IFS= read -r -d '' f; do
-        case "$f" in
-          /*)
-            f_abs="$f"
-            if [ -f "$f_abs" ]; then
-              MANIFEST_FILE_ARGS+=("--file=$f_abs")
-            else
-              DROPPED_PATHS="$DROPPED_PATHS $f"
-            fi
-            ;;
-          *)
-            f_candidate="$INPUT_DIR/$f"
-            if [ ! -f "$f_candidate" ]; then
-              f_candidate="$(pwd)/$f"
-            fi
-            if [ -f "$f_candidate" ]; then
-              MANIFEST_FILE_ARGS+=("--file=$f_candidate")
-            else
-              DROPPED_PATHS="$DROPPED_PATHS $f"
-            fi
-            ;;
-        esac
-      done < <(python3 -c "
+    # Collect reviewed file paths from reviewSnapshot[].path and findings[].file.
+    # B3: Use bash array to avoid word-splitting on paths with spaces.
+    # Only pass --file= args for paths that actually exist on disk.
+    MANIFEST_FILE_ARGS=()
+    DROPPED_PATHS=""
+    while IFS= read -r -d '' f; do
+      case "$f" in
+        /*)
+          f_abs="$f"
+          if [ -f "$f_abs" ]; then
+            MANIFEST_FILE_ARGS+=("--file=$f_abs")
+          else
+            DROPPED_PATHS="$DROPPED_PATHS $f"
+          fi
+          ;;
+        *)
+          f_candidate="$INPUT_DIR/$f"
+          if [ ! -f "$f_candidate" ]; then
+            f_candidate="$(pwd)/$f"
+          fi
+          if [ -f "$f_candidate" ]; then
+            MANIFEST_FILE_ARGS+=("--file=$f_candidate")
+          else
+            DROPPED_PATHS="$DROPPED_PATHS $f"
+          fi
+          ;;
+      esac
+    done < <(python3 -c "
 import json, sys
 v = json.load(open('$REVIEWS_DIR/verdict.json'))
 rs = v.get('reviewSnapshot') or []
@@ -402,62 +378,48 @@ for p in all_paths:
     sys.stdout.write(p + '\0')
 " 2>/dev/null)
 
-      # Always call generator — even with empty file list — to bind the verdict (B1).
-      # B3: array elements are quoted individually, no word-splitting.
-      # Manifest failure is OBSERVABLE but NON-BLOCKING: warn to stderr, never escalate.
-      set +e
-      if [ "${#MANIFEST_FILE_ARGS[@]}" -gt 0 ]; then
-        node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" "${MANIFEST_FILE_ARGS[@]}" --repo-root="$INPUT_DIR"
-      else
-        node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" --repo-root="$INPUT_DIR"
-      fi
-      MANIFEST_RC=$?
-      set -e
-      if [ "$MANIFEST_RC" -ne 0 ]; then
-        echo "warning: snapshot-manifest generation failed (rc=$MANIFEST_RC) — verdict unaffected" >&2
-      fi
-      if [ -n "$DROPPED_PATHS" ]; then
-        echo "warning: snapshot-manifest: unresolvable reviewed paths (no file on disk):$DROPPED_PATHS" >&2
-      fi
+    # Always call generator — even with empty file list — to bind the verdict (B1).
+    # B3: array elements are quoted individually, no word-splitting.
+    # Manifest failure is OBSERVABLE but NON-BLOCKING: warn to stderr, never escalate.
+    set +e
+    if [ "${#MANIFEST_FILE_ARGS[@]}" -gt 0 ]; then
+      node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" "${MANIFEST_FILE_ARGS[@]}" --repo-root="$INPUT_DIR"
+    else
+      node "$MANIFEST_SCRIPT" --verdict="$REVIEWS_DIR/verdict.json" --repo-root="$INPUT_DIR"
+    fi
+    MANIFEST_RC=$?
+    set -e
+    if [ "$MANIFEST_RC" -ne 0 ]; then
+      echo "warning: snapshot-manifest generation failed (rc=$MANIFEST_RC) — verdict unaffected" >&2
+    fi
+    if [ -n "$DROPPED_PATHS" ]; then
+      echo "warning: snapshot-manifest: unresolvable reviewed paths (no file on disk):$DROPPED_PATHS" >&2
     fi
   fi
+fi
 
-  if [ "$VERDICT_VAL" = "revise_required" ]; then
-    if [ "$ROUND" -ge "$MAX_REVISE_ROUNDS" ]; then
-      write_manifest failed "escalate_to_human" 2 "$ROUND" "reached --max-revise-rounds=${MAX_REVISE_ROUNDS} without pass"
-      escalate "已达到 --max-revise-rounds=${MAX_REVISE_ROUNDS} 上限，第 ${ROUND} 轮仍为 revise_required" \
-        "人工介入实质修订被审对象后，可提高 --max-revise-rounds 或重新发起审查"
-    fi
-    echo "revise_required：第 ${ROUND} 轮未通过，继续修订并重新审查。" >&2
-    ROUND=$((ROUND+1))
-    continue
-  fi
-
-  FINAL_VERDICT="$VERDICT_VAL"
-  break
-done
-
+# 单次调用，runner 返回什么裁决就是什么裁决——不重试、不进入下一轮（FR-THIRDREVIEW-003）。
+FINAL_VERDICT="$VERDICT_VAL"
 EXIT_CODE="$(verdict_to_exit "$FINAL_VERDICT")"
-REVISE_ROUNDS=$((ROUND-1))
 
 # ── 终态 manifest + 中文结论 + 退出码 ──
 case "$FINAL_VERDICT" in
   pass)
-    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE" "$REVISE_ROUNDS"
+    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE"
     echo "审查结论：通过（pass）。任务目录：${TASK_PATH}，裁决文件：${FINAL_VERDICT_FILE}。"
     ;;
   revise_required)
-    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE" "$REVISE_ROUNDS"
+    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE"
     echo "审查结论：需要修改（revise_required）。任务目录：${TASK_PATH}，裁决文件：${FINAL_VERDICT_FILE}。"
     ;;
   escalate_to_human)
-    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE" "$REVISE_ROUNDS"
+    write_manifest completed "$FINAL_VERDICT" "$EXIT_CODE"
     echo "审查结论：需要人工介入（escalate_to_human）。任务目录：${TASK_PATH}。"
     echo "escalate_to_human: 审查员直接返回 escalate" >&2
     echo "下一步：人工查看裁决文件 ${FINAL_VERDICT_FILE} 后决定" >&2
     ;;
   *)
-    write_manifest failed "" 3 "$REVISE_ROUNDS" "unknown verdict: $FINAL_VERDICT"
+    write_manifest failed "" 3 "unknown verdict: $FINAL_VERDICT"
     echo "执行错误：审查 runner 返回未知裁决值「${FINAL_VERDICT}」。" >&2
     exit 3
     ;;
