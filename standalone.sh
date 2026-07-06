@@ -12,7 +12,8 @@
 #   - run-manifest.json 状态机：in_progress → completed | failed
 #   - O5 版本锚点（FR-PORT-007）：git 可用记 sha，否则 manual-<UTC>
 #   - 调 review-runner 产 verdict，注入 provenance=single-context（FR-GUARD-003）
-#   - revise 循环无轮次强制上限；revise_required 时持续迭代直到 pass 或真实 escalate_to_human 触发
+#   - revise 循环硬上限 --max-revise-rounds（默认 3）：到达上限仍未 pass，强制 escalate_to_human；
+#     同时逐轮比对 --input 内容 hash，若与上一轮完全一致（未实质修订）立即 escalate，不空转真实审查调用
 #   - 退出码契约（FR-GUARD-001）：0=pass，1=revise_required，2=escalate_to_human；其他非零=执行错误
 #   - stdout 中文结论（FR-GUARD-006），stderr 升级原因+下一步指引
 #
@@ -203,11 +204,30 @@ verdict_to_exit() {
   esac
 }
 
-# ── revise 循环（D25/O18，上限 MAX_REVISE_ROUNDS）──
+# ── revise 循环（D25/O18，硬上限 MAX_REVISE_ROUNDS）──
+# hash_file: 逐轮比对 --input 内容是否发生实质变化，防止对静态未修订输入空转真实审查调用。
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
 ROUND=1
 FINAL_VERDICT=""
 FINAL_VERDICT_FILE=""
+PREV_INPUT_HASH=""
 while :; do
+  # 输入未变化检测：第 2 轮起，若本轮 --input 内容与上一轮完全相同（调用方未真正修订被审对象），
+  # 直接 escalate，不再耗费一次真实 review-runner 调用做无意义空转。
+  CURRENT_INPUT_HASH="$(hash_file "$INPUT_FILE")"
+  if [ "$ROUND" -gt 1 ] && [ "$CURRENT_INPUT_HASH" = "$PREV_INPUT_HASH" ]; then
+    write_manifest failed "escalate_to_human" 2 "$((ROUND-1))" "input unchanged since previous round (round $ROUND)"
+    escalate "输入内容与上一轮完全一致，未检测到实质修订，需人工/调用方先修改被审对象再重新调用，不做无意义空转" \
+      "先实际修改 --input 指向的被审对象内容，再重新调用 standalone.sh 发起下一轮审查"
+  fi
+  PREV_INPUT_HASH="$CURRENT_INPUT_HASH"
+
   REQUEST_ID="standalone-${TASK_ID}-r${ROUND}"
   RAW_VERDICT="$REVIEWS_DIR/verdict-round-${ROUND}.raw.json"
   # 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
@@ -403,6 +423,11 @@ for p in all_paths:
   fi
 
   if [ "$VERDICT_VAL" = "revise_required" ]; then
+    if [ "$ROUND" -ge "$MAX_REVISE_ROUNDS" ]; then
+      write_manifest failed "escalate_to_human" 2 "$ROUND" "reached --max-revise-rounds=${MAX_REVISE_ROUNDS} without pass"
+      escalate "已达到 --max-revise-rounds=${MAX_REVISE_ROUNDS} 上限，第 ${ROUND} 轮仍为 revise_required" \
+        "人工介入实质修订被审对象后，可提高 --max-revise-rounds 或重新发起审查"
+    fi
     echo "revise_required：第 ${ROUND} 轮未通过，继续修订并重新审查。" >&2
     ROUND=$((ROUND+1))
     continue

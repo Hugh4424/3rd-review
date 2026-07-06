@@ -198,6 +198,83 @@ grep -qE 'node.*HET_REVIEWER.*CHECKPOINT' "$STANDALONE" \
 grep -qE '\$\{CHECKPOINT:\+' "$STANDALONE" \
   || fail "case5c: standalone.sh does not use \${CHECKPOINT:+...} conditional expansion for --checkpoint forwarding"
 
+# ── stub runner (mutating): simulates a genuine revision each round by appending a
+# marker to --prompt-file before answering, so the input-unchanged detector never fires
+# and only the --max-revise-rounds hard cap can be responsible for stopping the loop.
+make_stub_mutating() {
+  local verdict="$1" stub="$2"
+  cat > "$stub" <<STUB
+#!/bin/bash
+set -euo pipefail
+RESULT=""
+RID=""
+PROMPT=""
+for a in "\$@"; do
+  case "\$a" in
+    --prompt-file=*) PROMPT="\${a#*=}" ;;
+    --result-file=*) RESULT="\${a#*=}" ;;
+    --review-request-id=*) RID="\${a#*=}" ;;
+  esac
+done
+echo "revision-marker-\$RANDOM-\$\$" >> "\$PROMPT"
+cat > "\$RESULT" <<JSON
+{
+  "reviewRequestId": "\$RID",
+  "verdict": "$verdict",
+  "findings": [],
+  "resolutionSummary": "stub review for test"
+}
+JSON
+STUB
+  chmod +x "$stub"
+}
+
+# ── case 6 (TDD regression): --max-revise-rounds must be a real hard cap. Even when the
+# reviewee genuinely revises --input every round (so fingerprint/content churn never lets
+# the loop settle), round MAX_REVISE_ROUNDS must still force escalate — it must not depend
+# on repeated-finding detection to terminate.
+ROOT6="$(mktemp -d)"
+STUB6="$(mktemp)"
+INPUT6="$(mktemp)"
+cp "$INPUT" "$INPUT6"
+make_stub_mutating revise_required "$STUB6"
+set +e
+bash "$STANDALONE" --input="$INPUT6" --output-root="$ROOT6" --review-runner="$STUB6" --max-revise-rounds=2 >/tmp/sa-out6 2>/tmp/sa-err6
+RC6=$?
+set -e
+[ "$RC6" -eq 2 ] || fail "case6: --max-revise-rounds=2 with genuine per-round revision should escalate (exit 2), got $RC6"
+TASK_DIR6="$(find "$ROOT6/tasks" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)"
+if [ -n "$TASK_DIR6" ]; then
+  [ -f "$TASK_DIR6/reviews/verdict-round-1.raw.json" ] || fail "case6: round 1 should have run"
+  [ -f "$TASK_DIR6/reviews/verdict-round-2.raw.json" ] || fail "case6: round 2 should have run (max-revise-rounds=2)"
+  [ -f "$TASK_DIR6/reviews/verdict-round-3.raw.json" ] && fail "case6: round 3 must NOT run — --max-revise-rounds=2 must hard-stop after round 2"
+else
+  fail "case6: no task dir created"
+fi
+grep -qiE 'max|上限' /tmp/sa-err6 || fail "case6: escalation reason should mention the max-revise-rounds cap"
+rm -rf "$ROOT6" "$INPUT6"
+
+# ── case 7 (TDD regression): if --input is byte-identical to the previous round (caller
+# never actually revised the reviewee), standalone.sh must escalate immediately on round 2
+# instead of burning another real review-runner call — no unbounded spin on static input.
+ROOT7="$(mktemp -d)"
+STUB7="$(mktemp)"
+make_stub revise_required "$STUB7"
+set +e
+bash "$STANDALONE" --input="$INPUT" --output-root="$ROOT7" --review-runner="$STUB7" >/tmp/sa-out7 2>/tmp/sa-err7
+RC7=$?
+set -e
+[ "$RC7" -eq 2 ] || fail "case7: unchanged input across rounds should escalate (exit 2), got $RC7"
+TASK_DIR7="$(find "$ROOT7/tasks" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)"
+if [ -n "$TASK_DIR7" ]; then
+  [ -f "$TASK_DIR7/reviews/verdict-round-1.raw.json" ] || fail "case7: round 1 should have run"
+  [ -f "$TASK_DIR7/reviews/verdict-round-2.raw.json" ] && fail "case7: round 2 must NOT invoke review-runner again on unchanged input"
+else
+  fail "case7: no task dir created"
+fi
+grep -q '输入内容与上一轮完全一致' /tmp/sa-err7 || fail "case7: missing 'input unchanged since previous round' escalation message"
+rm -rf "$ROOT7"
+
 if [ "$FAIL" -ne 0 ]; then
   echo "=== standalone.sh tests FAILED ===" >&2
   exit 1
