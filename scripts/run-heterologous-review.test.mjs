@@ -17,7 +17,6 @@ import {
   buildVerdictFromStdout,
   extractTokenUsage,
   resolveOmcArtifactContent,
-  loadVerifierContext,
 } from "./run-heterologous-review.mjs";
 import assert from "node:assert";
 import fs from "node:fs";
@@ -27,6 +26,13 @@ import { execSync, spawnSync } from "node:child_process";
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const GOLDEN_DIFF = path.join(__dirname, "..", "golden", "simple-text", "input.md");
+
+// Engine has zero stage/round knowledge (FR-THIRDREVIEW-001): --diff must
+// carry the fully assembled {mode, contract, materials} JSON envelope, never
+// raw diff text. This helper writes that envelope for test call sites.
+function writeReviewPayload(diffFile, materials, { mode = "test-mode", contract = "test contract" } = {}) {
+  fs.writeFileSync(diffFile, JSON.stringify({ mode, contract, materials }));
+}
 
 let pass = 0;
 let fail = 0;
@@ -116,7 +122,7 @@ test("degraded same-source verdict shape: has degraded:'same-source'", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "t24-"));
   const diffFile = path.join(tmpDir, "diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
+  writeReviewPayload(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
 
   // CODEX_UNAVAIL + GEMINI_UNAVAIL forces degraded when CLAUDECODE is set
   const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
@@ -124,7 +130,7 @@ test("degraded same-source verdict shape: has degraded:'same-source'", () => {
     if (process.env[k]) env[k] = process.env[k];
   }
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: env });
+  runReview({ diffFile, outputFile, envOverride: env });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.equal(verdict.degraded, "same-source", "degraded field must be 'same-source'");
@@ -138,7 +144,7 @@ test("degraded verdict has provider and no trueCrossEngine:true", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "t24b-"));
   const diffFile = path.join(tmpDir, "diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# degraded test\n\nno changes\n");
+  writeReviewPayload(diffFile, "# degraded test\n\nno changes\n");
 
   // No host markers + all unavailable flags + restricted PATH → degraded
   const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", PATH: "/nonexistent" };
@@ -146,7 +152,7 @@ test("degraded verdict has provider and no trueCrossEngine:true", () => {
     if (process.env[k]) env[k] = process.env[k];
   }
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: env });
+  runReview({ diffFile, outputFile, envOverride: env });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.equal(verdict.degraded, "same-source");
@@ -156,49 +162,33 @@ test("degraded verdict has provider and no trueCrossEngine:true", () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// ── Bug 1 regression: degraded-same-source path must inject reviewerPrompt from checkpoint ──
-test("degraded same-source with build-plan checkpoint carries reviewerPrompt in verdict", () => {
+// ── Bug 1 regression, updated for FR-THIRDREVIEW-001: the engine no longer
+// looks up a checkpoint→reviewer table; the caller passes contract text
+// explicitly in the payload, and the degraded path must carry it through
+// verbatim as contractPrompt (zero stage/round knowledge, explicit fields only).
+test("degraded same-source verdict carries contractPrompt verbatim from payload contract", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "t24-bp-"));
   const diffFile = path.join(tmpDir, "diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
+  writeReviewPayload(diffFile, "# test diff\n\n```diff\n+added line\n```\n", {
+    mode: "build-plan",
+    contract: "BUILD-PLAN CONTRACT TEXT",
+  });
 
   const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
   for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
     if (process.env[k]) env[k] = process.env[k];
   }
 
-  runReview({ diffFile, round: 1, outputFile, checkpoint: "build-plan", envOverride: env });
+  runReview({ diffFile, outputFile, envOverride: env });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.equal(verdict.degraded, "same-source", "must be degraded");
-  assert.ok(
-    typeof verdict.reviewerPrompt === "string" && verdict.reviewerPrompt.length > 0,
-    "degraded verdict with known checkpoint must carry non-empty reviewerPrompt (Bug 1 regression)"
+  assert.equal(
+    verdict.contractPrompt, "BUILD-PLAN CONTRACT TEXT",
+    "degraded verdict must carry the payload's contract verbatim (Bug 1 regression, updated)"
   );
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("degraded same-source with unknown checkpoint does NOT carry reviewerPrompt", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "t24-unk-"));
-  const diffFile = path.join(tmpDir, "diff.md");
-  const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# test diff\n\nsome content\n");
-
-  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
-  for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
-    if (process.env[k]) env[k] = process.env[k];
-  }
-
-  runReview({ diffFile, round: 1, outputFile, checkpoint: "nonexistent-checkpoint-xyz", envOverride: env });
-
-  const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
-  assert.equal(verdict.degraded, "same-source", "must be degraded");
-  assert.ok(
-    !verdict.reviewerPrompt || verdict.reviewerPrompt === "",
-    "unknown checkpoint must NOT inject reviewerPrompt"
-  );
+  assert.equal(verdict.actual_mode, "same-source", "AC-D10.1: degraded actual_mode must be 'same-source'");
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -207,7 +197,7 @@ test("degraded same-source with unknown checkpoint does NOT carry reviewerPrompt
 // This test exercises runReview via a mock that forces exit=1 from the advisor subprocess.
 // We use selectProvider directly + a crafted env that routes to a real provider slot but
 // has the binary missing, which causes the B1 advisor-not-found escalation path (not B2),
-// so we test trueCrossEngine separately via the loadVerifierContext+degraded path above.
+// so we test trueCrossEngine separately via the degraded-path test above.
 // The B2 path (advisor found but exits non-zero) is exercised via the spawnSync mock below.
 test("B2 escalate verdict does NOT carry trueCrossEngine:true (advisor exits non-zero)", () => {
   // Verify via the unit-level check: status=1 means advisorSucceeded=false → no trueCrossEngine.
@@ -217,14 +207,14 @@ test("B2 escalate verdict does NOT carry trueCrossEngine:true (advisor exits non
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "t24-b2-"));
   const diffFile = path.join(tmpDir, "diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# test\n\n```diff\n+x\n```\n");
+  writeReviewPayload(diffFile, "# test\n\n```diff\n+x\n```\n");
 
   // Force degraded (no provider) → B2 is not reached but trueCrossEngine must be absent
   const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
   for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
     if (process.env[k]) env[k] = process.env[k];
   }
-  runReview({ diffFile, round: 1, outputFile, envOverride: env });
+  runReview({ diffFile, outputFile, envOverride: env });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.ok(
@@ -320,7 +310,7 @@ test("T2-8A: BASH_FUNC_codex%% shell-function hijack is bypassed", () => {
   // Ensure marker does not exist
   try { fs.unlinkSync(markerFile); } catch {}
 
-  fs.writeFileSync(diffFile, "# Review: trivial doc change\n\n```diff\n+comment\n```\n");
+  writeReviewPayload(diffFile, "# Review: trivial doc change\n\n```diff\n+comment\n```\n");
 
   const hijackEnv = {
     ...process.env,
@@ -329,7 +319,7 @@ test("T2-8A: BASH_FUNC_codex%% shell-function hijack is bypassed", () => {
   // Do NOT shadow PATH — only shell-function vector
 
   try {
-    runReview({ diffFile, round: 1, outputFile, envOverride: hijackEnv });
+    runReview({ diffFile, outputFile, envOverride: hijackEnv });
   } catch (e) {
     // runReview might throw if the provider fails; that's OK
     console.error(`  [INFO] T2-8A: runReview threw (this is OK): ${e.message}`);
@@ -391,7 +381,7 @@ test("T2-8B: PATH-shadow codex hijack is bypassed", () => {
   // Ensure marker does not exist
   try { fs.unlinkSync(markerFile); } catch {}
 
-  fs.writeFileSync(diffFile, "# Review: trivial doc change\n\n```diff\n+comment\n```\n");
+  writeReviewPayload(diffFile, "# Review: trivial doc change\n\n```diff\n+comment\n```\n");
 
   // Prepend shadow dir to PATH
   const shadowedPath = shadowDir + path.delimiter + (process.env.PATH || "");
@@ -403,7 +393,7 @@ test("T2-8B: PATH-shadow codex hijack is bypassed", () => {
   delete hijackEnv["BASH_FUNC_codex%%"];
 
   try {
-    runReview({ diffFile, round: 1, outputFile, envOverride: hijackEnv });
+    runReview({ diffFile, outputFile, envOverride: hijackEnv });
   } catch (e) {
     console.error(`  [INFO] T2-8B: runReview threw (this is OK): ${e.message}`);
   }
@@ -748,9 +738,9 @@ test("AC-7: degraded same-source verdict MUST contain threatAuditor with ran:tru
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac7-deg-"));
   const diffFile = path.join(tmpDir, "diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
-  fs.writeFileSync(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
+  writeReviewPayload(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+  runReview({ diffFile, outputFile, envOverride: buildDegradedEnv() });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.ok(verdict.threatAuditor, "verdict must have threatAuditor field");
@@ -780,7 +770,7 @@ test("AC-7 DIFF-UNREADABLE: escalate path with unreadable diff → ran:false, er
   // and real binaries present, probeAvailable finds at least codex, so we
   // go to the cross-engine path, then fs.readFileSync fails on nonexistent diff.
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: env });
+  runReview({ diffFile, outputFile, envOverride: env });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.equal(verdict.verdict, "escalate_to_human",
@@ -854,7 +844,7 @@ test("AC-7 ORDERING: degraded-same-source with UNREADABLE diff → ran:false, er
   const diffFile = path.join(tmpDir, "nonexistent-diff.md");
   const outputFile = path.join(tmpDir, "verdict.json");
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+  runReview({ diffFile, outputFile, envOverride: buildDegradedEnv() });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.equal(verdict.verdict, "escalate_to_human",
@@ -876,7 +866,7 @@ test("AC-7 REGRESSION: degraded same-source with real auditable diff → ran:tru
 
   // Diff must be rich enough that the threat auditor does NOT skip it.
   // Include a forgery-bypass signal cluster to ensure the auditor has something to scan.
-  fs.writeFileSync(diffFile, [
+  writeReviewPayload(diffFile, [
     "# Review: hardening review skill forgery bypass",
     "",
     "```diff",
@@ -892,7 +882,7 @@ test("AC-7 REGRESSION: degraded same-source with real auditable diff → ran:tru
     "```",
   ].join("\n"));
 
-  runReview({ diffFile, round: 1, outputFile, envOverride: buildDegradedEnv() });
+  runReview({ diffFile, outputFile, envOverride: buildDegradedEnv() });
 
   const verdict = JSON.parse(fs.readFileSync(outputFile, "utf8"));
   assert.ok(verdict.threatAuditor, "verdict must have threatAuditor field");
@@ -1007,97 +997,11 @@ test("AC-5-symlink: CLI --env-strip-check through symlinked path — isMain() mu
   }
 });
 
-// ═══════════════════════════════════════════════════════════════
-// loadVerifierContext — unit tests (checkpoint routing coverage)
-// ═══════════════════════════════════════════════════════════════
-
-test("loadVerifierContext: checkpoint='build-plan' loads both reviewer and contract files", () => {
-  const ctx = loadVerifierContext("build-plan");
-  assert.ok(
-    typeof ctx.reviewerText === "string",
-    "reviewerText must be a string"
-  );
-  assert.ok(
-    typeof ctx.contractText === "string",
-    "contractText must be a string"
-  );
-  // Both files must have real content (not empty) because the verifier files exist on disk
-  assert.ok(
-    ctx.reviewerText.length > 0,
-    "build-plan-reviewer.md must not be empty"
-  );
-  assert.ok(
-    ctx.contractText.length > 0,
-    "build-plan-reviewer-contract.md must not be empty"
-  );
-});
-
-test("loadVerifierContext: checkpoint='build-plan' reviewerText contains build-plan-reviewer content", () => {
-  const ctx = loadVerifierContext("build-plan");
-  // The reviewer file should reference plan-related concepts
-  const reviewerLower = ctx.reviewerText.toLowerCase();
-  assert.ok(
-    reviewerLower.length > 50,
-    "build-plan reviewer text must be substantive (>50 chars)"
-  );
-});
-
-test("loadVerifierContext: checkpoint='build-plan-v2' prefix-matches build-plan entry", () => {
-  // stage.startsWith(key) means 'build-plan-v2' should resolve to build-plan
-  const ctx = loadVerifierContext("build-plan-v2");
-  assert.ok(
-    ctx.reviewerText.length > 0,
-    "build-plan prefix match should load reviewer file"
-  );
-  assert.ok(
-    ctx.contractText.length > 0,
-    "build-plan prefix match should load contract file"
-  );
-});
-
-test("loadVerifierContext: unknown checkpoint returns empty strings (graceful fallback)", () => {
-  const ctx = loadVerifierContext("no-such-stage-xyz");
-  assert.ok(
-    typeof ctx.reviewerText === "string",
-    "unknown checkpoint reviewerText must be string"
-  );
-  assert.ok(
-    typeof ctx.contractText === "string",
-    "unknown checkpoint contractText must be string"
-  );
-  // No matching entry in STAGE_MAP → readSafe on nonexistent paths → empty strings
-  assert.strictEqual(
-    ctx.reviewerText,
-    "",
-    "unknown checkpoint should yield empty reviewerText"
-  );
-  assert.strictEqual(
-    ctx.contractText,
-    "",
-    "unknown checkpoint should yield empty contractText"
-  );
-});
-
-test("loadVerifierContext: null/undefined checkpoint returns empty strings (graceful fallback)", () => {
-  const ctxNull = loadVerifierContext(null);
-  const ctxUndef = loadVerifierContext(undefined);
-  assert.strictEqual(ctxNull.reviewerText, "", "null checkpoint reviewerText should be empty");
-  assert.strictEqual(ctxNull.contractText, "", "null checkpoint contractText should be empty");
-  assert.strictEqual(ctxUndef.reviewerText, "", "undefined checkpoint reviewerText should be empty");
-  assert.strictEqual(ctxUndef.contractText, "", "undefined checkpoint contractText should be empty");
-});
-
-test("loadVerifierContext: checkpoint='build-code' loads build-code reviewer files", () => {
-  const ctx = loadVerifierContext("build-code");
-  assert.ok(ctx.reviewerText.length > 0, "build-code reviewer file must have content");
-  assert.ok(ctx.contractText.length > 0, "build-code contract file must have content");
-});
-
-test("loadVerifierContext: checkpoint='verify-code' loads verify-code reviewer files", () => {
-  const ctx = loadVerifierContext("verify-code");
-  assert.ok(ctx.reviewerText.length > 0, "verify-code reviewer file must have content");
-  assert.ok(ctx.contractText.length > 0, "verify-code contract file must have content");
-});
+// loadVerifierContext (checkpoint→reviewer table lookup) was removed with
+// FR-THIRDREVIEW-001: the engine no longer has any stage/checkpoint routing
+// table — contract text is now an explicit payload field the caller assembles.
+// See "degraded same-source verdict carries contractPrompt verbatim..." above
+// for the coverage that replaces this block.
 
 // ═══════════════════════════════════════════════════════════════
 // Results

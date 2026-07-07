@@ -37,7 +37,6 @@ for arg in "$@"; do
     --output-root=*) OUTPUT_ROOT="${arg#*=}" ;;
     --task-name=*) TASK_NAME="${arg#*=}" ;;
     --review-runner=*) REVIEW_RUNNER="${arg#*=}" ;;
-    --checkpoint=*) CHECKPOINT="${arg#*=}" ;;
     --foreground-only) FOREGROUND_ONLY=1 ;;
     --skip-manifest) SKIP_MANIFEST=1 ;;
     *) echo "ERROR: unknown argument: $arg" >&2; exit 3 ;;
@@ -209,7 +208,9 @@ RAW_VERDICT="$REVIEWS_DIR/verdict-round-1.raw.json"
 # 调 runner：heterologous mode 用 --diff/--round/--output；degraded 用 --prompt-file/--result-file/--review-request-id
 set +e
 if [ "${IS_HETEROLOGOUS:-0}" -eq 1 ]; then
-  node "$HET_REVIEWER" --diff="$INPUT_FILE" --round=1 --output="$RAW_VERDICT" ${CHECKPOINT:+--checkpoint="$CHECKPOINT"}
+  # Canonical entry point is --diff/--output only (FR-THIRDREVIEW-001): the engine
+  # has zero stage/round/checkpoint knowledge; legacy flags are rejected outright.
+  node "$HET_REVIEWER" --diff="$INPUT_FILE" --output="$RAW_VERDICT"
 else
   $REVIEW_RUNNER --prompt-file="$INPUT_FILE" --result-file="$RAW_VERDICT" --review-request-id="$REQUEST_ID"
 fi

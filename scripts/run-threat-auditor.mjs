@@ -116,11 +116,95 @@ function readSpec(specPath) {
 // in either language.
 // ---------------------------------------------------------------------------
 
-/** Returns true if the spec text contains at least one term from the list. */
+// Negation cues (EN + CN) that, when found immediately before a matched term,
+// mean the spec is describing a *prohibition* of the risky pattern rather than
+// the pattern itself. Without this guard, a compliant spec that explicitly
+// forbids a risky mechanism (e.g. "self-attest is forbidden") gets misread as
+// describing that mechanism, and a benign/compliant spec fires a false
+// blocking finding (FR-THIRDREVIEW-004).
+const NEGATION_MARKERS = [
+  "not ", "never ", "forbid", "prohibit", "must not", "cannot", "disallow",
+  "no ", "禁止", "严禁", "杜绝", "不允许", "不得", "不可", "从不", "并不",
+];
+
+// round-review finding: a *marker-anywhere-in-window* test is sound for the
+// pre-window check (a negation cue always grammatically governs whatever noun
+// immediately follows it), but is NOT sound for the *post*-window check —
+// "no " is the clearest example: it is only a valid negation marker when it
+// sits *before* the matched term (e.g. "no self-attest allowed"); it always
+// grammatically negates whatever noun immediately follows it, never a term
+// earlier in the sentence. Applied to the *post*-window this produces
+// false-negative suppression: "self-attest with no independent verifier" is
+// a genuine forgery-bypass description (self-attest happening WITHOUT
+// independent verification), but "no " sits within the 30-char window after
+// "self-attest" even though it negates "independent verifier", not
+// "self-attest" itself. The same unsoundness affects every other marker too:
+// "self-attest is not independently verified" and "attest cannot be checked
+// by an independent verifier" both contain a marker-anywhere hit
+// ("not "/"cannot") within 30 chars after the matched term, yet neither
+// sentence negates/prohibits the matched term itself — both instead describe
+// the exact defect being reported (self-attestation happening without
+// independent verification). Only a negation that grammatically governs a
+// prohibition of the matched term itself — e.g. "self-attest is forbidden" —
+// is a genuine compliant negation. These patterns encode exactly that
+// grammar and are anchored to the start of the post-window (immediately
+// after the match) so unrelated negation-shaped text later in the window
+// can't accidentally satisfy them.
+const POST_NEGATION_PROHIBITION_PATTERNS = [
+  /^\s*(is|are|was|were|being)?\s*(explicitly\s+|strictly\s+|absolutely\s+)?(forbidden|prohibited|disallowed|banned|not\s+allowed|not\s+permitted)\b/i,
+  /^\s*(must|shall|will)\s+not\s+(be\s+)?(used|allowed|permitted|performed|done)\b/i,
+  /^\s*(cannot|can\s*not|can't)\s+(be\s+)?(used|allowed|permitted|performed|done)\b/i,
+  /^\s*(禁止|严禁|杜绝|不允许|不得|不可)/,
+];
+
+// round-review finding: this only ever checked a window *before* the matched
+// term (e.g. "never the same principal"). A spec phrased the other way round
+// — term first, negation after, e.g. "Self-attest is explicitly forbidden" —
+// was not covered: nothing negation-shaped sits in the 30 chars before
+// "Self-attest", only after it ("is explicitly forbidden"). Checking both
+// sides of the match, and matching terms case-insensitively (spec authors
+// don't reliably match a term's declared casing), closes both gaps together.
+function isNegatedNear(text, index, matchLength, window = 30) {
+  // round-review finding: term matching was made case-insensitive but these
+  // windows were still sliced from the original-case text and compared
+  // against lowercase NEGATION_MARKERS — "MUST NOT self-attest" or "...is
+  // explicitly Forbidden" would fail to match. Lowercase the pre-window too
+  // (the post-window check is case-insensitive via its own regex `/i` flag).
+  const before = text.slice(Math.max(0, index - window), index).toLowerCase();
+  if (NEGATION_MARKERS.some((m) => before.includes(m))) return true;
+  const after = text.slice(index + matchLength, index + matchLength + window);
+  return POST_NEGATION_PROHIBITION_PATTERNS.some((re) => re.test(after));
+}
+
+/**
+ * Returns true if the spec text contains at least one term from the list at
+ * an occurrence that is NOT negated (by a marker immediately before OR
+ * shortly after the match — see isNegatedNear). Checks every occurrence of
+ * every term (not just the first) so a negated mention earlier in the text
+ * does not mask a genuine, un-negated one later on. Matching is
+ * case-insensitive.
+ */
 function hasAny(text, terms) {
+  const lower = text.toLowerCase();
   return terms.some((t) => {
-    if (t instanceof RegExp) return t.test(text);
-    return text.includes(t);
+    if (t instanceof RegExp) {
+      const base = t.flags.includes("i") ? t.flags : `${t.flags}i`;
+      const flags = base.includes("g") ? base : `${base}g`;
+      const re = new RegExp(t.source, flags);
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (!isNegatedNear(text, m.index, m[0].length)) return true;
+        if (re.lastIndex === m.index) re.lastIndex += 1; // avoid infinite loop on zero-length match
+      }
+      return false;
+    }
+    const needle = t.toLowerCase();
+    let idx = lower.indexOf(needle);
+    while (idx !== -1) {
+      if (!isNegatedNear(text, idx, needle.length)) return true;
+      idx = lower.indexOf(needle, idx + 1);
+    }
+    return false;
   });
 }
 

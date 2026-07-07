@@ -649,28 +649,21 @@ if (isMain()) {
 
   // --history=<file>: read route-decision-history.jsonl (one JSON per line) and apply
   // post-round degradation. File absence or empty file = no history = no degradation.
-  // FR-DEGRADE-001/002: applyPostRoundDegradation is the sole degradation path; no inline logic.
+  // FR-DEGRADE-001: applyPostRoundDegradation is the sole degradation path; no inline logic.
   //
-  // --checkpoint=<id>: when present, filter history to only records whose checkpoint field
-  // matches. This prevents cross-checkpoint contamination: a new checkpoint's round=1 must
-  // NOT see prior-checkpoint history (FR-DEGRADE-002 first-round discipline). Records without
-  // a checkpoint field are treated as unattributable and excluded when --checkpoint is given.
-  // When --checkpoint is absent, no filter is applied (backward compat: existing behavior).
+  // Round/checkpoint isolation is no longer this file's responsibility — it now lives
+  // entirely in wh-review's own round-state.mjs (FR-THIRDREVIEW-001: this engine has zero
+  // stage/round/checkpoint knowledge). History here is read and used as-is, unfiltered.
   const historyArg = get("history");
-  const checkpointArg = get("checkpoint");
   let history = [];
   if (historyArg) {
     try {
       const raw = fs.readFileSync(historyArg, "utf8");
-      const allRecords = raw
+      history = raw
         .split("\n")
         .filter((l) => l.trim())
         .map((l) => { try { return JSON.parse(l); } catch { return null; } })
         .filter(Boolean);
-      // FR-DEGRADE-002 checkpoint isolation: filter to only same-checkpoint records.
-      history = checkpointArg
-        ? allRecords.filter((r) => r && r.checkpoint === checkpointArg)
-        : allRecords;
     } catch { /* file missing or unreadable — treat as no history */ }
   }
 

@@ -467,62 +467,28 @@ test("T008b multi-blocking never downgrades below R1 (anti-bypass, FR-DEG-002/00
     `>1 blocking must NOT trigger degradation; got ${d.level}`);
 });
 
-// ── T_CHECKPOINT_ISO: FR-DEGRADE-002 checkpoint isolation (cross-checkpoint contamination guard) ──
-// A new checkpoint's round=1 must NOT be degraded by a DIFFERENT checkpoint's prior-round history.
-// Before fix: --checkpoint filter was absent, so history from code-review-phase-0 (0 findings)
-// would degrade code-review-phase-1 round=1 → same_source_subagent (WRONG).
-// After fix: CLI filters history to only records matching --checkpoint=<current>; phase-0 records
-// are discarded, history for phase-1 round=1 is empty → no degradation (CORRECT, FR-DEGRADE-002).
+// ── Round/checkpoint isolation ownership moved to wh-review's round-state.mjs ──
+// FR-THIRDREVIEW-001: this engine has zero stage/round/checkpoint knowledge. The
+// CLI's former --checkpoint history filter (FR-DEGRADE-002) is removed; history
+// loaded via --history is now always used as-is, unfiltered, regardless of any
+// --checkpoint flag (which the CLI silently ignores as an unrecognized arg).
 
-test("T_CHECKPOINT_ISO core regression: round=1 of new checkpoint must NOT be degraded by different checkpoint's 0-finding history (FR-DEGRADE-002)", () => {
-  // This is the PURE function test (no CLI) — applyPostRoundDegradation receives already-filtered
-  // history. When filter is applied upstream, round=1 of code-review-phase-1 gets [] history.
-  const emptyHistory = []; // after checkpoint-scoped filter, phase-1 round=1 sees no prior records
+test("applyPostRoundDegradation core: empty history must not degrade round=1", () => {
+  const emptyHistory = [];
   const largeDecision = routeReview({ input: "```diff\n@@", diffLines: 5000 }); // → R1 baseline
   assert.strictEqual(largeDecision.level, "cross_source_with_subagent", `fixture precondition: large diff must be R1, got ${largeDecision.level}`);
   const d = applyPostRoundDegradation(emptyHistory, largeDecision);
   assert.strictEqual(d.level, "cross_source_with_subagent",
-    `empty (checkpoint-filtered) history must not degrade round=1; got ${d.level}`);
+    `empty history must not degrade round=1; got ${d.level}`);
 });
 
-test("T_CHECKPOINT_ISO CLI: --checkpoint isolates history — phase-1 round=1 NOT degraded by phase-0 0-finding record", () => {
-  // RED before fix: history file has 1 record (checkpoint=code-review-phase-0, 0 findings).
-  // Without checkpoint filter, applyPostRoundDegradation sees 0 findings → downgrades to R6.
-  // GREEN after fix: CLI filters to only records with checkpoint=code-review-phase-1 → [] → no degrade.
-  const tmp = mkdtempSync(join(tmpdir(), "rr-cpiso-"));
+test("CLI: --history is used unfiltered (no checkpoint isolation) — prior 0-finding record still applies", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-hist-"));
   try {
     const histEntry = JSON.stringify({
       round: 1,
-      checkpoint: "code-review-phase-0",
       level: "cross_source_with_subagent",
-      findings: [], // 0 findings: would trigger degradation if not filtered
-    });
-    const histFile = join(tmp, "history.jsonl");
-    const inputFile = join(tmp, "input.txt");
-    writeFileSync(histFile, histEntry + "\n");
-    writeFileSync(inputFile, "```diff\n@@\n+large change"); // code-diff signal
-    const d = runCLI([
-      `--input=${inputFile}`,
-      "--diff-lines=5000", // large → R1 baseline
-      `--history=${histFile}`,
-      "--checkpoint=code-review-phase-1", // current checkpoint: different from history record
-    ]);
-    assert.strictEqual(d.level, "cross_source_with_subagent",
-      `round=1 of phase-1 must NOT be degraded by phase-0 history; got level=${d.level} basis=${d.basis}`);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
-
-test("T_CHECKPOINT_ISO CLI: same-checkpoint history still degrades (positive case, --checkpoint filter keeps matching records)", () => {
-  // When history record has the SAME checkpoint as --checkpoint, it should still apply degradation.
-  const tmp = mkdtempSync(join(tmpdir(), "rr-cpiso-pos-"));
-  try {
-    const histEntry = JSON.stringify({
-      round: 1,
-      checkpoint: "code-review-phase-1",
-      level: "cross_source_with_subagent",
-      findings: [{ severity: "minor" }], // 1 finding → triggers downgrade
+      findings: [], // 0 findings: unconditional degradation trigger now that filtering is gone
     });
     const histFile = join(tmp, "history.jsonl");
     const inputFile = join(tmp, "input.txt");
@@ -532,24 +498,19 @@ test("T_CHECKPOINT_ISO CLI: same-checkpoint history still degrades (positive cas
       `--input=${inputFile}`,
       "--diff-lines=5000",
       `--history=${histFile}`,
-      "--checkpoint=code-review-phase-1", // same checkpoint → history should still apply
     ]);
     assert.strictEqual(d.level, "cross_source_no_subagent",
-      `same-checkpoint history with no-blocking finding must still degrade one tier R1→R2; got level=${d.level}`);
-    assert.ok(d.basis && /degrad/i.test(d.basis),
-      `basis must record degradation; got ${d.basis}`);
+      `history must apply unfiltered (no checkpoint isolation); got level=${d.level} basis=${d.basis}`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("T_CHECKPOINT_ISO CLI: no --checkpoint flag → no filtering (backward compat: existing behavior preserved)", () => {
-  // Without --checkpoint, the filter does not apply; old records without checkpoint field still degrade.
-  const tmp = mkdtempSync(join(tmpdir(), "rr-cpiso-compat-"));
+test("CLI: a stray --checkpoint flag has no effect (silently ignored, not a recognized arg)", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "rr-hist-cp-noop-"));
   try {
     const histEntry = JSON.stringify({
       round: 1,
-      // No checkpoint field (old record format)
       level: "cross_source_with_subagent",
       findings: [{ severity: "minor" }],
     });
@@ -561,10 +522,10 @@ test("T_CHECKPOINT_ISO CLI: no --checkpoint flag → no filtering (backward comp
       `--input=${inputFile}`,
       "--diff-lines=5000",
       `--history=${histFile}`,
-      // No --checkpoint: backward compat — treat full history as applicable
+      "--checkpoint=whatever", // must be a no-op — not a recognized flag anymore
     ]);
     assert.strictEqual(d.level, "cross_source_no_subagent",
-      `without --checkpoint, old records (no checkpoint field) must still trigger one-tier degradation R1→R2; got level=${d.level}`);
+      `stray --checkpoint must not change outcome; got level=${d.level}`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

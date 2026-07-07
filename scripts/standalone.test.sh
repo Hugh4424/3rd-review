@@ -190,24 +190,25 @@ set -e
 rm -rf "$ROOT4"
 [ "$RC4" -eq 2 ] || fail "missing input should escalate (exit 2), got $RC4"
 
-# ── case 5 (static): --checkpoint is parsed from args and forwarded to het reviewer call ──
-# standalone.sh uses ${CHECKPOINT:+--checkpoint="$CHECKPOINT"} on the `node "$HET_REVIEWER" ...`
-# line. This static regression verifies:
-#   (a) --checkpoint=* is parsed into CHECKPOINT in the arg-parsing loop
-#   (b) ${CHECKPOINT:+--checkpoint="$CHECKPOINT"} (or equivalent) appears on the HET_REVIEWER call
+# ── case 5 (static), updated for FR-THIRDREVIEW-001: the engine has zero
+# stage/round/checkpoint knowledge, so standalone.sh must NOT parse --checkpoint
+# nor forward it (or --round) to the het reviewer call — the canonical entry
+# point is --diff/--output only.
 
-# (a) --checkpoint=* must be parsed
-grep -qE '^\s*--checkpoint=\*\)' "$STANDALONE" \
-  || fail "case5a: standalone.sh does not parse --checkpoint=* argument"
+# (a) --checkpoint=* must NOT be parsed
+if grep -qE '^\s*--checkpoint=\*\)' "$STANDALONE"; then
+  fail "case5a: standalone.sh still parses --checkpoint=* (must be removed, FR-THIRDREVIEW-001)"
+fi
 
-# (b) CHECKPOINT must be forwarded to the node het-reviewer call using conditional expansion
-grep -qE 'node.*HET_REVIEWER.*CHECKPOINT' "$STANDALONE" \
-  || fail "case5b: standalone.sh does not forward \$CHECKPOINT to the node \$HET_REVIEWER call"
+# (b) CHECKPOINT must NOT be forwarded to the node het-reviewer call
+if grep -qE 'node.*HET_REVIEWER.*CHECKPOINT' "$STANDALONE"; then
+  fail "case5b: standalone.sh still forwards \$CHECKPOINT to the node \$HET_REVIEWER call (must be removed)"
+fi
 
-# (c) The forwarding must use the safe ${CHECKPOINT:+...} form (not bare $CHECKPOINT which would
-#     add an empty --checkpoint= on unset)
-grep -qE '\$\{CHECKPOINT:\+' "$STANDALONE" \
-  || fail "case5c: standalone.sh does not use \${CHECKPOINT:+...} conditional expansion for --checkpoint forwarding"
+# (c) --round must NOT be forwarded either — canonical entry point is --diff/--output only
+if grep -qE 'HET_REVIEWER"[[:space:]]+--diff="\$INPUT_FILE"[[:space:]]+--round=' "$STANDALONE"; then
+  fail "case5c: standalone.sh still passes --round to the het reviewer call (must be removed)"
+fi
 
 # ── case AC-THIRDREVIEW3-1 (static): standalone.sh must not contain a revise-loop construct
 # that re-invokes the review runner when verdict=revise_required. FR-THIRDREVIEW-003 requires
@@ -230,4 +231,4 @@ if [ "$FAIL" -ne 0 ]; then
   echo "=== standalone.sh tests FAILED ===" >&2
   exit 1
 fi
-echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, single-shot revise (no internal loop), checkpoint forwarding"
+echo "PASS: standalone.sh — task structure, manifest state machine, exit codes, provenance, version anchor, single-shot revise (no internal loop), zero checkpoint/round knowledge"

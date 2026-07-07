@@ -6,7 +6,10 @@
 // SEPARATE process, never the host context.
 //
 // Exports: detectHost, selectProvider, probeAvailable, runReview
-// CLI mode: --diff=<file> --round=<n> --output=<file> [--env-strip-check]
+// CLI mode: --diff=<file> --output=<file> [--env-strip-check]
+// --diff file must contain JSON {mode, contract, materials} (FR-THIRDREVIEW-001).
+// Zero stage/round knowledge: legacy --stage/--round/--checkpoint flags are
+// rejected with a non-zero exit and an explicit error, never silently ignored.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -454,7 +457,7 @@ function extractVerdictJson(text, spans) {
  * B2: ONLY valid JSON with a recognized verdict enum is accepted.
  * Non-JSON / empty / garbage / missing-verdict / bogus-enum output is NEVER a pass.
  */
-export function buildVerdictFromStdout(stdout, provider, diffFile, round) {
+export function buildVerdictFromStdout(stdout, provider, diffFile) {
   const text = (stdout || "").trim();
 
   // Fast path: clean JSON output (majority of well-behaved providers)
@@ -486,7 +489,6 @@ export function buildVerdictFromStdout(stdout, provider, diffFile, round) {
     error: "Provider produced non-JSON output; verdict cannot be determined automatically.",
     reviewSnapshot: [{
       path: typeof diffFile === "string" ? path.basename(diffFile) : "",
-      round,
       truncated: false,
       tokenUsage: { total: null },
     }],
@@ -531,48 +533,27 @@ export function extractTokenUsage(stdout) {
 }
 
 /**
- * Resolve verifier and contract file paths for a given workflowhub stage checkpoint.
- * Returns { reviewerText, contractText } — either may be empty string if files not found.
+ * Build a review prompt from the structured {mode, contract, materials} payload.
+ * The engine has zero stage/round knowledge — mode and contract are the only
+ * routing-relevant fields it receives, both explicit and never collapsed into
+ * the materials text (FR-THIRDREVIEW-001, decision-log D1).
  */
-export function loadVerifierContext(checkpoint) {
-  const STAGE_MAP = {
-    "make-decision": ["make-decision-direction-reviewer.md", "make-decision-reviewer-contract.md"],
-    "build-spec":    ["build-spec-reviewer.md",              "build-spec-reviewer-contract.md"],
-    "build-plan":    ["build-plan-reviewer.md",              "build-plan-reviewer-contract.md"],
-    "build-code":    ["build-code-reviewer.md",              "build-code-reviewer-contract.md"],
-    "verify-code":   ["verify-code-reviewer.md",             "verify-code-reviewer-contract.md"],
-  };
-  const verifiersDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "verifiers", "vibecoding");
-  const stage = checkpoint ? String(checkpoint).toLowerCase() : "";
-  const entry = Object.entries(STAGE_MAP).find(([key]) => stage.startsWith(key));
-  if (!entry) return { reviewerText: "", contractText: "" };
-  const [, [reviewerFile, contractFile]] = entry;
-  const readSafe = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
-  return {
-    reviewerText: readSafe(path.join(verifiersDir, reviewerFile)),
-    contractText: readSafe(path.join(verifiersDir, contractFile)),
-  };
-}
-
-/**
- * Try to build a review prompt from the diff content.
- */
-function buildReviewPrompt(diffContent, provider, diffFile, round, truncated, checkpoint) {
-  // truncated comes from truncateDiff() — the single source of truth (B4)
-  const { reviewerText, contractText } = loadVerifierContext(checkpoint);
-  const verifierSection = reviewerText
-    ? `\n\n---\n## REVIEWER ROLE\n\n${reviewerText}${contractText ? `\n\n---\n## REVIEWER CONTRACT\n\n${contractText}` : ""}\n\n---\n`
+function buildReviewPrompt({ mode, contract, materialsContent, diffFile, truncated }) {
+  const contractSection = contract
+    ? `\n\n---\n## REVIEW CONTRACT\n\n${contract}\n\n---\n`
     : "";
-  return `${verifierSection}Review the following diff and return a JSON object with these fields:
+  return `${contractSection}Review mode: ${mode}
+
+Review the following materials and return a JSON object with these fields:
   - "verdict": one of "pass", "revise_required", "escalate_to_human"
   - "findings": array of {severity, file, line, issue, recommendation}
   - "resolutionSummary": brief summary string
-  - "reviewSnapshot": {diffFile:"${path.basename(diffFile)}", round:${round}, truncated:${truncated}}
+  - "reviewSnapshot": {diffFile:"${path.basename(diffFile)}", truncated:${truncated}}
 
 Reply ONLY with the JSON object, no markdown fences.
 
-DIFF:
-${diffContent}`;
+MATERIALS:
+${materialsContent}`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -753,13 +734,12 @@ export function runThreatAuditor(diffFile, opts = {}) {
  * Run a heterologous (cross-engine) review.
  *
  * @param {object} opts
- * @param {string} opts.diffFile - path to the diff file
- * @param {number} opts.round - review round number
+ * @param {string} opts.diffFile - path to a file containing JSON {mode, contract, materials}
  * @param {string} opts.outputFile - path to write the verdict JSON
  * @param {object} [opts.envOverride] - env override (for testing)
  * @returns {object} verdict object
  */
-export function runReview({ diffFile, round, outputFile, envOverride, checkpoint }) {
+export function runReview({ diffFile, outputFile, envOverride }) {
   const sourceEnv = envOverride ?? process.env;
   const host = detectHost(sourceEnv);
 
@@ -780,21 +760,80 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
 
   const selected = selectProvider(host, effectiveAvailable);
 
+  // ── Read and parse the structured {mode, contract, materials} payload ──
+  // The engine has zero stage/round knowledge: --diff carries the fully
+  // assembled review input as JSON, never a raw unstructured diff (FR-THIRDREVIEW-001).
+  let payload;
+  try {
+    const raw = fs.readFileSync(diffFile, "utf8");
+    payload = JSON.parse(raw);
+  } catch (e) {
+    const verdict = {
+      verdict: "escalate_to_human",
+      provider: selected,
+      actual_mode: "not_executed",
+      error: `Cannot read/parse diffFile as {mode,contract,materials} JSON: ${diffFile} (${e.message})`,
+      reviewSnapshot: [{
+        path: path.basename(diffFile),
+        truncated: false,
+        tokenUsage: { total: null },
+      }],
+      findings: [],
+      riskDisposition: [],
+      worktreeInventory: { included: [], unrelated: [], excluded: [] },
+    };
+    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff payload unreadable/unparsable" };
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
+
+  const { mode, contract, materials } = payload || {};
+  if (typeof mode !== "string" || typeof contract !== "string" || typeof materials !== "string") {
+    const verdict = {
+      verdict: "escalate_to_human",
+      provider: selected,
+      actual_mode: "not_executed",
+      error: `Malformed diff payload: expected {mode, contract, materials} all strings, got keys ${JSON.stringify(Object.keys(payload || {}))}`,
+      reviewSnapshot: [{
+        path: path.basename(diffFile),
+        truncated: false,
+        tokenUsage: { total: null },
+      }],
+      findings: [],
+      riskDisposition: [],
+      worktreeInventory: { included: [], unrelated: [], excluded: [] },
+    };
+    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff payload malformed" };
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
+
+  // materials is the auditable text; diffFile itself now holds the JSON
+  // envelope, so the threat-auditor is fed a materials-only temp file.
+  const materialsAuditPath = path.join(
+    os.tmpdir(),
+    `rhr-materials-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`
+  );
+  const runMaterialsAudit = () => {
+    try {
+      fs.writeFileSync(materialsAuditPath, materials);
+      return runThreatAuditor(materialsAuditPath);
+    } finally {
+      try { fs.unlinkSync(materialsAuditPath); } catch {}
+    }
+  };
+
   // ── Degraded path: same-source ──
   if (selected === "degraded-same-source") {
-    // Load checkpoint-specific reviewer/contract even on degraded path so the
-    // R6 same-source sub-agent receives the correct verifier prompt (FR-ROUTE-003).
-    const { reviewerText: degradedReviewerText, contractText: degradedContractText } =
-      loadVerifierContext(checkpoint);
     const verdict = {
       verdict: "escalate_to_human",
       provider: "degraded-same-source",
       degraded: "same-source",
+      actual_mode: "same-source",
       host,
       availableProviders: effectiveAvailable,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated: false,
         tokenUsage: { total: null },
       }],
@@ -803,54 +842,18 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
         "No heterologous provider available; review degraded to same-source. Manual review required.",
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
-      ...(degradedReviewerText ? { reviewerPrompt: degradedReviewerText } : {}),
-      ...(degradedContractText ? { contractPrompt: degradedContractText } : {}),
+      contractPrompt: contract,
     };
-    // Validate diff readability before running auditor, consistent with the
-    // unreadable-diff branch. Only run the auditor when there is a readable
-    // diff to audit; otherwise record ran:false with an unreadable reason.
-    try {
-      fs.readFileSync(diffFile, "utf8"); // validates readability
-      verdict.threatAuditor = runThreatAuditor(diffFile);
-    } catch {
-      verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (degraded path)" };
-    }
-    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
-    return verdict;
-  }
-
-  // ── Read and truncate diff ──
-  let diffContent;
-  try {
-    diffContent = fs.readFileSync(diffFile, "utf8");
-  } catch {
-    const verdict = {
-      verdict: "escalate_to_human",
-      provider: selected,
-      error: `Cannot read diffFile: ${diffFile}`,
-      reviewSnapshot: [{
-        path: path.basename(diffFile),
-        round,
-        truncated: false,
-        tokenUsage: { total: null },
-      }],
-      findings: [],
-      riskDisposition: [],
-      worktreeInventory: { included: [], unrelated: [], excluded: [] },
-    };
-    // Diff is unreadable — the auditor has nothing to audit.
-    // Spawning it on a known-unreadable file is pointless and would produce
-    // misleading skip→ran results (AC-7). Record ran:false directly.
-    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (escalate path)" };
+    verdict.threatAuditor = runMaterialsAudit();
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
 
   const budget = getDiffCharBudget();
-  const { content: truncatedDiff, truncated } = truncateDiff(diffContent, budget);
+  const { content: truncatedMaterials, truncated } = truncateDiff(materials, budget);
 
   // ── Build prompt ──
-  const prompt = buildReviewPrompt(truncatedDiff, selected, diffFile, round, truncated, checkpoint);
+  const prompt = buildReviewPrompt({ mode, contract, materialsContent: truncatedMaterials, diffFile, truncated });
 
   // ── Build child env (whitelist) ──
   const childEnv = buildChildEnv(selected, sourceEnv);
@@ -865,11 +868,11 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
       verdict: "escalate_to_human",
       provider: selected,
       degraded: "advisor-unavailable",
+      actual_mode: "not_executed",
       host,
       error: "omc run-provider-advisor.js not found at ~/.claude/plugins/cache/omc/oh-my-claudecode/*/scripts/; cannot safely execute provider binary without an absolute trusted path.",
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -881,7 +884,7 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
     console.error(
       `[run-heterologous-review] omc advisor not found; escalating to human (direct-binary fallback removed for security — B1).`
     );
-    verdict.threatAuditor = runThreatAuditor(diffFile);
+    verdict.threatAuditor = runMaterialsAudit();
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -896,7 +899,7 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
   // ── Parse output ──
   let verdict;
   try {
-    verdict = buildVerdictFromStdout(resolvedOutput, selected, diffFile, round);
+    verdict = buildVerdictFromStdout(resolvedOutput, selected, diffFile);
   } catch {
     verdict = {
       verdict: "escalate_to_human",
@@ -904,7 +907,6 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
       error: error || `exit=${status}`,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -922,7 +924,6 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
       error: error || `exit=${status}, empty=${!resolvedOutput || resolvedOutput.length === 0}`,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -941,7 +942,7 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
   const snapshotEntry = {
     path: path.basename(diffFile),
     hash: null,
-    lines: diffContent.split("\n").length,
+    lines: materials.split("\n").length,
     truncated,
     tokenUsage: { total: null },
   };
@@ -968,7 +969,6 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
   if (!verdict.reviewSnapshot) {
     verdict.reviewSnapshot = {
       diffFile: path.basename(diffFile),
-      round,
       truncated,
       tokenUsage,
     };
@@ -995,8 +995,12 @@ export function runReview({ diffFile, round, outputFile, envOverride, checkpoint
   }
   verdict.reviewMode = "omc-ask";
 
+  // actual_mode reflects what genuinely executed, never a blind echo of the
+  // requested mode on failure (FR-THIRDREVIEW-001, decision-log D1).
+  verdict.actual_mode = advisorSucceeded ? mode : "not_executed";
+
   // AC-7 / FR-QUALITY-001 dim 4: run threat-auditor in ALL review modes
-  verdict.threatAuditor = runThreatAuditor(diffFile);
+  verdict.threatAuditor = runMaterialsAudit();
 
   // Write
   fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
@@ -1017,6 +1021,11 @@ function isMain() {
   }
 }
 
+// Legacy flags rejected outright (FR-THIRDREVIEW-001): the canonical runner
+// entry point has zero stage/round knowledge and must never silently ignore
+// these — reject visibly with a non-zero exit, never continue past them.
+const LEGACY_FLAG_NAMES = ["stage", "round", "checkpoint"];
+
 if (isMain()) {
   const args = process.argv.slice(2);
   const getArg = (name) => {
@@ -1024,6 +1033,18 @@ if (isMain()) {
     const found = args.find((a) => a.startsWith(prefix));
     return found ? found.slice(prefix.length) : undefined;
   };
+
+  const usedLegacyFlag = LEGACY_FLAG_NAMES.find(
+    (name) => args.some((a) => a === `--${name}` || a.startsWith(`--${name}=`))
+  );
+  if (usedLegacyFlag) {
+    console.error(
+      `[run-heterologous-review] FAIL: legacy flag --${usedLegacyFlag} is not accepted. ` +
+      `The canonical entry point is --diff=<file> --output=<file> only; stage/round routing ` +
+      `must be resolved by wh-review before calling this runner (FR-THIRDREVIEW-001).`
+    );
+    process.exit(1);
+  }
 
   // --env-strip-check: dump child env to stdout for the test to assert
   if (args.includes("--env-strip-check")) {
@@ -1036,16 +1057,14 @@ if (isMain()) {
 
   const diffFile = getArg("diff");
   const outputFile = getArg("output");
-  const round = parseInt(getArg("round") || "1", 10);
-  const checkpoint = getArg("checkpoint");
 
   if (!diffFile || !outputFile) {
-    console.error("Usage: run-heterologous-review.mjs --diff=<file> --round=<n> --output=<file> [--checkpoint=<stage>] [--env-strip-check]");
+    console.error("Usage: run-heterologous-review.mjs --diff=<file> --output=<file> [--env-strip-check]");
     process.exit(1);
   }
 
   try {
-    runReview({ diffFile, round, outputFile, checkpoint });
+    runReview({ diffFile, outputFile });
     process.exit(0);
   } catch (e) {
     console.error(`[run-heterologous-review] Fatal error: ${e.message}`);
