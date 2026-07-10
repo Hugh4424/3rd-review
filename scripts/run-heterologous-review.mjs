@@ -6,13 +6,17 @@
 // SEPARATE process, never the host context.
 //
 // Exports: detectHost, selectProvider, probeAvailable, runReview
-// CLI mode: --diff=<file> --round=<n> --output=<file> [--env-strip-check]
+// CLI mode: --diff=<file> --output=<file> [--env-strip-check]
+// --diff file must contain JSON {mode, contract, materials} (FR-THIRDREVIEW-001).
+// Zero stage/round knowledge: legacy --stage/--round/--checkpoint flags are
+// rejected with a non-zero exit and an explicit error, never silently ignored.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ═══════════════════════════════════════════════════════════════
 
 const PROVIDER_BINS = {
+  "claude-code": "claude",
   codex: "codex",
   gemini: "gemini",
   antigravity: "antigravity",
@@ -28,11 +33,14 @@ const PROVIDER_BINS = {
   cursor: "cursor",
 };
 
-const PROVIDER_PRIORITY = ["codex", "gemini", "antigravity", "grok", "cursor"];
+const PROVIDER_PRIORITY = ["claude-code", "codex", "gemini", "antigravity", "grok", "cursor"];
+
+export const REVIEW_TIMEOUT_MS = 600_000;
 
 const ENV_WHITELIST = new Set(["PATH", "HOME", "TERM", "LANG"]);
 
 const PROVIDER_ENV_KEYS = {
+  "claude-code": "ANTHROPIC_API_KEY",
   codex: "OPENAI_API_KEY",
   gemini: "GOOGLE_API_KEY",
   antigravity: null,
@@ -75,6 +83,8 @@ function buildTrustedPath() {
 // exist in config/route-rules.json yet; use this module-level default so it
 // works now and is override-ready when the config key is added later.
 const DEFAULT_DIFF_CHAR_BUDGET = 120000;
+const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
+const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
 
 const ROUTE_RULES_PATH = path.join(__dirname, "..", "config", "route-rules.json");
 
@@ -108,6 +118,19 @@ export function detectHost(env = process.env) {
     return "codex";
   }
   return "unknown";
+}
+
+const HOST_PROVIDER_ALIASES = new Map([
+  ["claude", "claude-code"], ["claude-code", "claude-code"],
+  ["codex", "codex"], ["openai-codex", "codex"],
+  ["gemini", "gemini"], ["antigravity", "antigravity"],
+  ["grok", "grok"], ["cursor", "cursor"],
+]);
+
+/** Normalize only registered host-provider enum values; arbitrary strings fail closed. */
+export function normalizeHostProvider(value) {
+  if (typeof value !== "string") return "unknown";
+  return HOST_PROVIDER_ALIASES.get(value.trim().toLowerCase()) ?? "unknown";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -146,6 +169,7 @@ export function probeAvailable(env = process.env) {
   for (const [id, binary] of Object.entries(PROVIDER_BINS)) {
     // Provider unavailability flags (for testing and integration)
     if (env.CODEX_UNAVAIL === "1" && id === "codex") continue;
+    if (env.CLAUDE_UNAVAIL === "1" && id === "claude-code") continue;
     if (env.GEMINI_UNAVAIL === "1" && id === "gemini") continue;
     const absPath = resolveBinaryToAbsolutePath(binary);
     if (!absPath) continue;
@@ -159,6 +183,153 @@ export function probeAvailable(env = process.env) {
     }
   }
   return available;
+}
+
+function readSafeArtifact(filePath, expectedSha256) {
+  const absolute = path.resolve(filePath);
+  const stat = fs.lstatSync(absolute);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Artifact is not a regular non-symlink file: ${absolute}`);
+  if (stat.size > MAX_ARTIFACT_BYTES) throw new Error(`Artifact exceeds ${MAX_ARTIFACT_BYTES} bytes: ${absolute}`);
+  const content = fs.readFileSync(absolute, "utf8");
+  const sha256 = createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
+  if (expectedSha256 && sha256 !== String(expectedSha256).toLowerCase()) {
+    throw new Error(`Artifact hash mismatch: ${absolute}`);
+  }
+  return { path: absolute, content, bytes: Buffer.byteLength(content), sha256 };
+}
+
+function insideRoot(root, target) {
+  const rel = path.relative(root, target);
+  return rel === "" || (!path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`));
+}
+
+function artifactLineCount(bytes) {
+  if (bytes.length === 0) return 0;
+  let lines = 0;
+  for (const byte of bytes) if (byte === 10) lines++;
+  return lines + (bytes.at(-1) === 10 ? 0 : 1);
+}
+
+function resolveWhArtifactManifest(descriptor) {
+  if (!descriptor || typeof descriptor !== "object" || !Array.isArray(descriptor.entries) || !/^[a-f0-9]{64}$/.test(descriptor.content_hash || "")) {
+    throw new Error("WH artifact_manifest descriptor is invalid");
+  }
+  const packageRootInput = path.resolve(String(descriptor.package_root || ""));
+  const rootStat = fs.lstatSync(packageRootInput);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("WH package_root is not a regular directory");
+  const packageRoot = fs.realpathSync(packageRootInput);
+  const manifestPath = path.resolve(String(descriptor.manifest_path || ""));
+  const manifestStat = fs.lstatSync(manifestPath);
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) throw new Error("WH manifest is not a regular non-symlink file");
+  const manifestReal = fs.realpathSync(manifestPath);
+  if (!insideRoot(packageRoot, manifestReal)) throw new Error("WH manifest escapes package_root");
+  const manifestArtifact = readSafeArtifact(manifestReal);
+  const manifest = JSON.parse(manifestArtifact.content);
+  if (manifest.version !== 6 || manifest.chunk_max_bytes !== 65536 || manifest.chunk_max_line_codepoints !== 1000 || !Array.isArray(manifest.entries)) {
+    throw new Error("WH manifest shape is invalid");
+  }
+  const canonicalHash = createHash("sha256").update(Buffer.from(`${JSON.stringify(manifest.entries, null, 2)}\n`)).digest("hex");
+  if (canonicalHash !== manifest.content_hash || canonicalHash !== descriptor.content_hash || JSON.stringify(manifest.entries) !== JSON.stringify(descriptor.entries)) {
+    throw new Error("WH manifest descriptor/content hash mismatch");
+  }
+  const coverage = [];
+  const sections = [];
+  let totalBytes = 0;
+  const seenIds = new Set();
+  for (const item of manifest.entries) {
+    if (!item || typeof item.id !== "string" || seenIds.has(item.id) || !Array.isArray(item.chunks) || item.chunks.length === 0) throw new Error("WH manifest entry invalid");
+    seenIds.add(item.id);
+    if (typeof item.path !== "string" || path.isAbsolute(item.path) || item.path.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) throw new Error("WH logical entry path invalid");
+    const logicalPath = path.resolve(packageRoot, item.path);
+    const logicalStat = fs.lstatSync(logicalPath);
+    if (!logicalStat.isFile() || logicalStat.isSymbolicLink()) throw new Error("WH logical entry is not a regular non-symlink file");
+    const logicalReal = fs.realpathSync(logicalPath);
+    if (!insideRoot(packageRoot, logicalReal)) throw new Error("WH logical entry escapes package_root");
+    const logicalArtifact = readSafeArtifact(logicalReal, item.sha256);
+    if (logicalArtifact.bytes !== item.bytes) throw new Error("WH logical entry byte count mismatch");
+    const chunkBuffers = [];
+    const chunkCoverage = [];
+    for (const [index, chunk] of item.chunks.entries()) {
+      if (chunk.sequence !== index + 1 || typeof chunk.path !== "string" || path.isAbsolute(chunk.path) || chunk.path.split(/[\\/]/).some((part) => !part || part === "." || part === "..")) throw new Error("WH chunk path/sequence invalid");
+      const chunkPath = path.resolve(packageRoot, chunk.path);
+      const chunkStat = fs.lstatSync(chunkPath);
+      if (!chunkStat.isFile() || chunkStat.isSymbolicLink()) throw new Error("WH chunk is not a regular non-symlink file");
+      const chunkReal = fs.realpathSync(chunkPath);
+      if (!insideRoot(packageRoot, chunkReal)) throw new Error("WH chunk escapes package_root");
+      const artifact = readSafeArtifact(chunkReal, chunk.sha256);
+      const chunkBuffer = Buffer.from(artifact.content, "utf8");
+      if (artifact.bytes !== chunk.bytes || artifact.bytes > 65536 || artifactLineCount(chunkBuffer) !== chunk.lines || artifact.content.split("\n").some((line) => [...line].length > 1000)) throw new Error("WH chunk byte/line contract mismatch");
+      chunkBuffers.push(chunkBuffer);
+      chunkCoverage.push({ sequence: chunk.sequence, path: chunk.path, bytes: artifact.bytes, lines: chunk.lines, sha256: artifact.sha256, included: true });
+    }
+    const logical = Buffer.concat(chunkBuffers);
+    const logicalHash = createHash("sha256").update(logical).digest("hex");
+    if (logical.length !== item.bytes || logicalHash !== item.sha256 || artifactLineCount(logical) !== item.lines) throw new Error("WH chunks do not reconstruct logical entry");
+    totalBytes += logical.length;
+    if (totalBytes > MAX_PACKAGE_BYTES) throw new Error(`Artifact package exceeds ${MAX_PACKAGE_BYTES} bytes`);
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(logical);
+    sections.push(`\n\n--- ARTIFACT: ${item.id} | ${item.role} | ${item.kind} ---\n${text}`);
+    coverage.push({ id: item.id, role: item.role, kind: item.kind, path: item.path, bytes: item.bytes, sha256: item.sha256, status: "read", included: true, chunks: chunkCoverage });
+  }
+  if (!seenIds.has("contract") || !manifest.entries.some((item) => item.role === "materials")) throw new Error("WH manifest lacks contract/materials");
+  const contract = sections[manifest.entries.findIndex((item) => item.id === "contract")];
+  return { contract, materials: sections.join(""), coverage, package: { root: packageRoot, manifestPath: manifestReal, artifactCount: coverage.length, totalBytes, contentHash: canonicalHash } };
+}
+
+/** Resolve embedded/referenced payload and manifest into one deterministic package. */
+export function resolveArtifactPackage(diffFile) {
+  const root = readSafeArtifact(diffFile);
+  const baseDir = path.dirname(root.path);
+  let envelope = JSON.parse(root.content);
+  if (envelope.artifact_manifest) {
+    const wh = resolveWhArtifactManifest(envelope.artifact_manifest);
+    return { mode: envelope.mode, contract: wh.contract, materials: wh.materials, canonicalArtifact: true,
+      requestedProvider: envelope.provider, coverage: wh.coverage,
+      package: { ...wh.package, materialsSha256: createHash("sha256").update(Buffer.from(wh.materials)).digest("hex"), inlineMaterialsBytes: 0 } };
+  }
+  const payloadRef = envelope.payloadPath ?? (typeof envelope.payload === "string" ? envelope.payload : null);
+  if (payloadRef) envelope = JSON.parse(readSafeArtifact(path.resolve(baseDir, payloadRef)).content);
+  else if (envelope.payload && typeof envelope.payload === "object") envelope = envelope.payload;
+
+  let manifest = envelope.manifest;
+  if (envelope.manifestPath) manifest = JSON.parse(readSafeArtifact(path.resolve(baseDir, envelope.manifestPath)).content);
+  const entries = Array.isArray(manifest) ? manifest
+    : (manifest?.files ?? manifest?.artifacts ?? manifest?.entries ?? []);
+  if (!Array.isArray(entries)) throw new Error("Manifest entries must be an array");
+
+  const coverage = [];
+  const sections = [];
+  let totalBytes = Buffer.byteLength(String(envelope.materials ?? ""));
+  for (const rawEntry of entries) {
+    const entry = typeof rawEntry === "string" ? { path: rawEntry } : rawEntry;
+    if (!entry || typeof entry !== "object" || typeof entry.path !== "string") {
+      throw new Error("Every manifest entry requires a path");
+    }
+    let artifact;
+    if (typeof entry.content === "string") {
+      const sha256 = createHash("sha256").update(Buffer.from(entry.content)).digest("hex");
+      if (entry.sha256 && sha256 !== String(entry.sha256).toLowerCase()) throw new Error(`Embedded artifact hash mismatch: ${entry.path}`);
+      artifact = { path: entry.path, content: entry.content, bytes: Buffer.byteLength(entry.content), sha256 };
+    } else {
+      artifact = readSafeArtifact(path.isAbsolute(entry.path) ? entry.path : path.resolve(baseDir, entry.path), entry.sha256);
+    }
+    totalBytes += artifact.bytes;
+    if (totalBytes > MAX_PACKAGE_BYTES) throw new Error(`Artifact package exceeds ${MAX_PACKAGE_BYTES} bytes`);
+    coverage.push({ path: artifact.path, bytes: artifact.bytes, sha256: artifact.sha256, included: true });
+    sections.push(`\n\n--- ARTIFACT: ${artifact.path} ---\n${artifact.content}`);
+  }
+  const combinedMaterials = String(envelope.materials ?? "") + sections.join("");
+  return {
+    mode: envelope.mode, contract: envelope.contract,
+    materials: combinedMaterials,
+    requestedProvider: envelope.provider,
+    coverage,
+    package: {
+      root: root.path, artifactCount: coverage.length, totalBytes,
+      materialsSha256: createHash("sha256").update(Buffer.from(combinedMaterials)).digest("hex"),
+      inlineMaterialsBytes: Buffer.byteLength(String(envelope.materials ?? "")),
+    },
+  };
 }
 
 /**
@@ -181,6 +352,56 @@ function resolveBinaryToAbsolutePath(binary) {
     }
   }
   return null;
+}
+
+export function resolveBinaryCandidates(binary, { binRoots = TRUSTED_PATH_CANDIDATES, pathValue = process.env.PATH } = {}) {
+  const dirs = [...binRoots];
+  // Include current PATH ordering, but only retain candidates whose real path
+  // is inside a statically trusted directory. A PATH-shadow outside the trust
+  // roots is observed and ignored, never executed.
+  for (const dir of String(pathValue || "").split(path.delimiter)) if (dir) dirs.push(dir);
+  const trustedRoots = binRoots.map((dir) => path.resolve(dir));
+  const results = [];
+  const seen = new Set();
+  for (const dir of dirs) {
+    const candidate = path.resolve(dir, binary);
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile() && !stat.isSymbolicLink()) continue;
+      const real = fs.realpathSync(candidate);
+      const targetStat = fs.statSync(real);
+      if (!targetStat.isFile() || !(targetStat.mode & 0o111)) continue;
+      const owningBinRoot = trustedRoots.find((root) => insideRoot(root, candidate));
+      if (!owningBinRoot) continue;
+      if (stat.isSymbolicLink()) {
+        const packageRoot = fs.realpathSync(path.resolve(path.dirname(owningBinRoot), "lib", "node_modules"));
+        if (!insideRoot(packageRoot, real)) continue;
+      } else if (!insideRoot(owningBinRoot, real)) continue;
+      if (!seen.has(real)) { seen.add(real); results.push(real); }
+    } catch {}
+  }
+  return results;
+}
+
+const REQUIRED_CLAUDE_FLAGS = ["--print", "--output-format", "--json-schema", "--safe-mode", "--tools", "--permission-mode", "--no-session-persistence"];
+
+export function selectCompatibleClaudeCode({ env = process.env, candidates } = {}) {
+  const paths = candidates ?? resolveBinaryCandidates("claude");
+  const attempts = [];
+  for (const binaryPath of paths) {
+    const versionResult = spawnSync(binaryPath, ["--version"], { env, encoding: "utf8", shell: false, timeout: 10_000 });
+    const helpResult = spawnSync(binaryPath, ["--help"], { env, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 });
+    const version = String(versionResult.stdout || "").trim().split(/\r?\n/, 1)[0].slice(0, 120);
+    const help = String(helpResult.stdout || "");
+    const missingFlags = REQUIRED_CLAUDE_FLAGS.filter((flag) => !new RegExp(`(^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|,|$)`, "m").test(help));
+    let rejectionReason = null;
+    if (versionResult.status !== 0) rejectionReason = "version-preflight-failed";
+    else if (helpResult.status !== 0) rejectionReason = "help-preflight-failed";
+    else if (missingFlags.length) rejectionReason = `missing-required-flags:${missingFlags.join(",")}`;
+    attempts.push({ binaryPath, version: version || null, compatible: rejectionReason === null, rejectionReason });
+    if (!rejectionReason) return { binaryPath, version, attempts };
+  }
+  return { binaryPath: null, version: null, attempts };
 }
 
 /**
@@ -278,12 +499,261 @@ function buildChildEnv(provider, sourceEnv = process.env) {
     child[keyName] = sourceEnv[keyName];
   }
 
-  // If provider is claude, preserve ANTHROPIC_API_KEY
-  if (provider === "claude" && "ANTHROPIC_API_KEY" in sourceEnv) {
+  // Claude Code may use an API key; subscription auth remains available via HOME.
+  if (provider === "claude-code" && "ANTHROPIC_API_KEY" in sourceEnv) {
     child.ANTHROPIC_API_KEY = sourceEnv.ANTHROPIC_API_KEY;
   }
 
   return child;
+}
+
+const REVIEW_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    verdict: { enum: ["pass", "revise_required", "escalate_to_human"] },
+    findings: { type: "array", items: { type: "object", additionalProperties: false,
+      properties: { severity: { enum: ["blocking", "important", "minor"] }, file: { type: "string" },
+        line: { type: "integer", minimum: 0 }, issue: { type: "string" }, recommendation: { type: "string" } },
+      required: ["severity", "file", "line", "issue", "recommendation"] } },
+    resolutionSummary: { type: "string" },
+  },
+  required: ["verdict", "findings", "resolutionSummary"],
+});
+
+function validateStructuredVerdict(value) {
+  const errors = [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { valid: false, errors: [{ code: "type", path: "/" }] };
+  const allowed = new Set(["verdict", "findings", "resolutionSummary"]);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) errors.push({ code: "additional_property", path: `/${key}` });
+  if (!VALID_VERDICTS.has(value.verdict)) errors.push({ code: "enum", path: "/verdict" });
+  if (typeof value.resolutionSummary !== "string") errors.push({ code: "type", path: "/resolutionSummary" });
+  if (!Array.isArray(value.findings)) errors.push({ code: "type", path: "/findings" });
+  else value.findings.forEach((finding, index) => {
+    const base = `/findings/${index}`;
+    const keys = new Set(["severity", "file", "line", "issue", "recommendation"]);
+    if (!finding || typeof finding !== "object" || Array.isArray(finding)) { errors.push({ code: "type", path: base }); return; }
+    for (const key of Object.keys(finding)) if (!keys.has(key)) errors.push({ code: "additional_property", path: `${base}/${key}` });
+    if (!new Set(["blocking", "important", "minor"]).has(finding.severity)) errors.push({ code: "enum", path: `${base}/severity` });
+    for (const key of ["file", "issue", "recommendation"]) if (typeof finding[key] !== "string") errors.push({ code: "type", path: `${base}/${key}` });
+    if (!Number.isInteger(finding.line) || finding.line < 0) errors.push({ code: "type", path: `${base}/line` });
+  });
+  return { valid: errors.length === 0, errors };
+}
+
+/** Parse the documented Claude Code --output-format=json envelope exactly. */
+export function parseClaudeCodeResult(stdout) {
+  const envelope = JSON.parse((stdout || "").trim());
+  if (envelope && typeof envelope.structured_output === "object" && envelope.structured_output !== null) {
+    const validation = validateStructuredVerdict(envelope.structured_output);
+    if (!validation.valid) throw new Error("Claude Code structured_output failed schema validation");
+    return envelope.structured_output;
+  }
+  if (typeof envelope?.result === "string") {
+    const parsed = JSON.parse(envelope.result.trim());
+    const validation = validateStructuredVerdict(parsed);
+    if (!validation.valid) throw new Error("Claude Code result failed schema validation");
+    return parsed;
+  }
+  throw new Error("Claude Code JSON envelope contained neither structured_output nor JSON result");
+}
+
+export function describeClaudeOutputShape(stdout) {
+  let envelope;
+  try { envelope = JSON.parse(String(stdout || "").trim()); }
+  catch { return { envelope_json_parseable: false }; }
+  const structured = envelope?.structured_output;
+  const resultPresent = typeof envelope?.result === "string";
+  let resultParsed = null;
+  if (resultPresent) { try { resultParsed = JSON.parse(envelope.result); } catch {} }
+  const candidate = structured && typeof structured === "object" ? structured : resultParsed;
+  const validation = validateStructuredVerdict(candidate);
+  return {
+    envelope_json_parseable: true,
+    structured_output: { type: structured === null ? "null" : Array.isArray(structured) ? "array" : typeof structured, is_null: structured === null },
+    result: { present: resultPresent, bytes: resultPresent ? Buffer.byteLength(envelope.result) : 0, json_parseable: resultParsed !== null },
+    parsed: { top_level_keys: candidate && typeof candidate === "object" && !Array.isArray(candidate) ? Object.keys(candidate).filter((k) => ["verdict", "findings", "resolutionSummary"].includes(k)).sort() : [],
+      shape: candidate === null ? "null" : Array.isArray(candidate) ? "array" : typeof candidate,
+      verdict_enum_valid: Boolean(candidate && VALID_VERDICTS.has(candidate.verdict)) },
+    schema_errors: validation.errors.slice(0, 50),
+  };
+}
+
+function runViaClaudeCode(binaryPath, prompt, env, timeoutMs = REVIEW_TIMEOUT_MS, artifactPackage = null) {
+  const scopedPackage = artifactPackage ? `//${artifactPackage.root.replace(/^\/+/, "")}/**` : null;
+  const args = artifactPackage ? [
+    "--print", "--verbose", "--output-format", "stream-json", "--json-schema", REVIEW_JSON_SCHEMA,
+    "--safe-mode", "--tools", "Read", "--allowedTools", `Read(${scopedPackage})`, "--permission-mode", "dontAsk",
+    "--no-session-persistence",
+  ] : [
+    "--print", "--output-format", "json", "--json-schema", REVIEW_JSON_SCHEMA,
+    "--safe-mode", "--tools", "", "--permission-mode", "dontAsk", "--no-session-persistence",
+  ];
+  const startedAt = new Date().toISOString();
+  const result = spawnSync(binaryPath, args, {
+    env, cwd: artifactPackage?.root, encoding: "utf8", input: prompt, stdio: ["pipe", "pipe", "pipe"], shell: false,
+    timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024,
+  });
+  return {
+    stdout: result.stdout || "", stderr: result.stderr || "",
+    status: result.status ?? (result.error ? 1 : 0), error: result.error?.message ?? null,
+    errorCode: result.error?.code ?? null, signal: result.signal ?? null,
+    provenance: { adapter: "claude-code-cli", binaryPath, args, transport: "stdin", startedAt,
+      finishedAt: new Date().toISOString(), timeoutMs },
+  };
+}
+
+export function attestScopedReadStream(stdout, coverage, packageRoot) {
+  const expected = new Map();
+  let violation = null;
+  for (const item of coverage) for (const chunk of item.chunks || []) {
+    const absolute = fs.realpathSync(path.resolve(packageRoot, chunk.path));
+    const bytes = fs.readFileSync(absolute);
+    if (bytes.length !== chunk.bytes || artifactLineCount(bytes) !== chunk.lines || createHash("sha256").update(bytes).digest("hex") !== chunk.sha256) violation = "declared-chunk-hash-mismatch";
+    expected.set(absolute, { item, chunk });
+  }
+  const pending = new Map(), completed = new Set();
+  let finalEvent = null;
+  const toolResultShapes = [];
+  for (const line of String(stdout || "").split(/\r?\n/).filter(Boolean)) {
+    let event; try { event = JSON.parse(line); } catch { continue; }
+    const normalized = event?.type === "stream_event" && event.event ? event.event : event;
+    if (normalized?.type === "assistant") for (const block of normalized.message?.content || []) if (block?.type === "tool_use") {
+      if (block.name !== "Read") { violation = "non-read-tool"; continue; }
+      let real; try { real = fs.realpathSync(block.input?.file_path); } catch { violation = "unreadable-read-path"; continue; }
+      const declared = expected.get(real);
+      if (!declared) { violation = "read-path-outside-package"; continue; }
+      if (Number(block.input?.offset ?? 1) !== 1 || Number(block.input?.limit ?? Infinity) < declared.chunk.lines) { violation = "partial-chunk-read"; continue; }
+      pending.set(block.id, { real, declared });
+    }
+    if (normalized?.type === "user") for (const block of normalized.message?.content || []) if (block?.type === "tool_result") {
+      const observed = pending.get(block.tool_use_id);
+      if (!observed || block.is_error) continue;
+      const content = typeof block.content === "string" ? block.content
+        : Array.isArray(block.content) && block.content.every((part) => part?.type === "text") ? block.content.map((part) => part.text).join("") : null;
+      const contentBytes = Buffer.from(content || "", "utf8");
+      const firstLine = String(content || "").split("\n", 1)[0];
+      const prefix = /^\s*\d+\t/u.test(firstLine) ? "tab-line-number" : /^\s*\d+→/u.test(firstLine) ? "arrow-line-number" : content === "" ? "empty" : "unknown";
+      toolResultShapes.push({ content_type: Array.isArray(block.content) ? "blocks" : typeof block.content,
+        block_types: Array.isArray(block.content) ? block.content.map((part) => String(part?.type || "unknown")).slice(0, 20) : [],
+        line_count: content === "" ? 0 : String(content || "").split("\n").length, prefix,
+        bytes: contentBytes.length, sha256: createHash("sha256").update(contentBytes).digest("hex") });
+      const source = fs.readFileSync(observed.real, "utf8");
+      const sourceLines = source === "" ? [] : source.replace(/\n$/u, "").split("\n").map((line) => line.replace(/\r$/u, ""));
+      const outputLines = content === "" ? [] : String(content ?? "").split("\n");
+      const exact = sourceLines.length === 0 ? content === "" : outputLines.length === sourceLines.length && outputLines.every((line, index) => {
+        const match = line.match(/^\s*(\d+)(?:\t|→)(.*)$/u);
+        return match && Number(match[1]) === index + 1 && match[2] === sourceLines[index];
+      });
+      if (exact) completed.add(observed.real); else violation = "read-result-content-mismatch";
+    }
+    if (event?.type === "result") finalEvent = event;
+  }
+  const missing = [...expected.keys()].filter((item) => !completed.has(item));
+  return { valid: Boolean(finalEvent) && !violation && missing.length === 0, finalEvent, violation, missing, toolResultShapes,
+    artifactCoverage: coverage.map((item) => ({ id: item.id, sha256: item.sha256,
+      status: (item.chunks || []).every((chunk) => completed.has(fs.realpathSync(path.resolve(packageRoot, chunk.path)))) ? "read" : "failed" })) };
+}
+
+const RETRYABLE_CLAUDE_API_STATUSES = new Set([408, 429, 502, 503, 504, 524, 529]);
+const RETRY_TOTAL_BUDGET_MS = REVIEW_TIMEOUT_MS - 1_000; // reserve process teardown/serialization margin
+const blockingSleep = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+// One initial isolated attempt plus at most one fresh retry. More retries can
+// accidentally turn a deterministic contract failure into an expensive loop.
+export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs = RETRY_TOTAL_BUDGET_MS, now = Date.now, sleep = blockingSleep } = {}) {
+  const started = now();
+  const attempts = [];
+  let result = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const elapsedBefore = Math.max(0, now() - started);
+    const remaining = Math.max(0, totalBudgetMs - elapsedBefore);
+    if (remaining <= 0) break;
+    result = execute({ attempt, timeoutMs: remaining });
+    const envelope = extractSafeClaudeEnvelopeMetadata(result.stdout);
+    const apiStatus = envelope?.api_error_status ?? null;
+    const retryable = result.status !== 0 && RETRYABLE_CLAUDE_API_STATUSES.has(apiStatus);
+    attempts.push({ attempt, status: result.status, signal: result.signal ?? null, errorCode: result.errorCode ?? null,
+      api_error_status: apiStatus, subtype: envelope?.subtype ?? null, terminal_reason: envelope?.terminal_reason ?? null,
+      retryable, elapsedMs: Math.max(0, now() - started) });
+    if (!retryable || attempt >= maxAttempts) break;
+    const delayMs = Math.min(10_000, 1_000 * (2 ** (attempt - 1)));
+    if (now() - started + delayMs >= totalBudgetMs) break;
+    sleep(delayMs);
+  }
+  if (!result) result = { stdout: "", stderr: "", status: 1, error: "Claude retry budget exhausted before first attempt", errorCode: "ETIMEDOUT", signal: null, provenance: {} };
+  result.provenance ||= {};
+  result.provenance.attemptSummaries = attempts;
+  result.provenance.maxAttempts = maxAttempts;
+  result.provenance.totalBudgetMs = totalBudgetMs;
+  result.provenance.totalElapsedMs = Math.max(0, now() - started);
+  return result;
+}
+
+function streamMetadata(value) {
+  const bytes = Buffer.from(value || "", "utf8");
+  return { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
+function redactSafeText(value, limit = 240) {
+  return String(value ?? "")
+    .replace(/\b(?:sk|key|token)-[A-Za-z0-9_-]{6,}\b/gi, "[REDACTED]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/(api[_-]?key|token|secret|password)\s*[:=]\s*\S+/gi, "$1=[REDACTED]")
+    .slice(0, limit);
+}
+
+/** Extract non-content diagnostics from a Claude JSON envelope. */
+export function extractSafeClaudeEnvelopeMetadata(stdout) {
+  let envelope;
+  const text = String(stdout || "").trim();
+  try { envelope = JSON.parse(text); }
+  catch {
+    for (const line of text.split(/\r?\n/).reverse()) {
+      try { const event = JSON.parse(line); if (event?.type === "result") { envelope = event; break; } } catch {}
+    }
+    if (!envelope) return null;
+  }
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  const out = {};
+  for (const key of ["type", "subtype", "terminal_reason", "stop_reason"]) {
+    if (typeof envelope[key] === "string") out[key] = redactSafeText(envelope[key], 120);
+  }
+  if (typeof envelope.is_error === "boolean") out.is_error = envelope.is_error;
+  if (Number.isFinite(envelope.api_error_status)) out.api_error_status = Number(envelope.api_error_status);
+  if (Number.isFinite(envelope.duration_api_ms)) out.duration_api_ms = Number(envelope.duration_api_ms);
+  if (Number.isInteger(envelope.num_turns)) out.num_turns = envelope.num_turns;
+  const denials = Array.isArray(envelope.permission_denials) ? envelope.permission_denials : [];
+  out.permission_denials = {
+    count: denials.length,
+    items: denials.slice(0, 20).map((item) => ({
+      code: redactSafeText(item?.code ?? item?.type ?? "unknown", 80),
+      message: redactSafeText(item?.message ?? item?.reason ?? "", 200),
+    })),
+  };
+  const errors = Array.isArray(envelope.errors) ? envelope.errors : (envelope.error && typeof envelope.error === "object" ? [envelope.error] : []);
+  out.errors = errors.slice(0, 20).map((item) => ({
+    code: redactSafeText(item?.code ?? item?.type ?? "unknown", 80),
+    message: redactSafeText(item?.message ?? "", 200),
+  }));
+  return out;
+}
+
+export function claudeFailureReason(result, envelopeMetadata) {
+  if (result.errorCode === "EREADATTEST") return result.provenance?.scopedRead?.violation === "read-result-content-mismatch"
+    ? "read-result-content-mismatch" : "artifact-coverage-unattested";
+  if (result.status === 0) return "claude-code-output-invalid";
+  if (envelopeMetadata?.api_error_status) return `claude-code-api-error-${envelopeMetadata.api_error_status}`;
+  if (envelopeMetadata?.terminal_reason) return `claude-code-${String(envelopeMetadata.terminal_reason).replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}`;
+  if (envelopeMetadata?.subtype) return `claude-code-${String(envelopeMetadata.subtype).replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}`;
+  return "claude-code-process-failed";
+}
+
+function writeDiagnostic(outputFile, diagnostic) {
+  const diagnosticPath = `${outputFile}.diagnostic.json`;
+  fs.writeFileSync(diagnosticPath, JSON.stringify(diagnostic, null, 2) + "\n", { mode: 0o600 });
+  fs.chmodSync(diagnosticPath, 0o600);
+  return diagnosticPath;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -454,7 +924,7 @@ function extractVerdictJson(text, spans) {
  * B2: ONLY valid JSON with a recognized verdict enum is accepted.
  * Non-JSON / empty / garbage / missing-verdict / bogus-enum output is NEVER a pass.
  */
-export function buildVerdictFromStdout(stdout, provider, diffFile, round) {
+export function buildVerdictFromStdout(stdout, provider, diffFile) {
   const text = (stdout || "").trim();
 
   // Fast path: clean JSON output (majority of well-behaved providers)
@@ -486,7 +956,6 @@ export function buildVerdictFromStdout(stdout, provider, diffFile, round) {
     error: "Provider produced non-JSON output; verdict cannot be determined automatically.",
     reviewSnapshot: [{
       path: typeof diffFile === "string" ? path.basename(diffFile) : "",
-      round,
       truncated: false,
       tokenUsage: { total: null },
     }],
@@ -531,21 +1000,27 @@ export function extractTokenUsage(stdout) {
 }
 
 /**
- * Try to build a review prompt from the diff content.
+ * Build a review prompt from the structured {mode, contract, materials} payload.
+ * The engine has zero stage/round knowledge — mode and contract are the only
+ * routing-relevant fields it receives, both explicit and never collapsed into
+ * the materials text (FR-THIRDREVIEW-001, decision-log D1).
  */
-function buildReviewPrompt(diffContent, provider, diffFile, round, truncated) {
-  // truncated comes from truncateDiff() — the single source of truth (B4)
-  // Use a minimal review prompt that asks for a verdict JSON
-  return `Review the following diff and return a JSON object with these fields:
+function buildReviewPrompt({ mode, contract, materialsContent, diffFile, truncated, artifactPackage, coverage = [] }) {
+  if (artifactPackage) return `Review mode: ${mode}\nUse only Read. Read every declared chunk in full and in sequence. Do not read outside package root.\nPackage root: ${artifactPackage.root}\nManifest: ${artifactPackage.manifestPath}\nChunks:\n${coverage.flatMap((item) => (item.chunks || []).map((chunk) => `${item.id}|${chunk.sequence}|${chunk.path}|${chunk.bytes}|${chunk.sha256}`)).join("\n")}\nReturn only schema-valid JSON after all chunks are read.`;
+  const contractSection = contract
+    ? `\n\n---\n## REVIEW CONTRACT\n\n${contract}\n\n---\n`
+    : "";
+  return `${contractSection}Review mode: ${mode}
+
+Review the following materials and return a JSON object with these fields:
   - "verdict": one of "pass", "revise_required", "escalate_to_human"
   - "findings": array of {severity, file, line, issue, recommendation}
   - "resolutionSummary": brief summary string
-  - "reviewSnapshot": {diffFile:"${path.basename(diffFile)}", round:${round}, truncated:${truncated}}
 
 Reply ONLY with the JSON object, no markdown fences.
 
-DIFF:
-${diffContent}`;
+MATERIALS:
+${materialsContent}`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -726,15 +1201,17 @@ export function runThreatAuditor(diffFile, opts = {}) {
  * Run a heterologous (cross-engine) review.
  *
  * @param {object} opts
- * @param {string} opts.diffFile - path to the diff file
- * @param {number} opts.round - review round number
+ * @param {string} opts.diffFile - path to a file containing JSON {mode, contract, materials}
  * @param {string} opts.outputFile - path to write the verdict JSON
  * @param {object} [opts.envOverride] - env override (for testing)
  * @returns {object} verdict object
  */
-export function runReview({ diffFile, round, outputFile, envOverride }) {
+export function runReview({ diffFile, outputFile, envOverride, hostProvider, provider, claudeBinaryPath, claudeBinaryCandidates }) {
   const sourceEnv = envOverride ?? process.env;
-  const host = detectHost(sourceEnv);
+  const explicitHost = hostProvider ?? sourceEnv.REVIEW_HOST_PROVIDER;
+  const host = explicitHost === undefined
+    ? normalizeHostProvider(detectHost(sourceEnv))
+    : normalizeHostProvider(explicitHost);
 
   // ── Probe available providers using sourceEnv directly ──
   // Note: sourceEnv may be a test env with restricted PATH;
@@ -751,7 +1228,88 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
     effectiveAvailable = available.filter((p) => p !== "codex");
   }
 
-  const selected = selectProvider(host, effectiveAvailable);
+  // Unknown host can never prove heterology. Fail closed even if providers exist.
+  const requestedProviderRaw = provider ?? sourceEnv.REVIEW_PROVIDER;
+
+  // ── Read and parse the structured {mode, contract, materials} payload ──
+  // The engine has zero stage/round knowledge: --diff carries the fully
+  // assembled review input as JSON, never a raw unstructured diff (FR-THIRDREVIEW-001).
+  let payload;
+  try {
+    payload = resolveArtifactPackage(diffFile);
+  } catch (e) {
+    const verdict = {
+      verdict: "escalate_to_human",
+      provider: requestedProviderRaw ? normalizeHostProvider(requestedProviderRaw) : "not-selected",
+      actual_mode: "not_executed",
+      error: `Cannot read/parse diffFile as {mode,contract,materials} JSON: ${diffFile} (${e.message})`,
+      reviewSnapshot: [{
+        path: path.basename(diffFile),
+        truncated: false,
+        tokenUsage: { total: null },
+      }],
+      findings: [],
+      riskDisposition: [],
+      worktreeInventory: { included: [], unrelated: [], excluded: [] },
+    };
+    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff payload unreadable/unparsable" };
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
+
+  const { mode, contract, materials } = payload || {};
+  const payloadProvider = payload?.requestedProvider;
+  const explicitProviderRaw = requestedProviderRaw ?? payloadProvider;
+  const explicitProvider = explicitProviderRaw === undefined ? null : normalizeHostProvider(explicitProviderRaw);
+  const selected = explicitProviderRaw !== undefined
+    ? (explicitProvider === "unknown" ? "degraded-same-source" : explicitProvider)
+    : (host === "unknown" ? "degraded-same-source" : selectProvider(host, effectiveAvailable));
+  if (typeof mode !== "string" || typeof contract !== "string" || typeof materials !== "string") {
+    const verdict = {
+      verdict: "escalate_to_human",
+      provider: selected,
+      actual_mode: "not_executed",
+      error: `Malformed diff payload: expected {mode, contract, materials} all strings, got keys ${JSON.stringify(Object.keys(payload || {}))}`,
+      reviewSnapshot: [{
+        path: path.basename(diffFile),
+        truncated: false,
+        tokenUsage: { total: null },
+      }],
+      findings: [],
+      riskDisposition: [],
+      worktreeInventory: { included: [], unrelated: [], excluded: [] },
+    };
+    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff payload malformed" };
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
+
+  if (explicitProviderRaw !== undefined && (explicitProvider === "unknown" || explicitProvider === host || !effectiveAvailable.includes(explicitProvider)) && !claudeBinaryPath && !claudeBinaryCandidates) {
+    const verdict = { verdict: "escalate_to_human", provider: explicitProvider === "unknown" ? "not-selected" : explicitProvider,
+      host, actual_mode: "not_executed", findings: [], reviewSnapshot: [], riskDisposition: [],
+      worktreeInventory: { included: [], unrelated: [], excluded: [] },
+      error: explicitProvider === host ? "Explicit provider is same-source" : "Explicit provider is invalid or unavailable; no provider switch was attempted.",
+      synthetic: true, execution_status: "failed", trueCrossEngine: false,
+      failure_reason: explicitProvider === host ? "same-source-provider" : "explicit-provider-unavailable",
+      provenance: { requestedProvider: explicitProviderRaw, providerSwitchAttempted: false } };
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
+
+  // materials is the auditable text; diffFile itself now holds the JSON
+  // envelope, so the threat-auditor is fed a materials-only temp file.
+  const materialsAuditPath = path.join(
+    os.tmpdir(),
+    `rhr-materials-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`
+  );
+  const runMaterialsAudit = () => {
+    try {
+      fs.writeFileSync(materialsAuditPath, materials);
+      return runThreatAuditor(materialsAuditPath);
+    } finally {
+      try { fs.unlinkSync(materialsAuditPath); } catch {}
+    }
+  };
 
   // ── Degraded path: same-source ──
   if (selected === "degraded-same-source") {
@@ -759,68 +1317,156 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       verdict: "escalate_to_human",
       provider: "degraded-same-source",
       degraded: "same-source",
+      actual_mode: "same-source",
       host,
       availableProviders: effectiveAvailable,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated: false,
         tokenUsage: { total: null },
       }],
       findings: [],
       resolutionSummary:
-        "No heterologous provider available; review degraded to same-source. Manual review required.",
+        host === "unknown"
+          ? "Host provider is unknown; pass --host-provider or REVIEW_HOST_PROVIDER. Provider selection failed closed."
+          : "No heterologous provider available; review degraded to same-source. Manual review required.",
       riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
+      contractPrompt: contract,
+      synthetic: true,
+      execution_status: "failed",
+      trueCrossEngine: false,
+      failure_reason: host === "unknown" ? "host-provider-unknown" : "heterologous-provider-unavailable",
     };
-    // Validate diff readability before running auditor, consistent with the
-    // unreadable-diff branch. Only run the auditor when there is a readable
-    // diff to audit; otherwise record ran:false with an unreadable reason.
-    try {
-      fs.readFileSync(diffFile, "utf8"); // validates readability
-      verdict.threatAuditor = runThreatAuditor(diffFile);
-    } catch {
-      verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (degraded path)" };
-    }
-    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
-    return verdict;
-  }
-
-  // ── Read and truncate diff ──
-  let diffContent;
-  try {
-    diffContent = fs.readFileSync(diffFile, "utf8");
-  } catch {
-    const verdict = {
-      verdict: "escalate_to_human",
-      provider: selected,
-      error: `Cannot read diffFile: ${diffFile}`,
-      reviewSnapshot: [{
-        path: path.basename(diffFile),
-        round,
-        truncated: false,
-        tokenUsage: { total: null },
-      }],
-      findings: [],
-      riskDisposition: [],
-      worktreeInventory: { included: [], unrelated: [], excluded: [] },
-    };
-    // Diff is unreadable — the auditor has nothing to audit.
-    // Spawning it on a known-unreadable file is pointless and would produce
-    // misleading skip→ran results (AC-7). Record ran:false directly.
-    verdict.threatAuditor = { ran: false, findings: [], error: "threat-auditor not run: diff unreadable (escalate path)" };
+    verdict.threatAuditor = runMaterialsAudit();
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
 
   const budget = getDiffCharBudget();
-  const { content: truncatedDiff, truncated } = truncateDiff(diffContent, budget);
+  const packaged = Array.isArray(payload.coverage) && payload.coverage.length > 0;
+  const { content: truncatedMaterials, truncated } = packaged
+    ? { content: materials, truncated: false }
+    : truncateDiff(materials, budget);
 
   // ── Build prompt ──
-  const prompt = buildReviewPrompt(truncatedDiff, selected, diffFile, round, truncated);
+  const artifactPackage = payload.canonicalArtifact ? payload.package : null;
+  const prompt = buildReviewPrompt({ mode, contract, materialsContent: truncatedMaterials, diffFile, truncated,
+    artifactPackage, coverage: payload.coverage });
 
   // ── Build child env (whitelist) ──
   const childEnv = buildChildEnv(selected, sourceEnv);
+
+  // Claude Code has a canonical direct adapter. No advisor or provider fallback:
+  // a Claude failure remains a Claude failure and is diagnosed fail-closed.
+  if (selected === "claude-code") {
+    // Production launcher trust contract: resolve only from the static trusted
+    // PATH allowlist. `claudeBinaryPath` is an explicit dependency-injection
+    // seam for deterministic tests/API embedders; CLI callers cannot set it.
+    const preflight = claudeBinaryPath
+      ? { binaryPath: claudeBinaryPath, version: "test-injected", attempts: [{ binaryPath: claudeBinaryPath, version: "test-injected", compatible: true, rejectionReason: null }] }
+      : selectCompatibleClaudeCode({ env: childEnv, candidates: claudeBinaryCandidates });
+    const binaryPath = preflight.binaryPath;
+    const executeClaude = ({ timeoutMs, promptText = prompt }) => {
+      const raw = runViaClaudeCode(binaryPath, promptText, childEnv, timeoutMs, artifactPackage);
+      if (artifactPackage && raw.status === 0) {
+        const attestation = attestScopedReadStream(raw.stdout, payload.coverage, artifactPackage.root);
+        raw.provenance.scopedRead = { valid: attestation.valid, violation: attestation.violation,
+          missingCount: attestation.missing.length, missingHashes: attestation.missing.map((p) => createHash("sha256").update(p).digest("hex")),
+          toolResultShapes: attestation.toolResultShapes };
+        raw.artifactCoverage = attestation.artifactCoverage;
+        if (attestation.finalEvent) raw.stdout = JSON.stringify(attestation.finalEvent);
+        if (!attestation.valid) { raw.status = 1; raw.error = `scoped Read attestation failed: ${attestation.violation || "missing chunks"}`; raw.errorCode = "EREADATTEST"; }
+      }
+      return raw;
+    };
+    let result = binaryPath
+      ? runClaudeCodeWithRetry({ execute: ({ timeoutMs }) => executeClaude({ timeoutMs }) })
+      : { stdout: "", stderr: "", status: 1, error: "no compatible trusted claude binary found", provenance: { adapter: "claude-code-cli", binaryPath: null, timeoutMs: REVIEW_TIMEOUT_MS } };
+    result.provenance.candidatePreflight = preflight.attempts;
+    result.provenance.selectedVersion = preflight.version;
+    if (result.status === 0) {
+      let needsRepair = false;
+      try { parseClaudeCodeResult(result.stdout); } catch { needsRepair = true; }
+      if (needsRepair) {
+        const originalProvenance = result.provenance;
+        const originalShape = describeClaudeOutputShape(result.stdout);
+        const remaining = Math.max(0, RETRY_TOTAL_BUDGET_MS - (originalProvenance.totalElapsedMs || 0));
+        if (remaining > 0 && binaryPath) {
+          const repairPrompt = `${prompt}\n\nFORMAT REPAIR (fresh process): Your prior completed response did not match the required JSON schema. Re-review the full original materials above and return ONLY JSON matching this exact schema: ${REVIEW_JSON_SCHEMA}`;
+          const repair = executeClaude({ timeoutMs: remaining, promptText: repairPrompt });
+          repair.provenance.candidatePreflight = preflight.attempts;
+          repair.provenance.selectedVersion = preflight.version;
+          repair.provenance.attemptSummaries = originalProvenance.attemptSummaries;
+          repair.provenance.maxAttempts = originalProvenance.maxAttempts;
+          repair.provenance.totalBudgetMs = originalProvenance.totalBudgetMs;
+          repair.provenance.formatRepair = { attempted: true, freshProcess: true, originalShape,
+            status: repair.status, outputShape: describeClaudeOutputShape(repair.stdout) };
+          result = repair;
+        } else {
+          result.provenance.formatRepair = { attempted: false, reason: "shared-budget-exhausted", originalShape };
+        }
+      }
+    }
+    let verdict;
+    let parsedSuccessfully = false;
+    const safeEnvelopeMetadata = extractSafeClaudeEnvelopeMetadata(result.stdout);
+    try {
+      verdict = result.status === 0 ? parseClaudeCodeResult(result.stdout) : null;
+      if (!verdict || !VALID_VERDICTS.has(verdict.verdict)) throw new Error("Claude Code result has no valid verdict");
+      parsedSuccessfully = true;
+    } catch (parseError) {
+      const diagnosticPath = writeDiagnostic(outputFile, {
+        provider: selected, host, status: result.status, signal: result.signal ?? null,
+        errorCode: result.errorCode ?? (result.error ? "SPAWN_ERROR" : null),
+        parseError: "INVALID_PROVIDER_OUTPUT",
+        stdout: streamMetadata(result.stdout), stderr: streamMetadata(result.stderr),
+        envelope: safeEnvelopeMetadata,
+        outputShape: describeClaudeOutputShape(result.stdout),
+        provenance: { ...result.provenance,
+          launcherTrust: claudeBinaryPath ? "explicit-api-injection" : "static-trusted-path-allowlist" },
+      });
+      verdict = { verdict: "escalate_to_human", provider: selected, host, actual_mode: "not_executed",
+        error: result.error ? "Claude Code process failed" : "Claude Code returned invalid structured output",
+        diagnosticPath,
+        resolutionSummary: "Claude Code review failed; no provider switch was attempted.",
+        reviewSnapshot: [], riskDisposition: [], worktreeInventory: { included: [], unrelated: [], excluded: [] } };
+    }
+    verdict.provider = selected;
+    verdict.host = host;
+    verdict.provenance = result.provenance;
+    verdict.provenance.launcherTrust = claudeBinaryPath
+      ? "explicit-api-injection"
+      : "static-trusted-path-allowlist";
+    verdict.trueCrossEngine = parsedSuccessfully;
+    verdict.actual_mode = verdict.trueCrossEngine ? mode : "not_executed";
+    verdict.reviewMode = "claude-code-cli";
+    verdict.synthetic = !parsedSuccessfully;
+    verdict.execution_status = parsedSuccessfully ? "completed" : "failed";
+    verdict.backend_provider = "claude-code";
+    verdict.reviewer_source = "3rd-review/canonical";
+    if (!parsedSuccessfully) {
+      verdict.failure_reason = claudeFailureReason(result, safeEnvelopeMetadata);
+    }
+    verdict.provenance.providerSwitchAttempted = false;
+    verdict.provenance.artifactPackage = payload.package;
+    verdict.coverage = payload.coverage;
+    if (parsedSuccessfully) {
+      verdict.artifactCoverage = result.artifactCoverage || payload.coverage.map(({ id, sha256, status }) => ({ id, sha256, status }));
+    }
+    verdict.findings = Array.isArray(verdict.findings) ? verdict.findings : [];
+    verdict.reviewSnapshot = Array.isArray(verdict.reviewSnapshot) ? verdict.reviewSnapshot : [];
+    if (payload.coverage.length > 0) {
+      verdict.reviewSnapshot = payload.coverage.map((item) => ({
+        path: item.path, hash: item.sha256, bytes: item.bytes, truncated: false,
+      }));
+    }
+    verdict.riskDisposition ||= [];
+    verdict.worktreeInventory ||= { included: [], unrelated: [], excluded: [] };
+    verdict.threatAuditor = runMaterialsAudit();
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
 
   // ── Resolve run-provider-advisor.js path ──
   // The omc advisor is the ONLY trusted route for executing a provider binary.
@@ -832,11 +1478,11 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       verdict: "escalate_to_human",
       provider: selected,
       degraded: "advisor-unavailable",
+      actual_mode: "not_executed",
       host,
       error: "omc run-provider-advisor.js not found at ~/.claude/plugins/cache/omc/oh-my-claudecode/*/scripts/; cannot safely execute provider binary without an absolute trusted path.",
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -848,7 +1494,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
     console.error(
       `[run-heterologous-review] omc advisor not found; escalating to human (direct-binary fallback removed for security — B1).`
     );
-    verdict.threatAuditor = runThreatAuditor(diffFile);
+    verdict.threatAuditor = runMaterialsAudit();
     fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
     return verdict;
   }
@@ -863,7 +1509,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   // ── Parse output ──
   let verdict;
   try {
-    verdict = buildVerdictFromStdout(resolvedOutput, selected, diffFile, round);
+    verdict = buildVerdictFromStdout(resolvedOutput, selected, diffFile);
   } catch {
     verdict = {
       verdict: "escalate_to_human",
@@ -871,7 +1517,6 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       error: error || `exit=${status}`,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -889,7 +1534,6 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
       error: error || `exit=${status}, empty=${!resolvedOutput || resolvedOutput.length === 0}`,
       reviewSnapshot: [{
         path: path.basename(diffFile),
-        round,
         truncated,
         tokenUsage: { total: null },
       }],
@@ -908,7 +1552,7 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   const snapshotEntry = {
     path: path.basename(diffFile),
     hash: null,
-    lines: diffContent.split("\n").length,
+    lines: materials.split("\n").length,
     truncated,
     tokenUsage: { total: null },
   };
@@ -935,7 +1579,6 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
   if (!verdict.reviewSnapshot) {
     verdict.reviewSnapshot = {
       diffFile: path.basename(diffFile),
-      round,
       truncated,
       tokenUsage,
     };
@@ -954,11 +1597,20 @@ export function runReview({ diffFile, round, outputFile, envOverride }) {
     verdict.findings = [];
   }
 
-  verdict.trueCrossEngine = true;
+  // Only mark trueCrossEngine when the advisor actually produced output (status=0, non-empty).
+  // A B2 escalate (non-zero exit or empty output) means no real cross-engine review ran.
+  const advisorSucceeded = status === 0 && resolvedOutput && resolvedOutput.length > 0;
+  if (advisorSucceeded) {
+    verdict.trueCrossEngine = true;
+  }
   verdict.reviewMode = "omc-ask";
 
+  // actual_mode reflects what genuinely executed, never a blind echo of the
+  // requested mode on failure (FR-THIRDREVIEW-001, decision-log D1).
+  verdict.actual_mode = advisorSucceeded ? mode : "not_executed";
+
   // AC-7 / FR-QUALITY-001 dim 4: run threat-auditor in ALL review modes
-  verdict.threatAuditor = runThreatAuditor(diffFile);
+  verdict.threatAuditor = runMaterialsAudit();
 
   // Write
   fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
@@ -979,6 +1631,11 @@ function isMain() {
   }
 }
 
+// Legacy flags rejected outright (FR-THIRDREVIEW-001): the canonical runner
+// entry point has zero stage/round knowledge and must never silently ignore
+// these — reject visibly with a non-zero exit, never continue past them.
+const LEGACY_FLAG_NAMES = ["stage", "round", "checkpoint"];
+
 if (isMain()) {
   const args = process.argv.slice(2);
   const getArg = (name) => {
@@ -986,6 +1643,18 @@ if (isMain()) {
     const found = args.find((a) => a.startsWith(prefix));
     return found ? found.slice(prefix.length) : undefined;
   };
+
+  const usedLegacyFlag = LEGACY_FLAG_NAMES.find(
+    (name) => args.some((a) => a === `--${name}` || a.startsWith(`--${name}=`))
+  );
+  if (usedLegacyFlag) {
+    console.error(
+      `[run-heterologous-review] FAIL: legacy flag --${usedLegacyFlag} is not accepted. ` +
+      `The canonical entry point is --diff=<file> --output=<file> only; stage/round routing ` +
+      `must be resolved by wh-review before calling this runner (FR-THIRDREVIEW-001).`
+    );
+    process.exit(1);
+  }
 
   // --env-strip-check: dump child env to stdout for the test to assert
   if (args.includes("--env-strip-check")) {
@@ -998,15 +1667,16 @@ if (isMain()) {
 
   const diffFile = getArg("diff");
   const outputFile = getArg("output");
-  const round = parseInt(getArg("round") || "1", 10);
+  const hostProvider = getArg("host-provider");
+  const provider = getArg("provider");
 
   if (!diffFile || !outputFile) {
-    console.error("Usage: run-heterologous-review.mjs --diff=<file> --round=<n> --output=<file> [--env-strip-check]");
+    console.error("Usage: run-heterologous-review.mjs --diff=<file> --output=<file> [--host-provider=<id>] [--provider=<id>] [--env-strip-check]");
     process.exit(1);
   }
 
   try {
-    runReview({ diffFile, round, outputFile });
+    runReview({ diffFile, outputFile, hostProvider, provider });
     process.exit(0);
   } catch (e) {
     console.error(`[run-heterologous-review] Fatal error: ${e.message}`);
