@@ -174,6 +174,18 @@ test("status0 invalid JSON provider response gets one fresh full-review retry", 
   assert.equal(result.provenance.attemptSummaries[0].outcome, "incomplete-invalid-json");
 });
 
+test("persistently incomplete full responses fail closed after one retry", () => {
+  let calls = 0;
+  const result = runClaudeCodeWithRetry({ classify: classifyClaudeAttempt, sleep: () => {},
+    execute: () => { calls++; return { status: 0, stdout: "", stderr: "", provenance: {} }; } });
+  assert.equal(calls, 2);
+  assert.throws(() => parseClaudeCodeResult(result.stdout));
+  const terminal = result.provenance.attemptSummaries.at(-1);
+  assert.equal(terminal.outcome, "incomplete-empty");
+  assert.equal(terminal.retryable, false);
+  assert.equal(terminal.terminal_reason, "retry-exhausted");
+});
+
 test("repair 524 participates in retry and preserves the unified attempt ledger", () => {
   const prior = [{ attempt: 1, phase: "full", phaseAttempt: 1, status: 0, api_error_status: null,
     outputShape: { envelope_json_parseable: true }, outcome: "schema-invalid-candidate", retryable: false }];
@@ -491,6 +503,9 @@ test("status0 invalid repair remains failed and diagnostics contain no output co
   assert.equal(verdict.synthetic, true);
   assert.equal(verdict.failure_reason, "claude-code-output-invalid");
   assert.equal(verdict.provenance.formatRepair.attempted, true);
+  assert.deepEqual(verdict.provenance.attemptSummaries.map((a) => a.phase), ["full", "repair"]);
+  assert.equal(verdict.provenance.attemptSummaries.at(-1).outcome, "schema-invalid-candidate");
+  assert.equal(verdict.provenance.attemptSummaries.at(-1).retryable, false);
   const diagnostic = fs.readFileSync(verdict.diagnosticPath, "utf8");
   for (const secret of ["PRIVATE INVALID RESULT", "PRIVATE ORIGINAL MATERIAL"]) assert.ok(!diagnostic.includes(secret));
   fs.rmSync(tmp, { recursive: true, force: true });
