@@ -17,12 +17,24 @@ import {
   buildVerdictFromStdout,
   extractTokenUsage,
   resolveOmcArtifactContent,
+  parseClaudeCodeResult,
+  REVIEW_TIMEOUT_MS,
+  normalizeHostProvider,
+  resolveArtifactPackage,
+  selectCompatibleClaudeCode,
+  resolveBinaryCandidates,
+  extractSafeClaudeEnvelopeMetadata,
+  runClaudeCodeWithRetry,
+  describeClaudeOutputShape,
+  attestScopedReadStream,
+  claudeFailureReason,
 } from "./run-heterologous-review.mjs";
 import assert from "node:assert";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const GOLDEN_DIFF = path.join(__dirname, "..", "golden", "simple-text", "input.md");
@@ -47,6 +59,383 @@ function test(name, fn) {
     console.error(`  [FAIL] ${name} — ${e.message}`);
   }
 }
+
+test("Claude Code adapter timeout is 600 seconds", () => {
+  assert.equal(REVIEW_TIMEOUT_MS, 600_000);
+});
+
+test("nonzero Claude envelope diagnostics allowlist metadata and exclude content", () => {
+  const raw = JSON.stringify({ type: "result", subtype: "error", is_error: true, api_error_status: 529,
+    result: "PRIVATE RESULT", structured_output: { materials: "PRIVATE MATERIALS" },
+    errors: [{ code: "overloaded", message: "bad token=secret-value" }] });
+  const safe = extractSafeClaudeEnvelopeMetadata(raw);
+  assert.equal(safe.api_error_status, 529);
+  assert.equal(safe.errors[0].code, "overloaded");
+  assert.ok(!JSON.stringify(safe).includes("PRIVATE"));
+  assert.ok(!JSON.stringify(safe).includes("secret-value"));
+});
+
+test("output shape diagnostics reveal schema state without content", () => {
+  const raw = JSON.stringify({ structured_output: null, result: '{"verdict":"PRIVATE_ENUM","secret":"PRIVATE MATERIAL"}' });
+  const shape = describeClaudeOutputShape(raw);
+  assert.equal(shape.structured_output.is_null, true);
+  assert.equal(shape.result.present, true);
+  assert.equal(shape.result.json_parseable, true);
+  assert.equal(shape.parsed.verdict_enum_valid, false);
+  assert.ok(shape.schema_errors.some((e) => e.path === "/verdict"));
+  assert.ok(!JSON.stringify(shape).includes("PRIVATE"));
+});
+
+test("scoped Read attestation fails missing chunks and path escape", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "read-attest-"));
+  fs.writeFileSync(path.join(tmp, "a.txt"), "a"); fs.writeFileSync(path.join(tmp, "b.txt"), "b");
+  const hash = (s) => createHash("sha256").update(s).digest("hex");
+  const coverage = [{ id: "materials", sha256: hash("ab"), chunks: [
+    { sequence: 1, path: "a.txt", lines: 1, bytes: 1, sha256: hash("a") },
+    { sequence: 2, path: "b.txt", lines: 1, bytes: 1, sha256: hash("b") },
+  ] }];
+  const event = (id, file) => [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Read", input: { file_path: file, offset: 1, limit: 1 } }] } }),
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: `1\t${fs.existsSync(file) ? fs.readFileSync(file, "utf8") : ""}` }] } }),
+  ];
+  const final = JSON.stringify({ type: "result", structured_output: { verdict: "pass", findings: [], resolutionSummary: "x" } });
+  const missing = attestScopedReadStream([...event("a", path.join(tmp, "a.txt")), final].join("\n"), coverage, tmp);
+  assert.equal(missing.valid, false); assert.equal(missing.missing.length, 1);
+  const escaped = attestScopedReadStream([...event("x", "/etc/hosts"), ...event("a", path.join(tmp, "a.txt")), ...event("b", path.join(tmp, "b.txt")), final].join("\n"), coverage, tmp);
+  assert.equal(escaped.valid, false); assert.equal(escaped.violation, "read-path-outside-package");
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("real 2.1.206 content-block/arrow prefix shape attests without persisting source", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "stream-golden-"));
+  const file = path.join(tmp, "chunk.txt"), source = "PRIVATE-SOURCE-LINE"; fs.writeFileSync(file, source);
+  const coverage = [{ id: "m", sha256: createHash("sha256").update(source).digest("hex"), chunks: [{ sequence: 1, path: "chunk.txt", lines: 1, bytes: Buffer.byteLength(source), sha256: createHash("sha256").update(source).digest("hex") }] }];
+  const fixture = fs.readFileSync(path.join(__dirname, "..", "__fixtures__", "claude-stream-read-content-blocks.ndjson"), "utf8")
+    .replace("__PATH__", file).replace("__CONTENT__", source);
+  const attestation = attestScopedReadStream(fixture, coverage, tmp);
+  assert.equal(attestation.valid, true);
+  assert.equal(attestation.toolResultShapes[0].content_type, "blocks");
+  assert.equal(attestation.toolResultShapes[0].prefix, "arrow-line-number");
+  assert.ok(!JSON.stringify(attestation.toolResultShapes).includes(source));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("EREADATTEST failure reason takes precedence over completed terminal metadata", () => {
+  assert.equal(claudeFailureReason({ errorCode: "EREADATTEST", provenance: { scopedRead: { violation: "read-result-content-mismatch" } } }, { subtype: "success", terminal_reason: "completed" }), "read-result-content-mismatch");
+  assert.equal(claudeFailureReason({ errorCode: "EREADATTEST", provenance: { scopedRead: { violation: null } } }, { subtype: "success", terminal_reason: "completed" }), "artifact-coverage-unattested");
+});
+
+const retryResult = (status, apiStatus) => ({ status, signal: null, errorCode: null, stderr: "",
+  stdout: status === 0
+    ? JSON.stringify({ structured_output: { verdict: "pass", findings: [], resolutionSummary: "ok" } })
+    : JSON.stringify({ type: "result", is_error: true, api_error_status: apiStatus, terminal_reason: "api_error" }),
+  provenance: {} });
+
+test("retry: 524 then success uses fresh attempts and stops", () => {
+  let clock = 0, calls = 0;
+  const result = runClaudeCodeWithRetry({ now: () => clock, sleep: (ms) => { clock += ms; },
+    execute: () => { calls++; clock += 10; return calls === 1 ? retryResult(1, 524) : retryResult(0); } });
+  assert.equal(result.status, 0);
+  assert.equal(calls, 2);
+  assert.equal(result.provenance.attemptSummaries.length, 2);
+  assert.equal(result.provenance.attemptSummaries[0].retryable, true);
+});
+
+test("retry: repeated 524 performs at most one fresh retry", () => {
+  let clock = 0, calls = 0;
+  const result = runClaudeCodeWithRetry({ now: () => clock, sleep: (ms) => { clock += ms; },
+    execute: () => { calls++; clock += 5; return retryResult(1, 524); } });
+  assert.equal(result.status, 1);
+  assert.equal(calls, 2);
+  assert.equal(result.provenance.attemptSummaries.length, 2);
+  assert.equal(result.provenance.maxAttempts, 2);
+});
+
+test("retry: auth/permission/unknown nonzero is never retried", () => {
+  for (const apiStatus of [401, 403, 500, null]) {
+    let calls = 0;
+    const result = runClaudeCodeWithRetry({ execute: () => { calls++; return retryResult(1, apiStatus); }, sleep: () => assert.fail("must not backoff") });
+    assert.equal(calls, 1);
+    assert.equal(result.provenance.attemptSummaries[0].retryable, false);
+  }
+});
+
+test("retry: total budget prevents another attempt/backoff beyond deadline", () => {
+  let clock = 0, calls = 0, slept = 0;
+  const result = runClaudeCodeWithRetry({ totalBudgetMs: 900, now: () => clock,
+    sleep: (ms) => { slept += ms; clock += ms; },
+    execute: () => { calls++; clock += 100; return retryResult(1, 529); } });
+  assert.equal(calls, 1);
+  assert.equal(slept, 0);
+  assert.ok(result.provenance.totalElapsedMs <= 900);
+});
+
+test("Claude resolver rejects old first candidate and selects compatible second candidate", () => {
+  const old = path.join(__dirname, "..", "__fixtures__", "fake-claude-old-runner.mjs");
+  const compatible = path.join(__dirname, "..", "__fixtures__", "fake-claude-compatible-runner.mjs");
+  fs.chmodSync(old, 0o755); fs.chmodSync(compatible, 0o755);
+  const selected = selectCompatibleClaudeCode({ env: process.env, candidates: [old, compatible] });
+  assert.equal(selected.binaryPath, compatible);
+  assert.equal(selected.version, "2.1.206");
+  assert.equal(selected.attempts.length, 2);
+  assert.equal(selected.attempts[0].compatible, false);
+  assert.ok(selected.attempts[0].rejectionReason.includes("--safe-mode"));
+  assert.equal(selected.attempts[1].compatible, true);
+});
+
+test("trusted package-manager bin symlink is accepted after realpath; outside target is rejected", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "claude-symlink-"));
+  const prefix = path.join(tmp, "prefix"), bin = path.join(prefix, "bin"), pkg = path.join(prefix, "lib", "node_modules", "claude-code");
+  const outside = path.join(tmp, "outside");
+  fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(pkg, { recursive: true }); fs.mkdirSync(outside);
+  const trustedTarget = path.join(pkg, "cli.js"), outsideTarget = path.join(outside, "cli.js");
+  fs.writeFileSync(trustedTarget, "#!/bin/sh\nexit 0\n"); fs.chmodSync(trustedTarget, 0o755);
+  fs.writeFileSync(outsideTarget, "#!/bin/sh\nexit 0\n"); fs.chmodSync(outsideTarget, 0o755);
+  fs.symlinkSync(path.relative(bin, trustedTarget), path.join(bin, "claude"));
+  assert.deepEqual(resolveBinaryCandidates("claude", { binRoots: [bin], pathValue: bin }), [fs.realpathSync(trustedTarget)]);
+  fs.unlinkSync(path.join(bin, "claude"));
+  fs.symlinkSync(path.relative(bin, outsideTarget), path.join(bin, "claude"));
+  assert.deepEqual(resolveBinaryCandidates("claude", { binRoots: [bin], pathValue: bin }), []);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("runReview records multi-binary preflight provenance and uses compatible candidate", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "claude-multi-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "review this");
+  const old = path.join(__dirname, "..", "__fixtures__", "fake-claude-old-runner.mjs");
+  const compatible = path.join(__dirname, "..", "__fixtures__", "fake-claude-compatible-runner.mjs");
+  fs.chmodSync(old, 0o755); fs.chmodSync(compatible, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code",
+    claudeBinaryCandidates: [old, compatible], envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.provenance.binaryPath, compatible);
+  assert.equal(verdict.provenance.selectedVersion, "2.1.206");
+  assert.equal(verdict.provenance.candidatePreflight[0].compatible, false);
+  assert.equal(verdict.provenance.candidatePreflight[1].compatible, true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("host provider enum normalizes registered aliases and rejects arbitrary values", () => {
+  assert.equal(normalizeHostProvider(" Claude "), "claude-code");
+  assert.equal(normalizeHostProvider("OPENAI-CODEX"), "codex");
+  assert.equal(normalizeHostProvider("Claude Code 2.1.206"), "unknown");
+  assert.equal(normalizeHostProvider("same-source"), "unknown");
+});
+
+test("artifact package resolves referenced payload+manifest, verifies hashes, and preserves large material", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "artifact-package-"));
+  const large = "LARGE-MATERIAL-MARKER\n" + "x".repeat(180_000);
+  fs.writeFileSync(path.join(tmp, "large.md"), large);
+  const sha256 = createHash("sha256").update(large).digest("hex");
+  fs.writeFileSync(path.join(tmp, "manifest.json"), JSON.stringify({ files: [{ path: "large.md", sha256 }] }));
+  fs.writeFileSync(path.join(tmp, "payload.json"), JSON.stringify({ mode: "package", contract: "contract", materials: "base", manifestPath: "manifest.json", provider: "claude-code" }));
+  fs.writeFileSync(path.join(tmp, "root.json"), JSON.stringify({ payloadPath: "payload.json" }));
+  const pkg = resolveArtifactPackage(path.join(tmp, "root.json"));
+  assert.ok(pkg.materials.includes("LARGE-MATERIAL-MARKER"));
+  assert.equal(pkg.coverage.length, 1);
+  assert.equal(pkg.coverage[0].sha256, sha256);
+  assert.equal(pkg.coverage[0].included, true);
+  assert.equal(typeof pkg.package.materialsSha256, "string");
+  assert.equal(pkg.package.inlineMaterialsBytes, 4);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("large artifact package reaches Claude over stdin with complete coverage provenance", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "artifact-stdin-"));
+  const large = "LARGE-MATERIAL-MARKER\n" + "x".repeat(180_000) + "\nEND-MATERIAL-MARKER";
+  const sha256 = createHash("sha256").update(large).digest("hex");
+  fs.writeFileSync(path.join(tmp, "large.md"), large);
+  fs.writeFileSync(path.join(tmp, "root.json"), JSON.stringify({ mode: "package", contract: "contract", materials: "base",
+    manifest: [{ path: "large.md", sha256 }], provider: "claude-code" }));
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-stdin-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile: path.join(tmp, "root.json"), outputFile: path.join(tmp, "out.json"),
+    hostProvider: "codex", provider: "claude-code", claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.provenance.transport, "stdin");
+  assert.equal(verdict.coverage.length, 1);
+  assert.equal(verdict.coverage[0].sha256, sha256);
+  assert.equal(verdict.reviewSnapshot.some((x) => x.truncated === true), false);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("explicit unavailable Claude never switches to available Gemini", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "provider-pin-"));
+  const diffFile = path.join(tmp, "input.json");
+  const outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "review this");
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code",
+    envOverride: { ...process.env, CLAUDE_UNAVAIL: "1" } });
+  assert.equal(verdict.verdict, "escalate_to_human");
+  assert.equal(verdict.provider, "claude-code");
+  assert.equal(verdict.provenance.providerSwitchAttempted, false);
+  assert.ok(!JSON.stringify(verdict).includes('"provider":"gemini"'));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("exact wh artifact_manifest v6 envelope verifies chunks and emits full attestation", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wh-envelope-"));
+  const root = path.join(tmp, "package with spaces [safe]");
+  fs.mkdirSync(path.join(root, "chunks", "001"), { recursive: true });
+  fs.mkdirSync(path.join(root, "chunks", "002"), { recursive: true });
+  fs.mkdirSync(path.join(root, "materials"), { recursive: true });
+  const specs = [
+    { id: "contract", role: "contract", kind: "contract", path: "contract.md", text: "contract" },
+    { id: "materials", role: "materials", kind: "material_snapshot", path: "materials/input.md", text: "LARGE-MATERIAL-MARKER\n" + ("z".repeat(100) + "\n").repeat(1_300) + "END-MATERIAL-MARKER" },
+  ];
+  const entries = specs.map((spec, i) => {
+    const bytes = Buffer.from(spec.text);
+    const logicalHash = createHash("sha256").update(bytes).digest("hex");
+    fs.writeFileSync(path.join(root, spec.path), bytes);
+    const chunks = [];
+    for (let offset = 0, sequence = 1; offset < bytes.length; offset += 60_000, sequence++) {
+      const part = bytes.subarray(offset, Math.min(offset + 60_000, bytes.length));
+      const rel = `chunks/${String(i + 1).padStart(3, "0")}/${String(sequence).padStart(5, "0")}.txt`;
+      fs.writeFileSync(path.join(root, rel), part);
+      chunks.push({ sequence, path: rel, bytes: part.length, lines: (part.toString().match(/\n/g) || []).length + (part.at(-1) === 10 ? 0 : 1), sha256: createHash("sha256").update(part).digest("hex") });
+    }
+    return { id: spec.id, role: spec.role, kind: spec.kind, path: spec.path, bytes: bytes.length,
+      lines: (spec.text.match(/\n/g) || []).length + (bytes.at(-1) === 10 ? 0 : 1), sha256: logicalHash, chunks };
+  });
+  const content_hash = createHash("sha256").update(Buffer.from(`${JSON.stringify(entries, null, 2)}\n`)).digest("hex");
+  const manifestPath = path.join(root, "manifest.json");
+  fs.writeFileSync(manifestPath, JSON.stringify({ version: 6, chunk_max_bytes: 65536, chunk_max_line_codepoints: 1000, content_hash, entries }, null, 2) + "\n");
+  const payload = { mode: "full", provider: "claude-code", artifact_manifest: { package_root: root, manifest_path: manifestPath, content_hash, entries } };
+  const input = path.join(tmp, "input.json");
+  fs.writeFileSync(input, JSON.stringify(payload));
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-scoped-read-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile: input, outputFile: path.join(tmp, "out.json"), hostProvider: "codex",
+    provider: "claude-code", claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.synthetic, false);
+  assert.equal(verdict.execution_status, "completed");
+  assert.equal(verdict.backend_provider, "claude-code");
+  assert.equal(verdict.reviewer_source, "3rd-review/canonical");
+  assert.equal(verdict.provenance.scopedRead.valid, true);
+  assert.ok(verdict.provenance.args.includes("Read")); // --tools capability declaration
+  const allowedIndex = verdict.provenance.args.indexOf("--allowedTools");
+  assert.ok(allowedIndex >= 0);
+  assert.equal(verdict.provenance.args[allowedIndex + 1], `Read(//${fs.realpathSync(root).replace(/^\/+/, "")}/**)`);
+  assert.notEqual(verdict.provenance.args[allowedIndex + 1], "Read");
+  assert.equal(verdict.provenance.args.filter((arg) => arg.startsWith("Read(//")).length, 1);
+  assert.equal(verdict.provenance.args.includes("--add-dir"), false);
+  assert.ok(verdict.provenance.args.includes("dontAsk"));
+  assert.equal(verdict.coverage.length, 2);
+  assert.ok(verdict.coverage.every((item) => item.status === "read" && item.included));
+  assert.deepEqual(verdict.artifactCoverage.map(({ id, sha256, status }) => ({ id, sha256, status })),
+    entries.map(({ id, sha256 }) => ({ id, sha256, status: "read" })));
+  assert.ok(verdict.reviewSnapshot.every((item) => item.truncated === false));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("parseClaudeCodeResult accepts structured_output and exact JSON result", () => {
+  const a = parseClaudeCodeResult(JSON.stringify({ structured_output: { verdict: "pass", findings: [], resolutionSummary: "ok" } }));
+  assert.equal(a.verdict, "pass");
+  const b = parseClaudeCodeResult(JSON.stringify({ structured_output: null, result: '{"verdict":"revise_required","findings":[],"resolutionSummary":"fix"}' }));
+  assert.equal(b.verdict, "revise_required");
+  assert.throws(() => parseClaudeCodeResult(JSON.stringify({ structured_output: null, result: "```json" })));
+});
+
+test("explicit codex host runs canonical Claude Code adapter with provenance", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-adapter-"));
+  const diffFile = path.join(tmpDir, "input.json");
+  const outputFile = path.join(tmpDir, "out.json");
+  writeReviewPayload(diffFile, "review this");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", claudeBinaryPath: fake,
+    envOverride: { ...process.env, REVIEW_HOST_PROVIDER: "codex" } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.provider, "claude-code");
+  assert.equal(verdict.trueCrossEngine, true);
+  assert.equal(verdict.provenance.adapter, "claude-code-cli");
+  assert.ok(verdict.provenance.timeoutMs <= 600_000);
+  assert.equal(verdict.provenance.totalBudgetMs, 599_000);
+  assert.equal(verdict.provenance.launcherTrust, "explicit-api-injection");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("Claude parse failure writes 0600 diagnostic and never switches provider", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-diagnostic-"));
+  const diffFile = path.join(tmpDir, "input.json");
+  const outputFile = path.join(tmpDir, "out.json");
+  writeReviewPayload(diffFile, "review this");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-null-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", claudeBinaryPath: fake,
+    envOverride: { ...process.env, REVIEW_HOST_PROVIDER: "codex" } });
+  assert.equal(verdict.verdict, "escalate_to_human");
+  assert.equal(verdict.provider, "claude-code");
+  assert.equal(verdict.trueCrossEngine, false);
+  assert.equal(verdict.synthetic, true);
+  assert.equal(verdict.execution_status, "failed");
+  assert.equal(verdict.failure_reason, "claude-code-output-invalid");
+  assert.equal(typeof verdict.diagnosticPath, "string");
+  assert.equal(verdict.artifactCoverage, undefined);
+  assert.equal(fs.statSync(verdict.diagnosticPath).mode & 0o777, 0o600);
+  const diagnostic = JSON.parse(fs.readFileSync(verdict.diagnosticPath, "utf8"));
+  assert.equal(diagnostic.provider, "claude-code");
+  assert.equal(typeof diagnostic.stdout.sha256, "string");
+  assert.equal(typeof diagnostic.stderr.sha256, "string");
+  assert.equal("bytes" in diagnostic.stdout, true);
+  assert.equal(JSON.stringify(diagnostic).includes("not json"), false);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("status=1 Claude JSON envelope remains failed with private content excluded from diagnostic", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "claude-status1-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "PRIVATE INPUT MATERIAL");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-nonzero-envelope.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code",
+    claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "escalate_to_human");
+  assert.equal(verdict.synthetic, true);
+  assert.equal(verdict.execution_status, "failed");
+  assert.equal(verdict.trueCrossEngine, false);
+  assert.equal(verdict.failure_reason, "claude-code-api-error-529");
+  const diagnostic = fs.readFileSync(verdict.diagnosticPath, "utf8");
+  assert.ok(diagnostic.includes('"api_error_status": 529'));
+  for (const secret of ["PRIVATE RESULT CONTENT", "PRIVATE PROMPT", "PRIVATE MATERIALS", "/private/materials.md", "super-secret-value", "sk-live-secretvalue", "PRIVATE INPUT MATERIAL"]) {
+    assert.ok(!diagnostic.includes(secret), `diagnostic leaked ${secret}`);
+  }
+  assert.equal(fs.statSync(verdict.diagnosticPath).mode & 0o777, 0o600);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+for (const [name, fixture] of [
+  ["structured null", "fake-claude-repair-success.mjs"],
+  ["invalid verdict enum", "fake-claude-invalid-enum-repair.mjs"],
+]) test(`status0 ${name} performs one fresh format repair and succeeds`, () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "format-repair-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "FULL ORIGINAL MATERIAL");
+  const fake = path.join(__dirname, "..", "__fixtures__", fixture); fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code", claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.synthetic, false);
+  assert.equal(verdict.provenance.formatRepair.attempted, true);
+  assert.equal(verdict.provenance.formatRepair.freshProcess, true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("status0 invalid repair remains failed and diagnostics contain no output content", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "format-repair-fail-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "PRIVATE ORIGINAL MATERIAL");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-repair-invalid.mjs"); fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code", claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "escalate_to_human");
+  assert.equal(verdict.synthetic, true);
+  assert.equal(verdict.failure_reason, "claude-code-output-invalid");
+  assert.equal(verdict.provenance.formatRepair.attempted, true);
+  const diagnostic = fs.readFileSync(verdict.diagnosticPath, "utf8");
+  for (const secret of ["PRIVATE INVALID RESULT", "PRIVATE ORIGINAL MATERIAL"]) assert.ok(!diagnostic.includes(secret));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
 
 // ═══════════════════════════════════════════════════════════════
 // T2-1: detectHost
@@ -319,7 +708,7 @@ test("T2-8A: BASH_FUNC_codex%% shell-function hijack is bypassed", () => {
   // Do NOT shadow PATH — only shell-function vector
 
   try {
-    runReview({ diffFile, outputFile, envOverride: hijackEnv });
+    runReview({ diffFile, outputFile, envOverride: hijackEnv, hostProvider: "claude-code" });
   } catch (e) {
     // runReview might throw if the provider fails; that's OK
     console.error(`  [INFO] T2-8A: runReview threw (this is OK): ${e.message}`);
@@ -393,7 +782,7 @@ test("T2-8B: PATH-shadow codex hijack is bypassed", () => {
   delete hijackEnv["BASH_FUNC_codex%%"];
 
   try {
-    runReview({ diffFile, outputFile, envOverride: hijackEnv });
+    runReview({ diffFile, outputFile, envOverride: hijackEnv, hostProvider: "claude-code" });
   } catch (e) {
     console.error(`  [INFO] T2-8B: runReview threw (this is OK): ${e.message}`);
   }
