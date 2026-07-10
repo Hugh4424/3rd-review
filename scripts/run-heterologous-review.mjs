@@ -684,6 +684,11 @@ export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs
     if (now() - started + delayMs >= totalBudgetMs) break;
     sleep(delayMs);
   }
+  const lastAttempt = attempts.at(-1);
+  if (lastAttempt?.retryable && lastAttempt.phaseAttempt >= maxAttempts) {
+    lastAttempt.retryable = false;
+    lastAttempt.terminal_reason = "retry-exhausted";
+  }
   if (!result) result = { stdout: "", stderr: "", status: 1, error: "Claude retry budget exhausted before first attempt", errorCode: "ETIMEDOUT", signal: null, provenance: {} };
   result.provenance ||= {};
   result.provenance.attemptSummaries = attempts;
