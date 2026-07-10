@@ -661,9 +661,10 @@ const blockingSleep = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new Shar
 
 // One initial isolated attempt plus at most one fresh retry. More retries can
 // accidentally turn a deterministic contract failure into an expensive loop.
-export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs = RETRY_TOTAL_BUDGET_MS, now = Date.now, sleep = blockingSleep } = {}) {
+export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs = RETRY_TOTAL_BUDGET_MS, now = Date.now, sleep = blockingSleep,
+  phase = "full", classify = null, priorAttempts = [] } = {}) {
   const started = now();
-  const attempts = [];
+  const attempts = [...priorAttempts];
   let result = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const elapsedBefore = Math.max(0, now() - started);
@@ -672,9 +673,11 @@ export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs
     result = execute({ attempt, timeoutMs: remaining });
     const envelope = extractSafeClaudeEnvelopeMetadata(result.stdout);
     const apiStatus = envelope?.api_error_status ?? null;
-    const retryable = result.status !== 0 && RETRYABLE_CLAUDE_API_STATUSES.has(apiStatus);
-    attempts.push({ attempt, status: result.status, signal: result.signal ?? null, errorCode: result.errorCode ?? null,
+    const classification = classify ? classify(result) : null;
+    const retryable = classification ? classification.retryable : result.status !== 0 && RETRYABLE_CLAUDE_API_STATUSES.has(apiStatus);
+    attempts.push({ attempt: attempts.length + 1, phase, phaseAttempt: attempt, status: result.status, signal: result.signal ?? null, errorCode: result.errorCode ?? null,
       api_error_status: apiStatus, subtype: envelope?.subtype ?? null, terminal_reason: envelope?.terminal_reason ?? null,
+      outputShape: describeClaudeOutputShape(result.stdout), outcome: classification?.outcome ?? null,
       retryable, elapsedMs: Math.max(0, now() - started) });
     if (!retryable || attempt >= maxAttempts) break;
     const delayMs = Math.min(10_000, 1_000 * (2 ** (attempt - 1)));
@@ -688,6 +691,22 @@ export function runClaudeCodeWithRetry({ execute, maxAttempts = 2, totalBudgetMs
   result.provenance.totalBudgetMs = totalBudgetMs;
   result.provenance.totalElapsedMs = Math.max(0, now() - started);
   return result;
+}
+
+export function classifyClaudeAttempt(result) {
+  const envelope = extractSafeClaudeEnvelopeMetadata(result.stdout);
+  const apiStatus = envelope?.api_error_status ?? null;
+  if (result.status !== 0) return { outcome: "provider-error", retryable: RETRYABLE_CLAUDE_API_STATUSES.has(apiStatus) };
+  try { parseClaudeCodeResult(result.stdout); return { outcome: "schema-valid", retryable: false }; }
+  catch {
+    const text = String(result.stdout || "").trim();
+    if (!text) return { outcome: "incomplete-empty", retryable: true };
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return { outcome: "incomplete-invalid-json", retryable: true }; }
+    const candidate = parsed?.structured_output ?? (typeof parsed?.result === "string" ? (() => { try { return JSON.parse(parsed.result); } catch { return null; } })() : null);
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return { outcome: "incomplete-no-candidate", retryable: true };
+    return { outcome: "schema-invalid-candidate", retryable: false };
+  }
 }
 
 function streamMetadata(value) {
@@ -1381,24 +1400,28 @@ export function runReview({ diffFile, outputFile, envOverride, hostProvider, pro
       return raw;
     };
     let result = binaryPath
-      ? runClaudeCodeWithRetry({ execute: ({ timeoutMs }) => executeClaude({ timeoutMs }) })
+      ? runClaudeCodeWithRetry({ execute: ({ timeoutMs }) => executeClaude({ timeoutMs }), classify: classifyClaudeAttempt, phase: "full" })
       : { stdout: "", stderr: "", status: 1, error: "no compatible trusted claude binary found", provenance: { adapter: "claude-code-cli", binaryPath: null, timeoutMs: REVIEW_TIMEOUT_MS } };
     result.provenance.candidatePreflight = preflight.attempts;
     result.provenance.selectedVersion = preflight.version;
     if (result.status === 0) {
       let needsRepair = false;
       try { parseClaudeCodeResult(result.stdout); } catch { needsRepair = true; }
-      if (needsRepair) {
+      const lastOutcome = result.provenance.attemptSummaries?.at(-1)?.outcome;
+      if (needsRepair && lastOutcome === "schema-invalid-candidate") {
         const originalProvenance = result.provenance;
         const originalShape = describeClaudeOutputShape(result.stdout);
         const remaining = Math.max(0, RETRY_TOTAL_BUDGET_MS - (originalProvenance.totalElapsedMs || 0));
         if (remaining > 0 && binaryPath) {
           const repairPrompt = `${prompt}\n\nFORMAT REPAIR (fresh process): Your prior completed response did not match the required JSON schema. Re-review the full original materials above and return ONLY JSON matching this exact schema: ${REVIEW_JSON_SCHEMA}`;
-          const repair = executeClaude({ timeoutMs: remaining, promptText: repairPrompt });
+          const repair = runClaudeCodeWithRetry({
+            execute: ({ timeoutMs }) => executeClaude({ timeoutMs, promptText: repairPrompt }),
+            classify: classifyClaudeAttempt, phase: "repair", priorAttempts: originalProvenance.attemptSummaries,
+            totalBudgetMs: remaining,
+          });
           repair.provenance.candidatePreflight = preflight.attempts;
           repair.provenance.selectedVersion = preflight.version;
-          repair.provenance.attemptSummaries = originalProvenance.attemptSummaries;
-          repair.provenance.maxAttempts = originalProvenance.maxAttempts;
+          repair.provenance.maxAttempts = originalProvenance.maxAttempts + repair.provenance.maxAttempts;
           repair.provenance.totalBudgetMs = originalProvenance.totalBudgetMs;
           repair.provenance.formatRepair = { attempted: true, freshProcess: true, originalShape,
             status: repair.status, outputShape: describeClaudeOutputShape(repair.stdout) };

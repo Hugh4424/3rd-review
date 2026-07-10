@@ -25,6 +25,7 @@ import {
   resolveBinaryCandidates,
   extractSafeClaudeEnvelopeMetadata,
   runClaudeCodeWithRetry,
+  classifyClaudeAttempt,
   describeClaudeOutputShape,
   attestScopedReadStream,
   claudeFailureReason,
@@ -149,6 +150,52 @@ test("retry: repeated 524 performs at most one fresh retry", () => {
   assert.equal(calls, 2);
   assert.equal(result.provenance.attemptSummaries.length, 2);
   assert.equal(result.provenance.maxAttempts, 2);
+});
+
+test("status0 empty provider response gets one fresh full-review retry then succeeds", () => {
+  let calls = 0;
+  const result = runClaudeCodeWithRetry({ classify: classifyClaudeAttempt, sleep: () => {},
+    execute: () => ++calls === 1
+      ? { status: 0, stdout: "", stderr: "", provenance: {} }
+      : retryResult(0) });
+  assert.equal(calls, 2);
+  assert.equal(parseClaudeCodeResult(result.stdout).verdict, "pass");
+  assert.deepEqual(result.provenance.attemptSummaries.map((a) => [a.phase, a.outcome]),
+    [["full", "incomplete-empty"], ["full", "schema-valid"]]);
+});
+
+test("status0 invalid JSON provider response gets one fresh full-review retry", () => {
+  let calls = 0;
+  const result = runClaudeCodeWithRetry({ classify: classifyClaudeAttempt, sleep: () => {},
+    execute: () => ++calls === 1
+      ? { status: 0, stdout: "not-json", stderr: "", provenance: {} }
+      : retryResult(0) });
+  assert.equal(calls, 2);
+  assert.equal(result.provenance.attemptSummaries[0].outcome, "incomplete-invalid-json");
+});
+
+test("repair 524 participates in retry and preserves the unified attempt ledger", () => {
+  const prior = [{ attempt: 1, phase: "full", phaseAttempt: 1, status: 0, api_error_status: null,
+    outputShape: { envelope_json_parseable: true }, outcome: "schema-invalid-candidate", retryable: false }];
+  let calls = 0;
+  const result = runClaudeCodeWithRetry({ classify: classifyClaudeAttempt, phase: "repair", priorAttempts: prior, sleep: () => {},
+    execute: () => ++calls === 1 ? retryResult(1, 524) : retryResult(0) });
+  assert.equal(calls, 2);
+  assert.deepEqual(result.provenance.attemptSummaries.map((a) => a.phase), ["full", "repair", "repair"]);
+  assert.equal(result.provenance.attemptSummaries[1].api_error_status, 524);
+  assert.equal(result.provenance.attemptSummaries[2].outcome, "schema-valid");
+});
+
+test("empty full response plus repair 524 ledger never overwrites earlier attempts", () => {
+  const prior = [
+    { attempt: 1, phase: "full", status: 0, outcome: "incomplete-empty" },
+    { attempt: 2, phase: "full", status: 0, outcome: "schema-invalid-candidate" },
+  ];
+  const result = runClaudeCodeWithRetry({ classify: classifyClaudeAttempt, phase: "repair", priorAttempts: prior,
+    maxAttempts: 1, sleep: () => {}, execute: () => retryResult(1, 524) });
+  assert.equal(result.provenance.attemptSummaries.length, 3);
+  assert.deepEqual(result.provenance.attemptSummaries.map((a) => a.outcome),
+    ["incomplete-empty", "schema-invalid-candidate", "provider-error"]);
 });
 
 test("retry: auth/permission/unknown nonzero is never retried", () => {
@@ -407,7 +454,6 @@ test("status=1 Claude JSON envelope remains failed with private content excluded
 });
 
 for (const [name, fixture] of [
-  ["structured null", "fake-claude-repair-success.mjs"],
   ["invalid verdict enum", "fake-claude-invalid-enum-repair.mjs"],
 ]) test(`status0 ${name} performs one fresh format repair and succeeds`, () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "format-repair-"));
@@ -419,6 +465,19 @@ for (const [name, fixture] of [
   assert.equal(verdict.synthetic, false);
   assert.equal(verdict.provenance.formatRepair.attempted, true);
   assert.equal(verdict.provenance.formatRepair.freshProcess, true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("status0 structured null is incomplete, gets full retry, and never enters format repair", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "incomplete-null-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "out.json");
+  writeReviewPayload(diffFile, "FULL ORIGINAL MATERIAL");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-claude-repair-success.mjs"); fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "claude-code", claudeBinaryPath: fake, envOverride: { ...process.env } });
+  assert.equal(verdict.verdict, "escalate_to_human");
+  assert.equal(verdict.provenance.attemptSummaries.length, 2);
+  assert.ok(!verdict.provenance.formatRepair);
+  assert.deepEqual(verdict.provenance.attemptSummaries.map((a) => a.outcome), ["incomplete-no-candidate", "incomplete-no-candidate"]);
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
