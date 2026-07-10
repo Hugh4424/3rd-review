@@ -29,6 +29,9 @@ import {
   describeClaudeOutputShape,
   attestScopedReadStream,
   claudeFailureReason,
+  parseKimiResult,
+  selectCompatibleKimi,
+  classifyKimiAttempt,
 } from "./run-heterologous-review.mjs";
 import assert from "node:assert";
 import fs from "node:fs";
@@ -63,6 +66,45 @@ function test(name, fn) {
 
 test("Claude Code adapter timeout is 600 seconds", () => {
   assert.equal(REVIEW_TIMEOUT_MS, 600_000);
+});
+
+test("Kimi aliases normalize and same-family selection fails closed", () => {
+  for (const alias of ["kimi", "kimi-code", "kimi-cli", "moonshot"]) assert.equal(normalizeHostProvider(alias), "kimi");
+  assert.equal(selectProvider("kimi", ["kimi"]), "degraded-same-source");
+});
+
+test("Kimi parser selects final assistant JSON and validates schema", () => {
+  const stdout = [
+    JSON.stringify({ type: "assistant", content: "thinking" }),
+    JSON.stringify({ type: "assistant", content: JSON.stringify({ verdict: "pass", findings: [], resolutionSummary: "ok" }) }),
+  ].join("\n");
+  assert.equal(parseKimiResult(stdout).verdict, "pass");
+  assert.equal(classifyKimiAttempt({ status: 0, stdout, stderr: "" }).outcome, "schema-valid");
+  assert.throws(() => parseKimiResult(JSON.stringify({ type: "assistant", content: "not json" })));
+});
+
+test("Kimi uv-tool symlink resolves and compatible CLI passes preflight", () => {
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-kimi-compatible-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const selected = selectCompatibleKimi({ env: process.env, candidates: [fake] });
+  assert.equal(selected.binaryPath, fake);
+  assert.equal(selected.version, "kimi, version 1.48.0");
+});
+
+test("canonical Kimi adapter uses stdin stream-json and records provenance", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-adapter-"));
+  const diffFile = path.join(tmp, "input.json"), outputFile = path.join(tmp, "verdict.json");
+  writeReviewPayload(diffFile, "review me");
+  const fake = path.join(__dirname, "..", "__fixtures__", "fake-kimi-compatible-runner.mjs");
+  fs.chmodSync(fake, 0o755);
+  const verdict = runReview({ diffFile, outputFile, hostProvider: "codex", provider: "kimi", kimiBinaryPath: fake,
+    envOverride: { ...process.env, CODEX_UNAVAIL: "1" } });
+  assert.equal(verdict.verdict, "pass");
+  assert.equal(verdict.trueCrossEngine, true);
+  assert.equal(verdict.provenance.adapter, "kimi-cli");
+  assert.equal(verdict.provenance.transport, "stdin-stream-json");
+  assert.equal(verdict.provenance.attemptSummaries.length, 1);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });
 
 test("nonzero Claude envelope diagnostics allowlist metadata and exclude content", () => {
@@ -588,7 +630,7 @@ test("degraded same-source verdict shape: has degraded:'same-source'", () => {
   writeReviewPayload(diffFile, "# test diff\n\n```diff\n+added line\n```\n");
 
   // CODEX_UNAVAIL + GEMINI_UNAVAIL forces degraded when CLAUDECODE is set
-  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
+  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", KIMI_UNAVAIL: "1", CLAUDECODE: "1" };
   for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
     if (process.env[k]) env[k] = process.env[k];
   }
@@ -638,7 +680,7 @@ test("degraded same-source verdict carries contractPrompt verbatim from payload 
     contract: "BUILD-PLAN CONTRACT TEXT",
   });
 
-  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
+  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", KIMI_UNAVAIL: "1", CLAUDECODE: "1" };
   for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
     if (process.env[k]) env[k] = process.env[k];
   }
@@ -673,7 +715,7 @@ test("B2 escalate verdict does NOT carry trueCrossEngine:true (advisor exits non
   writeReviewPayload(diffFile, "# test\n\n```diff\n+x\n```\n");
 
   // Force degraded (no provider) → B2 is not reached but trueCrossEngine must be absent
-  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", CLAUDECODE: "1" };
+  const env = { CODEX_UNAVAIL: "1", GEMINI_UNAVAIL: "1", KIMI_UNAVAIL: "1", CLAUDECODE: "1" };
   for (const k of ["PATH", "HOME", "TERM", "LANG"]) {
     if (process.env[k]) env[k] = process.env[k];
   }

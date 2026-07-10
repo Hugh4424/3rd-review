@@ -26,6 +26,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PROVIDER_BINS = {
   "claude-code": "claude",
+  kimi: "kimi",
   codex: "codex",
   gemini: "gemini",
   antigravity: "antigravity",
@@ -33,7 +34,7 @@ const PROVIDER_BINS = {
   cursor: "cursor",
 };
 
-const PROVIDER_PRIORITY = ["claude-code", "codex", "gemini", "antigravity", "grok", "cursor"];
+const PROVIDER_PRIORITY = ["claude-code", "codex", "kimi", "gemini", "antigravity", "grok", "cursor"];
 
 export const REVIEW_TIMEOUT_MS = 600_000;
 
@@ -42,6 +43,7 @@ const ENV_WHITELIST = new Set(["PATH", "HOME", "TERM", "LANG"]);
 const PROVIDER_ENV_KEYS = {
   "claude-code": "ANTHROPIC_API_KEY",
   codex: "OPENAI_API_KEY",
+  kimi: "MOONSHOT_API_KEY",
   gemini: "GOOGLE_API_KEY",
   antigravity: null,
   grok: null,
@@ -123,6 +125,7 @@ export function detectHost(env = process.env) {
 const HOST_PROVIDER_ALIASES = new Map([
   ["claude", "claude-code"], ["claude-code", "claude-code"],
   ["codex", "codex"], ["openai-codex", "codex"],
+  ["kimi", "kimi"], ["kimi-code", "kimi"], ["kimi-cli", "kimi"], ["moonshot", "kimi"],
   ["gemini", "gemini"], ["antigravity", "antigravity"],
   ["grok", "grok"], ["cursor", "cursor"],
 ]);
@@ -171,6 +174,7 @@ export function probeAvailable(env = process.env) {
     if (env.CODEX_UNAVAIL === "1" && id === "codex") continue;
     if (env.CLAUDE_UNAVAIL === "1" && id === "claude-code") continue;
     if (env.GEMINI_UNAVAIL === "1" && id === "gemini") continue;
+    if (env.KIMI_UNAVAIL === "1" && id === "kimi") continue;
     const absPath = resolveBinaryToAbsolutePath(binary);
     if (!absPath) continue;
     const result = spawnSync(absPath, ["--version"], {
@@ -374,8 +378,12 @@ export function resolveBinaryCandidates(binary, { binRoots = TRUSTED_PATH_CANDID
       const owningBinRoot = trustedRoots.find((root) => insideRoot(root, candidate));
       if (!owningBinRoot) continue;
       if (stat.isSymbolicLink()) {
-        const packageRoot = fs.realpathSync(path.resolve(path.dirname(owningBinRoot), "lib", "node_modules"));
-        if (!insideRoot(packageRoot, real)) continue;
+        const trustedSymlinkRoots = [
+          path.resolve(path.dirname(owningBinRoot), "lib", "node_modules"),
+          path.resolve(os.homedir(), ".local", "share", "uv", "tools"),
+        ].filter((root) => { try { return fs.statSync(root).isDirectory(); } catch { return false; } })
+          .map((root) => fs.realpathSync(root));
+        if (!trustedSymlinkRoots.some((root) => insideRoot(root, real))) continue;
       } else if (!insideRoot(owningBinRoot, real)) continue;
       if (!seen.has(real)) { seen.add(real); results.push(real); }
     } catch {}
@@ -397,6 +405,32 @@ export function selectCompatibleClaudeCode({ env = process.env, candidates } = {
     let rejectionReason = null;
     if (versionResult.status !== 0) rejectionReason = "version-preflight-failed";
     else if (helpResult.status !== 0) rejectionReason = "help-preflight-failed";
+    else if (missingFlags.length) rejectionReason = `missing-required-flags:${missingFlags.join(",")}`;
+    attempts.push({ binaryPath, version: version || null, compatible: rejectionReason === null, rejectionReason });
+    if (!rejectionReason) return { binaryPath, version, attempts };
+  }
+  return { binaryPath: null, version: null, attempts };
+}
+
+const REQUIRED_KIMI_FLAGS = ["--print", "--input-format", "--output-format"];
+
+/** Select a trusted Kimi CLI that supports the canonical non-interactive stream transport. */
+export function selectCompatibleKimi({ env = process.env, candidates } = {}) {
+  const paths = candidates ?? resolveBinaryCandidates("kimi");
+  const attempts = [];
+  for (const binaryPath of paths) {
+    const versionResult = spawnSync(binaryPath, ["--version"], { env, encoding: "utf8", shell: false, timeout: 10_000 });
+    const helpResult = spawnSync(binaryPath, ["--help"], { env, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 });
+    // Rich truncates long option labels in terminal help, so probe this option
+    // through Click's parser rather than substring-matching rendered help.
+    const finalOnlyResult = spawnSync(binaryPath, ["--final-message-only", "--help"], { env, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 });
+    const version = String(versionResult.stdout || "").trim().split(/\r?\n/, 1)[0].slice(0, 120);
+    const help = String(helpResult.stdout || "");
+    const missingFlags = REQUIRED_KIMI_FLAGS.filter((flag) => !help.includes(flag));
+    let rejectionReason = null;
+    if (versionResult.status !== 0) rejectionReason = "version-preflight-failed";
+    else if (helpResult.status !== 0) rejectionReason = "help-preflight-failed";
+    else if (finalOnlyResult.status !== 0) rejectionReason = "missing-required-flags:--final-message-only";
     else if (missingFlags.length) rejectionReason = `missing-required-flags:${missingFlags.join(",")}`;
     attempts.push({ binaryPath, version: version || null, compatible: rejectionReason === null, rejectionReason });
     if (!rejectionReason) return { binaryPath, version, attempts };
@@ -556,6 +590,56 @@ export function parseClaudeCodeResult(stdout) {
     return parsed;
   }
   throw new Error("Claude Code JSON envelope contained neither structured_output nor JSON result");
+}
+
+/** Extract the final assistant message from Kimi's documented stream-json output. */
+export function parseKimiResult(stdout) {
+  const lines = String(stdout || "").split(/\r?\n/).filter((line) => line.trim());
+  let finalText = null;
+  for (const line of lines) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    const role = event.role ?? event.message?.role ?? event.type;
+    const content = event.content ?? event.message?.content ?? event.text ?? event.data?.content;
+    if (role === "assistant" || event.type === "assistant" || event.type === "final") {
+      if (typeof content === "string") finalText = content;
+      else if (Array.isArray(content)) {
+        const text = content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("");
+        if (text) finalText = text;
+      }
+    }
+  }
+  // --final-message-only implementations may emit either one JSON string or raw text.
+  if (finalText === null && lines.length === 1) {
+    try { const value = JSON.parse(lines[0]); if (typeof value === "string") finalText = value; } catch { finalText = lines[0]; }
+  }
+  if (finalText === null) throw new Error("Kimi stream contained no final assistant message");
+  const verdict = buildVerdictFromStdout(finalText, "kimi", "");
+  const validation = validateStructuredVerdict(verdict);
+  if (!validation.valid) throw new Error("Kimi final assistant message failed schema validation");
+  return verdict;
+}
+
+function runViaKimi(binaryPath, prompt, env, timeoutMs = REVIEW_TIMEOUT_MS, cwd = undefined) {
+  const args = ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--final-message-only"];
+  const input = `${JSON.stringify({ role: "user", content: prompt })}\n`;
+  const startedAt = new Date().toISOString();
+  const result = spawnSync(binaryPath, args, { env, cwd, encoding: "utf8", input,
+    stdio: ["pipe", "pipe", "pipe"], shell: false, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
+  return { stdout: result.stdout || "", stderr: result.stderr || "",
+    status: result.status ?? (result.error ? 1 : 0), error: result.error?.message ?? null,
+    errorCode: result.error?.code ?? null, signal: result.signal ?? null,
+    provenance: { adapter: "kimi-cli", binaryPath, args, transport: "stdin-stream-json", startedAt,
+      finishedAt: new Date().toISOString(), timeoutMs } };
+}
+
+export function classifyKimiAttempt(result) {
+  if (result.status !== 0) {
+    const retryable = ["ETIMEDOUT", "EPIPE"].includes(result.errorCode) || /\b(?:408|429|502|503|504|524|529)\b/.test(String(result.stderr || ""));
+    return { outcome: "provider-error", retryable };
+  }
+  try { parseKimiResult(result.stdout); return { outcome: "schema-valid", retryable: false }; }
+  catch { return { outcome: String(result.stdout || "").trim() ? "schema-invalid-candidate" : "incomplete-empty", retryable: !String(result.stdout || "").trim() }; }
 }
 
 export function describeClaudeOutputShape(stdout) {
@@ -1230,7 +1314,7 @@ export function runThreatAuditor(diffFile, opts = {}) {
  * @param {object} [opts.envOverride] - env override (for testing)
  * @returns {object} verdict object
  */
-export function runReview({ diffFile, outputFile, envOverride, hostProvider, provider, claudeBinaryPath, claudeBinaryCandidates }) {
+export function runReview({ diffFile, outputFile, envOverride, hostProvider, provider, claudeBinaryPath, claudeBinaryCandidates, kimiBinaryPath, kimiBinaryCandidates }) {
   const sourceEnv = envOverride ?? process.env;
   const explicitHost = hostProvider ?? sourceEnv.REVIEW_HOST_PROVIDER;
   const host = explicitHost === undefined
@@ -1308,7 +1392,7 @@ export function runReview({ diffFile, outputFile, envOverride, hostProvider, pro
     return verdict;
   }
 
-  if (explicitProviderRaw !== undefined && (explicitProvider === "unknown" || explicitProvider === host || !effectiveAvailable.includes(explicitProvider)) && !claudeBinaryPath && !claudeBinaryCandidates) {
+  if (explicitProviderRaw !== undefined && (explicitProvider === "unknown" || explicitProvider === host || !effectiveAvailable.includes(explicitProvider)) && !claudeBinaryPath && !claudeBinaryCandidates && !kimiBinaryPath && !kimiBinaryCandidates) {
     const verdict = { verdict: "escalate_to_human", provider: explicitProvider === "unknown" ? "not-selected" : explicitProvider,
       host, actual_mode: "not_executed", findings: [], reviewSnapshot: [], riskDisposition: [],
       worktreeInventory: { included: [], unrelated: [], excluded: [] },
@@ -1380,6 +1464,65 @@ export function runReview({ diffFile, outputFile, envOverride, hostProvider, pro
 
   // ── Build child env (whitelist) ──
   const childEnv = buildChildEnv(selected, sourceEnv);
+
+  // Kimi has a canonical direct adapter. It never falls through to omc or a
+  // same-family provider: transport/preflight/schema failures remain visible.
+  if (selected === "kimi") {
+    const preflight = kimiBinaryPath
+      ? { binaryPath: kimiBinaryPath, version: "test-injected", attempts: [{ binaryPath: kimiBinaryPath, version: "test-injected", compatible: true, rejectionReason: null }] }
+      : selectCompatibleKimi({ env: childEnv, candidates: kimiBinaryCandidates });
+    const binaryPath = preflight.binaryPath;
+    const execute = ({ timeoutMs, promptText = prompt }) => runViaKimi(binaryPath, promptText, childEnv, timeoutMs, artifactPackage?.root);
+    let result = binaryPath
+      ? runClaudeCodeWithRetry({ execute: ({ timeoutMs }) => execute({ timeoutMs }), classify: classifyKimiAttempt, phase: "full" })
+      : { stdout: "", stderr: "", status: 1, error: "no compatible trusted kimi binary found", provenance: { adapter: "kimi-cli", binaryPath: null, timeoutMs: REVIEW_TIMEOUT_MS } };
+    result.provenance.candidatePreflight = preflight.attempts;
+    result.provenance.selectedVersion = preflight.version;
+    if (result.status === 0 && result.provenance.attemptSummaries?.at(-1)?.outcome === "schema-invalid-candidate") {
+      const original = result.provenance;
+      const remaining = Math.max(0, RETRY_TOTAL_BUDGET_MS - (original.totalElapsedMs || 0));
+      if (remaining > 0 && binaryPath) {
+        const repairPrompt = `${prompt}\n\nFORMAT REPAIR (fresh process): Re-review the full original materials and return ONLY this JSON shape: {"verdict":"pass|revise_required|escalate_to_human","findings":[],"resolutionSummary":"..."}`;
+        result = runClaudeCodeWithRetry({ execute: ({ timeoutMs }) => execute({ timeoutMs, promptText: repairPrompt }),
+          classify: classifyKimiAttempt, phase: "repair", priorAttempts: original.attemptSummaries, maxAttempts: 1,
+          totalBudgetMs: remaining });
+        result.provenance.candidatePreflight = preflight.attempts;
+        result.provenance.selectedVersion = preflight.version;
+        result.provenance.formatRepair = { attempted: true, freshProcess: true, status: result.status };
+      } else result.provenance.formatRepair = { attempted: false, reason: "shared-budget-exhausted" };
+    }
+    let verdict;
+    let parsedSuccessfully = false;
+    try {
+      verdict = result.status === 0 ? parseKimiResult(result.stdout) : null;
+      if (!verdict || !VALID_VERDICTS.has(verdict.verdict)) throw new Error("Kimi result has no valid verdict");
+      parsedSuccessfully = true;
+    } catch {
+      const diagnosticPath = writeDiagnostic(outputFile, { provider: selected, host, status: result.status,
+        signal: result.signal ?? null, errorCode: result.errorCode ?? (result.error ? "SPAWN_ERROR" : null),
+        parseError: "INVALID_PROVIDER_OUTPUT", stdout: streamMetadata(result.stdout), stderr: streamMetadata(result.stderr),
+        provenance: { ...result.provenance, launcherTrust: kimiBinaryPath ? "explicit-api-injection" : "static-trusted-path-allowlist" } });
+      verdict = { verdict: "escalate_to_human", error: result.error ? "Kimi process failed" : "Kimi returned invalid structured output",
+        diagnosticPath, resolutionSummary: "Kimi review failed; no provider switch was attempted.", findings: [], reviewSnapshot: [],
+        riskDisposition: [], worktreeInventory: { included: [], unrelated: [], excluded: [] } };
+    }
+    Object.assign(verdict, { provider: selected, host, trueCrossEngine: parsedSuccessfully,
+      actual_mode: parsedSuccessfully ? mode : "not_executed", reviewMode: "kimi-cli", synthetic: !parsedSuccessfully,
+      execution_status: parsedSuccessfully ? "completed" : "failed", backend_provider: "kimi", reviewer_source: "3rd-review/canonical" });
+    verdict.provenance = result.provenance;
+    verdict.provenance.launcherTrust = kimiBinaryPath ? "explicit-api-injection" : "static-trusted-path-allowlist";
+    verdict.provenance.providerSwitchAttempted = false;
+    verdict.provenance.artifactPackage = payload.package;
+    if (!parsedSuccessfully) verdict.failure_reason = result.status === 0 ? "kimi-output-invalid" : "kimi-process-failed";
+    verdict.coverage = payload.coverage;
+    verdict.findings = Array.isArray(verdict.findings) ? verdict.findings : [];
+    verdict.reviewSnapshot = payload.coverage.length ? payload.coverage.map((item) => ({ path: item.path, hash: item.sha256, bytes: item.bytes, truncated: false })) : [];
+    verdict.riskDisposition ||= [];
+    verdict.worktreeInventory ||= { included: [], unrelated: [], excluded: [] };
+    verdict.threatAuditor = runMaterialsAudit();
+    fs.writeFileSync(outputFile, JSON.stringify(verdict, null, 2) + "\n");
+    return verdict;
+  }
 
   // Claude Code has a canonical direct adapter. No advisor or provider fallback:
   // a Claude failure remains a Claude failure and is diagnosed fail-closed.
