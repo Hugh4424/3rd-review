@@ -1506,7 +1506,7 @@ export function runReview({ diffFile, outputFile, envOverride, hostProvider, pro
         diagnosticPath, resolutionSummary: "Kimi review failed; no provider switch was attempted.", findings: [], reviewSnapshot: [],
         riskDisposition: [], worktreeInventory: { included: [], unrelated: [], excluded: [] } };
     }
-    Object.assign(verdict, { provider: selected, host, trueCrossEngine: parsedSuccessfully,
+    Object.assign(verdict, { provider: "kimi-code", host, trueCrossEngine: parsedSuccessfully,
       actual_mode: parsedSuccessfully ? mode : "not_executed", reviewMode: "kimi-cli", synthetic: !parsedSuccessfully,
       execution_status: parsedSuccessfully ? "completed" : "failed", backend_provider: "kimi", reviewer_source: "3rd-review/canonical" });
     verdict.provenance = result.provenance;
