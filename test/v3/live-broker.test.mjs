@@ -12,7 +12,7 @@ const config = {
   config: {
     defaults: { deadline_seconds: null, max_output_bytes: 1024, max_input_bytes: 1024 },
     tiers: [["alpha", "beta"], ["gamma"]],
-    providers: Object.fromEntries(["alpha", "beta", "gamma"].map((id) => [id, { id, enabled: true, command: process.execPath, model: null, effort: null, thinking: null, auth_env: [], profile: null }])),
+    providers: Object.fromEntries(["alpha", "beta", "gamma"].map((id) => [id, { enabled: true, command: process.execPath, model: null, effort: null, thinking: null, auth_env: [], profile: null }])),
   },
 };
 

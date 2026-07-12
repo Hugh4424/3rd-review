@@ -1,0 +1,73 @@
+{
+  "version": 3,
+  "defaults": {
+    "deadline_seconds": null,
+    "idle_warning_seconds": 600,
+    "stalled_suspected_seconds": 1200,
+    "poll_interval_ms": 5000,
+    "max_input_bytes": 524288,
+    "max_output_bytes": 10485760,
+    "max_turns": 16,
+    "max_input_tokens": null,
+    "max_output_tokens": null,
+    "max_budget_usd": null
+  },
+  "tiers": [
+    ["claude-code", "kimi", "opencode"],
+    ["codex"]
+  ],
+  "providers": {
+    "claude-code": {
+      "enabled": true,
+      "command": "/absolute/path/to/claude",
+      "model": null,
+      "effort": "medium",
+      "thinking": null,
+      "auth_mode": "native_login",
+      "auth_env": [],
+      "env_allowlist": [],
+      "profile": null,
+      "backend": "claude-code-cli",
+      "config_ref": null
+    },
+    "kimi": {
+      "enabled": true,
+      "command": "/absolute/path/to/kimi",
+      "model": null,
+      "effort": null,
+      "thinking": true,
+      "auth_mode": "native_login",
+      "auth_env": [],
+      "env_allowlist": [],
+      "profile": "/absolute/path/to/kimi-readonly-agent.yaml",
+      "backend": "kimi-cli",
+      "config_ref": null
+    },
+    "opencode": {
+      "enabled": true,
+      "command": "/absolute/path/to/opencode",
+      "model": null,
+      "effort": null,
+      "thinking": null,
+      "auth_mode": "config_ref",
+      "auth_env": [],
+      "env_allowlist": [],
+      "profile": "third-review-readonly",
+      "backend": "opencode-cli",
+      "config_ref": "~/.config/opencode/opencode.json"
+    },
+    "codex": {
+      "enabled": false,
+      "command": "/absolute/path/to/codex",
+      "model": null,
+      "effort": null,
+      "thinking": null,
+      "auth_mode": "native_login",
+      "auth_env": [],
+      "env_allowlist": [],
+      "profile": null,
+      "backend": "codex-cli",
+      "config_ref": null
+    }
+  }
+}
