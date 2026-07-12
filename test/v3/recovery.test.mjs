@@ -43,6 +43,15 @@ test("a provider can resume only its own matching session once and never silentl
   await assert.rejects(ledger.resumeOnce({ runtime_id: "runtime_a", provider: "codex", session_id: "kimi_session", ...binding, resume_input: "wrong provider" }, async () => ({})), { code: "CONTINUATION_FAILED" });
 });
 
+test("a restarted broker restores durable recovery state before continuing", async (t) => {
+  const original = new RecoveryLedger({ now: () => 1_000 });
+  const runtime_path = record(original, t, { runtime_id: "runtime_restart", provider: "kimi", session_id: "native_session", ...binding });
+  const restarted = new RecoveryLedger({ now: () => 1_000 });
+  assert.equal(restarted.restore({ runtime_id: "runtime_restart", provider: "kimi", runtime_path }).session_id, "native_session");
+  const result = await restarted.resumeOnce({ runtime_id: "runtime_restart", provider: "kimi", session_id: "native_session", ...binding, resume_input: "continue" }, async () => ({ execution_eligible: true }));
+  assert.equal(result.execution_eligible, true);
+});
+
 test("one recovery is allowed only for invalid JSON with an explicit native session", async (t) => {
   const ledger = new RecoveryLedger();
   record(ledger, t, { runtime_id: "runtime_b", provider: "claude-code", session_id: "claude_session", ...binding });

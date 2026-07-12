@@ -30,7 +30,12 @@ test("live broker joins tier routing, direct supervisor output, parsing, and par
     parse: (combined) => id === "alpha" ? { text: null, session_id: null, error_code: "INVALID_JSON" } : { text: "ok", session_id: `${id}_session`, error_code: null },
   }; } };
   const request = { protocol_version: 3, request_id: "11111111-1111-4111-8111-111111111111", nonce: null, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "codex", backend: "codex-cli", wrapper_hash: "test" }, material: createMaterial("review"), contract_ref: "opaque://test/contract", force_tier: null, overrides: {} };
-  const result = await new LiveBroker({ supervisor, adapters, recovery: { record() {} } }).run({ request, config, host_provider: "alpha", host_verified: true, options: { cwd: root } });
+  const store = {
+    begin({ request: input }) { return { existing: false, request: { ...input, nonce: "test_nonce", runtime_id: "test_runtime" } }; },
+    commitProvider({ provider, result: output }) { return { id: provider, ...output, runtime_id: "test_runtime", receipt_ref: "private://test_runtime/beta/receipt", diagnostic_ref: "private://test_runtime/beta/diagnostic" }; },
+    complete() {},
+  };
+  const result = await new LiveBroker({ supervisor, adapters, recovery: { record() {} }, store }).run({ request, config, host_provider: "alpha", host_verified: true, options: { cwd: root } });
   assert.deepEqual(calls, ["beta"]);
   assert.equal(result.stop_reason, "execution_eligible");
   assert.equal(result.providers[0].id, "alpha");
@@ -52,12 +57,12 @@ test("live broker resumes only the recorded provider session and consumes the si
   const supervisor = {
     runtimeRoot: root,
     async run(plan) {
-      const directory = path.join(root, plan.runtime_id);
+      const directory = path.join(root, plan.runtime_id, plan.provider);
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       const stdout = path.join(directory, `${plan.attempt_id}.stdout`);
       const stderr = path.join(directory, `${plan.attempt_id}.stderr`);
-      writeFileSync(stdout, plan.argv[0] === "resume" ? "resumed" : "initial");
-      writeFileSync(stderr, "");
+      writeFileSync(stdout, plan.argv[0] === "resume" ? "resumed" : "initial", { mode: 0o600 });
+      writeFileSync(stderr, "", { mode: 0o600 });
       return { status: "completed", persisted: true, stdout_path: stdout, stderr_path: stderr, output_bytes: 7, started_at_ms: 1, finished_at_ms: 2 };
     },
   };

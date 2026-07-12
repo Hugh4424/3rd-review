@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CliSupervisor } from "../../lib/v3/supervisor.mjs";
+import { cancelPersistedAttempt, CliSupervisor } from "../../lib/v3/supervisor.mjs";
 
 function fixture(source) {
   return { command: process.execPath, argv: ["-e", source] };
@@ -103,6 +103,28 @@ test("cancel is observable, idempotent, and does not create a fresh attempt", as
     assert.equal(result.status, "cancelled");
     assert.equal(result.error_code, "CANCELLED");
     assert.equal(supervisor.status("attempt_cancel").status, "cancelled");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a second CLI process can inspect and cancel a fingerprint-bound active attempt", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-supervisor-"));
+  try {
+    const active = path.join(root, "runtime_persisted", "mock", ".3rd-review-active.json");
+    const supervisor = new CliSupervisor({ runtimeRoot: root, pollIntervalMs: 10, cancelGraceMs: 10 });
+    const pending = supervisor.run({
+      attempt_id: "attempt_persisted", runtime_id: "runtime_persisted", provider: "mock", active_path: active,
+      ...fixture('setInterval(() => {}, 5_000);'),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const state = JSON.parse(readFileSync(active, "utf8"));
+    assert.equal(state.attempt_id, "attempt_persisted");
+    assert.equal(state.terminal, false);
+    assert.equal(cancelPersistedAttempt({ active_path: active, attempt_id: "attempt_persisted" }), true);
+    const result = await pending;
+    assert.equal(result.status, "cancelled");
+    assert.equal(JSON.parse(readFileSync(active, "utf8")).terminal, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
