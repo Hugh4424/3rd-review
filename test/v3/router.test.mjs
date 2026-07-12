@@ -13,9 +13,9 @@ function config(overrides = {}) {
     tiers: [["claude-code", "kimi"], ["opencode"]],
     defaults: { deadline_seconds: null, max_input_bytes: 524288, max_output_bytes: 1048576, poll_interval_ms: 5000 },
     providers: {
-      "claude-code": { enabled: true, command: "/usr/local/bin/claude", model: "haiku", effort: "low", auth_mode: "native_login", auth_env: [] },
-      kimi: { enabled: true, command: "/usr/local/bin/kimi", model: "kimi", effort: "low", auth_mode: "native_login", auth_env: [] },
-      opencode: { enabled: true, command: "/usr/local/bin/opencode", model: "provider/model", effort: "low", auth_mode: "config_ref", auth_env: [] },
+      "claude-code": { enabled: true, command: "/usr/local/bin/claude", model: "haiku", effort: "low", thinking: null, auth_mode: "native_login", auth_env: [] },
+      kimi: { enabled: true, command: "/usr/local/bin/kimi", model: "kimi", effort: "low", thinking: null, auth_mode: "native_login", auth_env: [] },
+      opencode: { enabled: true, command: "/usr/local/bin/opencode", model: "provider/model", effort: "low", thinking: null, auth_mode: "config_ref", auth_env: [] },
     },
     ...overrides,
   };
@@ -25,6 +25,9 @@ test("global config is strict, hashable, and stores only auth environment names"
   const validated = validateConfig(config());
   assert.match(validated.config_hash, /^sha256:[a-f0-9]{64}$/);
   assert.deepEqual(validated.config.tiers[0], ["claude-code", "kimi"]);
+  assert.equal(validated.config.providers.kimi.thinking, null);
+  assert.equal(validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, thinking: false } } })).config.providers.kimi.thinking, false);
+  assert.throws(() => validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, thinking: "low" } } })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, api_key: "secret" } } })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ tiers: [["kimi", "kimi"]] })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ defaults: { api_key: "secret" } })), { code: "CONFIG_INVALID" });

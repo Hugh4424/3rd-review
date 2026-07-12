@@ -36,8 +36,10 @@ test("Claude Code profile is non-interactive read-only and resumes only its own 
   assert.equal(start.argv.includes("--allowedTools"), true);
   assert.equal(start.argv.includes("Read"), true);
   const resumed = adapter.buildResume(context);
-  assert.equal(resumed.argv.includes("--resume"), true);
-  assert.equal(resumed.argv.includes(context.session_id), true);
+  assert.deepEqual(resumed.argv.slice(0, 11), ["--resume", context.session_id, "-p", "--output-format", "json", "--permission-mode", "dontAsk", "--safe-mode", "--disable-slash-commands", "--allowedTools", "Read"]);
+  assert.equal(resumed.argv.indexOf(context.resume_input) < resumed.argv.indexOf("--disallowedTools"), true);
+  assert.equal(resumed.argv.at(-1), "Agent,Bash,CronCreate,CronDelete,CronList,DesignSync,Edit,EnterWorktree,ExitWorktree,Monitor,NotebookEdit,PushNotification,ReportFindings,ScheduleWakeup,SendMessage,Task,TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,ToolSearch,WebFetch,WebSearch,Workflow,Write");
+  assert.equal(resumed.input, null);
 });
 
 test("Claude Code probe rejects a CLI that does not advertise the read-only allowlist", () => {
@@ -77,4 +79,7 @@ test("Kimi and OpenCode reject a start plan without their read-only profile", ()
   const openCodeResume = adapters.opencode.buildResume(context);
   assert.equal(openCodeResume.argv.includes(context.input), false);
   assert.equal(openCodeResume.argv.includes(context.resume_input), true);
+  const kimiResume = adapters.kimi.buildResume(context);
+  assert.equal(kimiResume.input, context.resume_input);
+  assert.equal(kimiResume.argv.includes(context.session_id), true);
 });
