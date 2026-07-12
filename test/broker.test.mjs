@@ -18,19 +18,19 @@ test("runs all eligible providers in a tier and excludes the host", async () => 
   const broker = new Broker(config(temp())); const result = await broker.run({ version: 4, host_provider: "claude-code", prompt: "review", continuation: null });
   assert.equal(result.providers.find((item) => item.provider === "claude-code").error.code, "SAME_SOURCE");
   for (const id of ["kimi", "codex", "opencode"]) assert.equal(result.providers.find((item) => item.provider === id).status, "completed");
-  assert.equal(result.round, 1);
+  assert.equal(result.round, 1); assert.equal(result.selected_tier, 0);
 });
 
 test("continuation uses only each provider's own native session", async () => {
   const broker = new Broker(config(temp(), [["kimi", "codex"]])); const first = await broker.run({ version: 4, host_provider: "claude-code", prompt: "one", continuation: null });
   const second = await broker.run({ version: 4, host_provider: "claude-code", prompt: "two", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(second.round, 2); assert.deepEqual(second.providers.map((item) => item.provider).sort(), ["codex", "kimi"]); assert.ok(second.providers.every((item) => item.status === "completed"));
+  assert.equal(second.round, 2); assert.equal(second.selected_tier, null); assert.deepEqual(second.providers.map((item) => item.provider).sort(), ["codex", "kimi"]); assert.ok(second.providers.every((item) => item.status === "completed"));
 });
 
 test("falls through only after an entire tier has no success", async () => {
   const root = temp(); const value = config(root, [["claude-code"], ["kimi"]]); value.providers["claude-code"].command = "/does/not/exist";
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[1].provider, "kimi"); assert.equal(result.providers[1].status, "completed");
+  assert.equal(result.selected_tier, 1); assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[1].provider, "kimi"); assert.equal(result.providers[1].status, "completed");
 });
 
 test("reports missing environment authentication without running the provider", async () => {
@@ -59,5 +59,5 @@ test("cancel persists an independent cancellation marker", async () => {
   const runtime_id = fs.readdirSync(root).find((name) => /^[0-9a-f-]{36}$/i.test(name));
   assert.deepEqual(broker.cancel(runtime_id, "kimi"), { cancelled: true });
   const result = await running;
-  assert.equal(result.providers[0].error.code, "CANCELLED");
+  assert.equal(result.providers[0].status, "cancelled"); assert.equal(result.providers[0].error.code, "CANCELLED");
 });

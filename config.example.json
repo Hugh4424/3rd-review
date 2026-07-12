@@ -11,6 +11,6 @@
     "claude-code": { "enabled": true, "command": "/absolute/path/to/claude", "model": null, "effort": "medium", "thinking": null, "auth": { "type": "native" }, "env": [] },
     "kimi": { "enabled": true, "command": "/absolute/path/to/kimi", "model": null, "effort": null, "thinking": true, "auth": { "type": "native" }, "env": [] },
     "codex": { "enabled": true, "command": "/absolute/path/to/codex", "model": null, "effort": "medium", "thinking": null, "auth": { "type": "native" }, "env": [] },
-    "opencode": { "enabled": true, "command": "/absolute/path/to/opencode", "model": null, "effort": null, "thinking": null, "auth": { "type": "env", "env": ["OPENAI_API_KEY"] }, "env": [] }
+    "opencode": { "enabled": true, "command": "/absolute/path/to/opencode", "model": null, "effort": null, "thinking": null, "auth": { "type": "native" }, "env": [] }
   }
 }

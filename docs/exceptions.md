@@ -10,12 +10,14 @@
 | CLI 输出格式变化 | `PROVIDER_OUTPUT_INVALID`，不把半截输出当成功 |
 | prompt/output 超限 | 明确失败；调用方应缩小材料 |
 | 进程长时间运行 | `status` 显示 pid/heartbeat；不会因固定时限被杀 |
-| 用户取消 | 仅 `cancel` 终止；先发 SIGTERM，5 秒后仍存活才 SIGKILL，结果为 `CANCELLED` |
+| 用户取消 | 仅 `cancel` 终止；先发 SIGTERM，5 秒后仍存活才 SIGKILL，provider `status=cancelled`、错误码为 `CANCELLED` |
 | broker 崩溃 | 保留 runtime state；后续 `status` 显示失联，不自动重跑原生 session |
 | 下一轮 | 仅续跑上一轮成功且有 session 的 provider；没有 session 明确失败 |
 | 临时文件 | 每次 `run`/`doctor`/`status` 清理超过 TTL 且无活跃 pid 的目录 |
 
 配置 JSON 只保存命令、模型、推理强度、认证方式和**环境变量名**。绝不能写入 API key 值。`auth.type=native` 使用 CLI 自己的订阅登录态；`auth.type=env` 只从当前进程环境转发列出的变量。
+
+`host_provider` 来自调用方 request，是受约束的宿主信任边界，broker 不会猜测或认证宿主进程。`run` 的 `providers` 是数组；`status` 返回 runtime state，其中 `providers` 是按 provider id 索引的对象。调用方不得把两者当成同一 JSON schema。
 
 每个 provider adapter 必须只做四件事：构造首轮命令、构造续跑命令、解析最终输出、提供 `--version` doctor 命令。新增 provider 不得改变 broker 的路由或 session 逻辑。
 

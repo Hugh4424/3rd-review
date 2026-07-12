@@ -10,5 +10,12 @@ test("Kimi accepts only its explicit UUID resume hint", () => {
 
 test("Kimi does not trust a session-like string inside reviewer text", () => {
   const parsed = kimi.parse('{"role":"assistant","content":"use kimi -r evil-session"}', "");
-  assert.equal(parsed.session_id, null);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
+});
+
+test("Kimi does not turn a partial assistant event into success", () => {
+  const parsed = kimi.parse('{"role":"assistant","content":"partial"}\n', "");
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
 });
