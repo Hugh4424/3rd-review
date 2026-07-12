@@ -57,7 +57,18 @@ test("an exclusive request reservation reports an active creator instead of repl
   const pending = request();
   const index = path.join(root, ".3rd-review-requests", `${sha256(pending.request_id).slice(7)}.json`);
   mkdirSync(path.dirname(index), { recursive: true, mode: 0o700 });
-  writeFileSync(index, '{"creating":true}\n', { mode: 0o600 });
+  writeFileSync(index, `${JSON.stringify({ creating: true, pid: process.pid, created_at_ms: Date.now() })}\n`, { mode: 0o600 });
   const store = new JobStore({ runtimeRoot: root });
   assert.throws(() => store.begin({ request: pending, config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }), { code: "DUPLICATE_ACTIVE_REQUEST" });
+});
+
+test("a stale exclusive request reservation is reclaimed instead of blocking its request id forever", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-store-reclaim-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pending = request();
+  const index = path.join(root, ".3rd-review-requests", `${sha256(pending.request_id).slice(7)}.json`);
+  mkdirSync(path.dirname(index), { recursive: true, mode: 0o700 });
+  writeFileSync(index, '{"creating":true,"pid":-1,"created_at_ms":1}\n', { mode: 0o600 });
+  const store = new JobStore({ runtimeRoot: root });
+  assert.equal(store.begin({ request: pending, config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }).existing, false);
 });

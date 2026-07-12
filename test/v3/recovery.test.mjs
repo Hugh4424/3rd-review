@@ -168,3 +168,14 @@ test("runtime GC retains an expired runtime while a live private lease exists", 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("runtime GC retains an expired runtime while an initial provider attempt is active", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-gc-active-"));
+  const runtimePath = path.join(root, "runtime_active");
+  try {
+    mkdirSync(path.join(runtimePath, "kimi"), { recursive: true });
+    writeFileSync(path.join(runtimePath, ".3rd-review-runtime.json"), JSON.stringify({ expires_at_ms: 1 }), { mode: 0o600 });
+    writeFileSync(path.join(runtimePath, "kimi", ".3rd-review-active.json"), JSON.stringify({ pid: process.pid, terminal: false }), { mode: 0o600 });
+    assert.deepEqual(gcExpiredRuntimes({ runtime_root: root, now: 2 }), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

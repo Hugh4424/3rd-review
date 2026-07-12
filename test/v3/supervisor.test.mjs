@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -64,6 +64,16 @@ test("reports an initial private-storage failure without throwing or claiming pe
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("refuses a pre-existing private output name instead of following or overwriting it", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-supervisor-"));
+  try {
+    const outputRoot = path.join(root, "runtime_existing", "mock");
+    mkdirSync(outputRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(outputRoot, "attempt_existing.stdout"), "must not overwrite", { mode: 0o600 });
+    assert.throws(() => new CliSupervisor({ runtimeRoot: root }).run({ attempt_id: "attempt_existing", runtime_id: "runtime_existing", provider: "mock", ...fixture('process.stdout.write("never");') }), { code: "BINDING_MISMATCH" });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("has no default deadline and only terminates on an explicit deadline", async () => {
