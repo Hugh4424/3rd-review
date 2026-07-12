@@ -12,6 +12,12 @@ mode: lightweight
 
 # 3rd-review — review engine (thin shell)
 
+## V3 migration guard
+
+V3 的唯一新入口是 `scripts/3rd-review.mjs`。Phase 0 只冻结通用请求/receipt 协议并提供 `--adapter=mock` 集成基线，**不能用于真实审查**。协议、nonce、private receipt 和不得删除的失败语义见 [`docs/v3-protocol-freeze.md`](./docs/v3-protocol-freeze.md)。
+
+现有 `standalone.sh` 和 `scripts/run-heterologous-review.mjs` 仅为 V2 兼容面：只维护现有回归行为，不再向其中新增 provider、认证、超时、session 或报告功能。真实 V3 provider dispatch 在后续 phase 才切换；切换前 wh-review 继续使用兼容面，禁止两套 runner 并行扩展。
+
 > This file is the skeleton the main session reads. Execution detail used only by reviewers/scripts lives in `references/` — the main session does not read it; sub-agents/scripts load it on demand. Full index at the end.
 
 ## Triggers
