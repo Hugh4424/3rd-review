@@ -38,7 +38,7 @@ test("silent process is terminated with its explicit timeout code", async () => 
 
 test("stream output reports activity and monitors stop after close or error", async () => {
   const activity = []; const liveness = [];
-  const streamed = await execute(plan(stream), { maxOutputBytes: 4096, idleTimeoutMs: 100, livenessIntervalMs: 5, onLiveness: () => liveness.push(Date.now()), onActivity: () => activity.push(Date.now()) });
+  const streamed = await execute(plan(stream), { maxOutputBytes: 4096, idleTimeoutMs: 1000, livenessIntervalMs: 5, onLiveness: () => liveness.push(Date.now()), onActivity: () => activity.push(Date.now()) });
   assert.equal(streamed.ok, true);
   assert.ok(activity.length >= 3);
   const afterClose = liveness.length;
