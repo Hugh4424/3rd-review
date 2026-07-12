@@ -2,15 +2,8 @@
   "version": 3,
   "defaults": {
     "deadline_seconds": null,
-    "idle_warning_seconds": 600,
-    "stalled_suspected_seconds": 1200,
-    "poll_interval_ms": 5000,
     "max_input_bytes": 524288,
-    "max_output_bytes": 10485760,
-    "max_turns": 16,
-    "max_input_tokens": null,
-    "max_output_tokens": null,
-    "max_budget_usd": null
+    "max_output_bytes": 10485760
   },
   "tiers": [
     ["claude-code", "kimi", "opencode"],
@@ -57,7 +50,7 @@
       "config_ref": "~/.config/opencode/opencode.json"
     },
     "codex": {
-      "enabled": false,
+      "enabled": true,
       "command": "/absolute/path/to/codex",
       "model": null,
       "effort": null,

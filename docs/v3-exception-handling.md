@@ -13,6 +13,7 @@ V3 只负责调用异源 CLI、持久化 transport receipt 和私有诊断；不
 | 输出不是完整机器格式 | `PROVIDER_PROTOCOL_INCOMPLETE` | 不把文本当成功；不重派 |
 | 输出超过上限 | `OUTPUT_LIMIT_EXCEEDED` | 明确失败，不截断成成功 |
 | 用户取消 | `CANCELLED` | 结束该 attempt，不自动恢复 |
+| 续跑锁持有者崩溃 | `CONTINUATION_INTERRUPTED` | 不重跑同一 native session；保留已有 receipt |
 | 显式 deadline | `DEADLINE_EXCEEDED` | 仅用户配置 deadline 才终止 |
 | CLI 仍有 activity | 无超时 | 默认持续监控，不采用 120/180 秒杀进程 |
 

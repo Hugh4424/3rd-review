@@ -53,6 +53,19 @@ test("expired terminal runtimes are removed automatically but their request id s
   assert.throws(() => store.begin({ request: request(first.request.nonce), config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }), { code: "NONCE_EXPIRED" });
 });
 
+test("expired runtimes with an orphaned active record are reclaimed", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-store-orphan-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let now = 100;
+  const store = new JobStore({ runtimeRoot: root, now: () => now });
+  const first = store.begin({ request: request(), config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" });
+  const active = store.activePath(first.request.runtime_id, "kimi");
+  mkdirSync(path.dirname(active), { recursive: true, mode: 0o700 });
+  writeFileSync(active, JSON.stringify({ terminal: false, pid: -1 }), { mode: 0o600 });
+  now += RUNTIME_TTL_MS + 1;
+  assert.deepEqual(store.gcExpired(), [first.request.runtime_id]);
+});
+
 test("an exclusive request reservation reports an active creator instead of replacing its index", (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "3rd-review-store-reserve-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -95,9 +108,32 @@ test("one runtime-wide lock prevents two distinct continuation request ids from 
     ...request(first.request.nonce), request_id, runtime_id: first.request.runtime_id, round: 2,
     material: createMaterial("delta"), previous_receipt_hash: null, previous_receipts: { kimi: prior.receipt_hash },
   });
+  assert.throws(() => store.beginContinuation({ request: { ...continuation(createRequestId()), host_hint: { provider: "kimi", backend: "cli", wrapper_hash: "test" } }, config_hash: configHash }), { code: "BINDING_MISMATCH" });
   assert.equal(store.beginContinuation({ request: continuation(createRequestId()), config_hash: configHash }).existing, false);
+  assert.equal(store.readJob(first.request.runtime_id).result, null);
   assert.throws(
     () => store.beginContinuation({ request: continuation(createRequestId()), config_hash: configHash }),
     { code: "DUPLICATE_ACTIVE_REQUEST" },
   );
+});
+
+test("a crashed continuation returns an explicit interrupted result instead of the prior round", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-store-interrupted-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const configHash = `sha256:${"a".repeat(64)}`;
+  const store = new JobStore({ runtimeRoot: root });
+  const first = store.begin({ request: request(), config_hash: configHash, config_snapshot: "{}" });
+  const providerRoot = path.join(root, first.request.runtime_id, "kimi"); mkdirSync(providerRoot, { recursive: true, mode: 0o700 });
+  const raw = path.join(providerRoot, "initial.stdout"); writeFileSync(raw, "initial", { mode: 0o600 });
+  store.commitProvider({ runtime_id: first.request.runtime_id, provider: "kimi", request: first.request, config_hash: configHash, config_snapshot: "{}", profile_hash: `sha256:${"b".repeat(64)}`, result: { execution_eligible: true, session_id: "kimi-session", persisted: true, raw_ref: raw, result_text: "initial", metrics: {} } });
+  store.complete(first.request.runtime_id, { request_id: first.request.request_id, old: true });
+  const prior = store.readPrivate({ runtime_id: first.request.runtime_id, provider: "kimi", nonce: first.request.nonce, ref: "receipt" });
+  const second = { ...request(first.request.nonce), request_id: createRequestId(), runtime_id: first.request.runtime_id, round: 2, material: createMaterial("delta"), previous_receipt_hash: null, previous_receipts: { kimi: prior.receipt_hash } };
+  store.beginContinuation({ request: second, config_hash: configHash });
+  const lock = path.join(root, first.request.runtime_id, ".3rd-review-round.lock");
+  writeFileSync(lock, JSON.stringify({ request_id: second.request_id, round: 2, pid: -1 }), { mode: 0o600 });
+  const replay = store.beginContinuation({ request: second, config_hash: configHash });
+  assert.equal(replay.existing, true);
+  assert.equal(replay.job.result.stop_reason, "continuation_interrupted");
+  assert.notEqual(replay.job.result.old, true);
 });

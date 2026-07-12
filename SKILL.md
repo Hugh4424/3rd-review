@@ -49,7 +49,7 @@ node {skill-root}/scripts/3rd-review.mjs cancel --runtime-id=<runtime> --provide
 - 每个 provider 只续跑自己的 native session。业务第 2 轮起使用新的 request、`previous_receipts` 映射和 bounded delta；同一轮 transport recovery 仍最多一次 resume **或** JSON repair；没有 silent fresh。
 - 认证、网络、TLS、空终态、输出超限、进程死亡和 host block 都只产出明确分类的诊断，不自动重派。
 - 进程活着但沉默时只显示 active/heartbeat；不会隐式 kill。需要停止时显式 `cancel`。
-- Codex 的临时认证隔离未通过真实验证时必须返回 `UNSUPPORTED`，不能回退到默认 profile。
+- Codex 复用原生订阅登录态，不复制认证文件；首轮固定 `read-only` sandbox、隔离 materials cwd、忽略用户 config/rules。续跑只使用同一 native session，不能 `--ephemeral` 或 fresh fallback。
 
 完整异常和维护原因见 [`docs/v3-exception-handling.md`](./docs/v3-exception-handling.md) 与 [`docs/v3-operations.md`](./docs/v3-operations.md)，冻结协议见 [`docs/v3-protocol-freeze.md`](./docs/v3-protocol-freeze.md)。
 

@@ -11,11 +11,11 @@ function config(overrides = {}) {
   return {
     version: 3,
     tiers: [["claude-code", "kimi"], ["opencode"]],
-    defaults: { deadline_seconds: null, max_input_bytes: 524288, max_output_bytes: 1048576, poll_interval_ms: 5000 },
+    defaults: { deadline_seconds: null, max_input_bytes: 524288, max_output_bytes: 1048576 },
     providers: {
       "claude-code": { enabled: true, command: "/usr/local/bin/claude", model: "haiku", effort: "low", thinking: null, auth_mode: "native_login", auth_env: [] },
       kimi: { enabled: true, command: "/usr/local/bin/kimi", model: "kimi", effort: "low", thinking: null, auth_mode: "native_login", auth_env: [] },
-      opencode: { enabled: true, command: "/usr/local/bin/opencode", model: "provider/model", effort: "low", thinking: null, auth_mode: "config_ref", auth_env: [] },
+      opencode: { enabled: true, command: "/usr/local/bin/opencode", model: "provider/model", effort: "low", thinking: null, auth_mode: "config_ref", auth_env: [], config_ref: "/tmp/opencode.json" },
     },
     ...overrides,
   };
@@ -29,8 +29,11 @@ test("global config is strict, hashable, and stores only auth environment names"
   assert.equal(validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, thinking: false } } })).config.providers.kimi.thinking, false);
   assert.throws(() => validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, thinking: "low" } } })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, api_key: "secret" } } })), { code: "CONFIG_INVALID" });
+  assert.throws(() => validateConfig(config({ providers: { ...config().providers, kimi: { ...config().providers.kimi, auth_mode: "env", auth_env: [] } } })), { code: "CONFIG_INVALID" });
+  assert.throws(() => validateConfig(config({ providers: { ...config().providers, opencode: { ...config().providers.opencode, config_ref: null } } })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ tiers: [["kimi", "kimi"]] })), { code: "CONFIG_INVALID" });
   assert.throws(() => validateConfig(config({ defaults: { api_key: "secret" } })), { code: "CONFIG_INVALID" });
+  assert.throws(() => validateConfig(config({ defaults: { idle_warning_seconds: 60 } })), { code: "CONFIG_INVALID" });
 });
 
 test("config loader requires private JSON permissions", () => {
@@ -45,6 +48,8 @@ test("config loader requires private JSON permissions", () => {
     const link = path.join(root, "config-link.json");
     symlinkSync(file, link);
     assert.throws(() => loadConfig(link), { code: "CONFIG_INVALID" });
+    chmodSync(root, 0o755);
+    assert.throws(() => loadConfig(file), { code: "CONFIG_INVALID" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

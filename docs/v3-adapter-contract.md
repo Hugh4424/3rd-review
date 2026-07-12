@@ -17,9 +17,9 @@
 | --- | --- | --- | --- |
 | Claude Code | stdin + `-p`, `dontAsk`, safe mode, Read allow/deny | JSON `result`、`session_id`、`usage` | 禁止 plan、bare |
 | Kimi 1.48.0 | stdin + print/stream-json + readonly agent file | JSON `{role,content}`；resume 提示含 `kimi -r <id>` | profile 由 runtime 提供 |
-| Codex 0.144.1 | `exec -s read-only --json -` | JSONL `thread.started`、agent message、turn usage | 临时 auth staging 未验收，当前拒绝启动 |
+| Codex 0.144.1 | `exec -s read-only --ignore-user-config --ignore-rules --json -` | JSONL `thread.started`、agent message、turn usage | 原生订阅登录态；runtime materials cwd |
 | OpenCode 1.17.18 | `run --pure --format json --agent <readonly>`；同 session `--session <id>` | JSONL `sessionID`、`part.text`、`part.tokens`、`step_finish` | 只读 agent 必须由 runtime project config 创建 |
 
-Codex 的 `exec` 子命令不接受 `-a never`；不得从旧版本示例复制该 flag。`--ignore-user-config` 在本机仍加载全局 skills，不能当隔离措施。后续 runtime profile 必须实测“临时 `CODEX_HOME` + 仅认证状态”后才可以标记为 supported；未通过时返回 `UNSUPPORTED`，而不是回退到有副作用的默认 profile。adapter 同时要求已验证标记和非空 `CODEX_HOME`，避免调用方误把默认 HOME 当隔离 runtime。当前 `exec resume` 也没有 `cwd` 或 sandbox 参数，不能推测它仍是 read-only，因此同样返回 `UNSUPPORTED`。
+Codex 的 `exec` 子命令不接受 `-a never`；不得从旧版本示例复制该 flag。V3 不复制 `CODEX_HOME` 的认证文件：CLI 继续使用原生订阅登录态，而模型工具被初始 session 的 `--sandbox read-only` 与 runtime `materials/` cwd 限制。`--ignore-user-config --ignore-rules` 降低用户配置和规则注入面，但不是 OS 容器隔离。`exec resume` 不重复声明 cwd/sandbox，因此 V3 只允许续跑 receipt 中同一 native session；首轮 profile/工作目录和 sandbox 由该 session 持久化，任何缺失或续跑失败都不得 fresh fallback。
 
 Claude 的 deny-list 不承担枚举未来工具的安全职责：`--allowedTools Read` 是主 allowlist，未知工具不在 allowlist 内就不能调用；safe mode 还关闭自定义 skills、plugins、hooks、MCP 和 agents。每次真实 Claude smoke 都必须带这两个 flags；CLI 不接受或 smoke 显示非 Read 工具被调用时，adapter 直接降为 `UNSUPPORTED`。

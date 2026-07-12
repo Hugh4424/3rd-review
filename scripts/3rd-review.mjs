@@ -13,6 +13,7 @@ function usage() {
   return [
     "Usage:",
     "  3rd-review validate --request=<request.json>",
+    "  3rd-review doctor --config=<config.json> [--runtime-root=<dir>]",
     "  3rd-review run --request=<request.json> --config=<config.json> [--output=<result.json>] [--runtime-root=<dir>]",
     "  3rd-review status --runtime-id=<id> [--runtime-root=<dir>]",
     "  3rd-review cancel --runtime-id=<id> --provider=<id> --attempt-id=<id> --nonce=<nonce> [--runtime-root=<dir>]",
@@ -68,6 +69,11 @@ async function main() {
     console.log(JSON.stringify(validateRequest(request), null, 2));
     return 0;
   }
+  if (command === "doctor") {
+    const config = loadConfig(value("config") ?? undefined);
+    console.log(JSON.stringify(await broker().doctor({ config, options: { cwd: value("cwd") ?? process.cwd() } }), null, 2));
+    return 0;
+  }
   if (command === "status") {
     console.log(JSON.stringify(broker().status(required("runtime-id")), null, 2));
     return 0;
@@ -84,13 +90,13 @@ async function main() {
     return 0;
   }
   if (command === "resume") {
-    const config = loadConfig(value("config"));
+    const config = loadConfig(value("config") ?? undefined);
     const request = readJson(value("request"), "--request");
     console.log(JSON.stringify(await broker().run({ request, config, options: { cwd: value("cwd") ?? process.cwd() } }), null, 2));
     return 0;
   }
   if (command === "repair") {
-    const config = loadConfig(value("config"));
+    const config = loadConfig(value("config") ?? undefined);
     const args = { runtime_id: required("runtime-id"), provider_id: required("provider"), session_id: required("session-id"), material_hash: required("material-hash"), nonce: required("nonce"), resume_input: required("resume-input"), config, options: { cwd: value("cwd") ?? process.cwd() } };
     console.log(JSON.stringify(await broker().repair(args), null, 2));
     return 0;
@@ -109,8 +115,9 @@ async function main() {
     console.log(JSON.stringify({ request_id: result.request_id, output: path.resolve(output) }));
     return 0;
   }
-  const config = loadConfig(value("config"));
-  const result = await broker().run({ request, config, host_provider: value("host-provider"), host_verified: value("host-verified") !== "false", options: { cwd: value("cwd") ?? process.cwd() } });
+  const config = loadConfig(value("config") ?? undefined);
+  const explicitHost = value("host-provider");
+  const result = await broker().run({ request, config, host_provider: explicitHost, host_verified: explicitHost !== null && value("host-verified") !== "false", options: { cwd: value("cwd") ?? process.cwd() } });
   if (output) atomicWrite(output, result);
   console.log(JSON.stringify(result, null, 2));
   return 0;

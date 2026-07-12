@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,4 +23,14 @@ test("Kimi and OpenCode receive broker-owned private read-only profiles", (t) =>
   assert.match(config, /"bash":"deny"/);
   assert.match(config, /"read":"allow"/);
   assert.equal(lstatSync(openCode.runtime_env.OPENCODE_CONFIG).mode & 0o077, 0);
+});
+
+test("runtime profile refuses a pre-existing symlink instead of following it", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-profile-link-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const runtime = path.join(root, "runtime_kimi", "materials");
+  mkdirSync(path.dirname(runtime), { recursive: true, mode: 0o700 });
+  // The runtime root is private, but this regression test protects against a stale hostile entry.
+  symlinkSync("/tmp", runtime, "dir");
+  assert.throws(() => prepareRuntimeProfile({ runtimeRoot: root, runtimeId: "runtime_kimi", providerId: "kimi", material: { text: "x" } }), { code: "RUNTIME_UNAVAILABLE" });
 });

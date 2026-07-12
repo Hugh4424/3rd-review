@@ -29,7 +29,7 @@ test("live broker joins tier routing, direct supervisor output, parsing, and par
     buildStart: () => ({ command: process.execPath, argv: [], cwd: root, env: {}, input: null }),
     parse: (combined) => id === "alpha" ? { text: null, session_id: null, error_code: "INVALID_JSON" } : { text: "ok", session_id: `${id}_session`, error_code: null },
   }; } };
-  const request = { protocol_version: 3, request_id: "11111111-1111-4111-8111-111111111111", nonce: null, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "codex", backend: "codex-cli", wrapper_hash: "test" }, material: createMaterial("review"), contract_ref: "opaque://test/contract", force_tier: null, overrides: {} };
+  const request = { protocol_version: 3, request_id: "11111111-1111-4111-8111-111111111111", nonce: null, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "alpha", backend: "test", wrapper_hash: "test" }, material: createMaterial("review"), contract_ref: "opaque://test/contract", force_tier: null, overrides: {} };
   const store = {
     gcExpired() { return []; },
     begin({ request: input }) { return { existing: false, request: { ...input, nonce: "test_nonce", runtime_id: "test_runtime" } }; },
@@ -50,6 +50,22 @@ test("live broker rejects an oversized request before it can start a provider", 
   const constrained = structuredClone(config);
   constrained.config.defaults.max_input_bytes = 1;
   await assert.rejects(new LiveBroker({ supervisor }).run({ request, config: constrained, options: { cwd: "/tmp" } }), { code: "INPUT_TOO_LARGE" });
+});
+
+test("doctor verifies direct CLI capability and generated profile without a model call", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-doctor-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const stdout = path.join(root, "probe.stdout"); writeFileSync(stdout, "adapter help", { mode: 0o600 });
+  const stderr = path.join(root, "probe.stderr"); writeFileSync(stderr, "", { mode: 0o600 });
+  const supervisor = { runtimeRoot: root, async run() { return { status: "completed", persisted: true, stdout_path: stdout, stderr_path: stderr }; } };
+  const adapters = { get() { return {
+    buildStart: () => ({ command: process.execPath, argv: [], cwd: root, env: {}, input: null }),
+    probe: () => ({ command: process.execPath, argv: ["--version"], cwd: root, env: {}, input: null }),
+    parseProbe: () => true,
+  }; } };
+  const broker = new LiveBroker({ supervisor, adapters });
+  const result = await broker.doctor({ config: { config_hash: `sha256:${"a".repeat(64)}`, config: { providers: { alpha: { enabled: true, command: process.execPath, auth_mode: "native_login", auth_env: [], env_allowlist: [], model: null, effort: null, thinking: null, profile: null } } } } });
+  assert.deepEqual(result.providers, [{ id: "alpha", status: "ready", available: true, auth: "native_login", profile_ready: true }]);
 });
 
 test("live broker resumes only the recorded provider session and consumes the single recovery budget", async (t) => {

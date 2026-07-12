@@ -23,15 +23,16 @@ test("all built-in adapters use a direct CLI plan and retain only declared envir
     assert.equal(plan.env.SECRET, undefined, id);
     assert.deepEqual(plan.redact_values, [], id);
     assert.equal(plan.env.THIRD_REVIEW_ACTIVE, "1", id);
-    assert.equal(plan.env.CODEX_HOME, id === "codex" ? "/tmp/codex-auth" : undefined, id);
+    assert.equal(plan.env.CODEX_HOME, undefined, id);
     assert.equal(plan.argv.includes("--bare"), false, id);
     assert.equal(plan.argv.includes("--plan"), false, id);
   }
 });
 
 test("declared authentication environment values are retained only for execution-time redaction", () => {
-  const plan = adapters.kimi.buildStart({ ...context, auth_env: ["REVIEW_TOKEN"], env: { ...context.env, REVIEW_TOKEN: "private-token" } });
+  const plan = adapters.kimi.buildStart({ ...context, auth_env: ["REVIEW_TOKEN"], env_allowlist: ["REVIEW_REGION"], env: { ...context.env, REVIEW_TOKEN: "private-token", REVIEW_REGION: "cn" } });
   assert.equal(plan.env.REVIEW_TOKEN, "private-token");
+  assert.equal(plan.env.REVIEW_REGION, "cn");
   assert.deepEqual(plan.redact_values, ["private-token"]);
 });
 
@@ -88,12 +89,14 @@ test("Kimi and OpenCode reject a start plan without their read-only profile", ()
   assert.throws(() => adapters.kimi.buildStart({ ...context, profile_path: null }), { code: "CONFIG_INVALID" });
   assert.throws(() => adapters.kimi.buildStart({ ...context, skills_dir: null }), { code: "CONFIG_INVALID" });
   assert.throws(() => adapters.opencode.buildStart({ ...context, profile_name: null }), { code: "CONFIG_INVALID" });
-  assert.throws(() => adapters.codex.buildStart({ ...context, codex_isolation_verified: false }), { code: "UNSUPPORTED" });
-  assert.throws(() => adapters.codex.buildStart({ ...context, env: { HOME: "/Users/test", PATH: "/usr/bin" } }), { code: "UNSUPPORTED" });
-  assert.throws(() => adapters.codex.probe({ ...context, codex_isolation_verified: false }), { code: "UNSUPPORTED" });
-  assert.throws(() => adapters.codex.probe({ ...context, env: { HOME: "/Users/test", PATH: "/usr/bin" } }), { code: "UNSUPPORTED" });
-  assert.throws(() => adapters.codex.buildResume(context), { code: "UNSUPPORTED" });
-  assert.throws(() => adapters.codex.buildResume({ ...context, codex_isolation_verified: false }), { code: "UNSUPPORTED" });
+  const codexStart = adapters.codex.buildStart(context);
+  assert.equal(codexStart.argv.includes("--ephemeral"), false);
+  assert.equal(codexStart.argv.includes("-s"), true);
+  assert.equal(codexStart.argv.includes("read-only"), true);
+  assert.equal(codexStart.argv.includes("--ignore-user-config"), true);
+  const codexResume = adapters.codex.buildResume(context);
+  assert.deepEqual(codexResume.argv.slice(0, 3), ["exec", "resume", context.session_id]);
+  assert.equal(codexResume.argv.includes("--ephemeral"), false);
   assert.equal(adapters.opencode.buildStart(context).argv.includes("--pure"), true);
   const openCodeResume = adapters.opencode.buildResume(context);
   assert.equal(openCodeResume.argv.includes(context.input), false);
