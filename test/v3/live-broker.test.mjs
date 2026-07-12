@@ -31,6 +31,7 @@ test("live broker joins tier routing, direct supervisor output, parsing, and par
   }; } };
   const request = { protocol_version: 3, request_id: "11111111-1111-4111-8111-111111111111", nonce: null, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "codex", backend: "codex-cli", wrapper_hash: "test" }, material: createMaterial("review"), contract_ref: "opaque://test/contract", force_tier: null, overrides: {} };
   const store = {
+    gcExpired() { return []; },
     begin({ request: input }) { return { existing: false, request: { ...input, nonce: "test_nonce", runtime_id: "test_runtime" } }; },
     commitProvider({ provider, result: output }) { return { id: provider, ...output, runtime_id: "test_runtime", receipt_ref: "private://test_runtime/beta/receipt", diagnostic_ref: "private://test_runtime/beta/diagnostic" }; },
     complete() {},

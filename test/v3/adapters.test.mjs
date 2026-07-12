@@ -21,11 +21,18 @@ test("all built-in adapters use a direct CLI plan and retain only declared envir
     assert.equal(plan.env.HOME, "/Users/test", id);
     assert.equal(plan.env.PATH, "/usr/bin", id);
     assert.equal(plan.env.SECRET, undefined, id);
+    assert.deepEqual(plan.redact_values, [], id);
     assert.equal(plan.env.THIRD_REVIEW_ACTIVE, "1", id);
     assert.equal(plan.env.CODEX_HOME, id === "codex" ? "/tmp/codex-auth" : undefined, id);
     assert.equal(plan.argv.includes("--bare"), false, id);
     assert.equal(plan.argv.includes("--plan"), false, id);
   }
+});
+
+test("declared authentication environment values are retained only for execution-time redaction", () => {
+  const plan = adapters.kimi.buildStart({ ...context, auth_env: ["REVIEW_TOKEN"], env: { ...context.env, REVIEW_TOKEN: "private-token" } });
+  assert.equal(plan.env.REVIEW_TOKEN, "private-token");
+  assert.deepEqual(plan.redact_values, ["private-token"]);
 });
 
 test("Claude Code profile is non-interactive read-only and resumes only its own native session", () => {
