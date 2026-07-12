@@ -30,7 +30,7 @@ mode: lightweight
 ```bash
 node {skill-root}/scripts/3rd-review.mjs run \
   --request=request.json --config=~/.config/3rd-review/config.json \
-  --host-provider=<host> --cwd=<bounded-material-cwd>
+  --host-provider=<host>
 ```
 
 `request.json` 使用 V3 protocol：材料的 UTF-8 bytes/hash 必须一致，首次 `nonce/runtime_id` 为 `null`。CLI 返回 transport result：每个 provider 的 `execution_eligible`、`session_id`、`runtime_id` 和 opaque private refs。
@@ -47,11 +47,11 @@ node {skill-root}/scripts/3rd-review.mjs cancel --runtime-id=<runtime> --provide
 - 同 tier 并行；只有当前层 **零** 个 `execution_eligible` 才进入下一层。
 - 保留成功和失败；调用方合并多个成功输出。
 - 每个 provider 只续跑自己的 native session。业务第 2 轮起使用新的 request、`previous_receipts` 映射和 bounded delta；同一轮 transport recovery 仍最多一次 resume **或** JSON repair；没有 silent fresh。
-- 认证、网络、空终态、输出超限、进程死亡和 host block 都只产出诊断，不自动重派。
+- 认证、网络、TLS、空终态、输出超限、进程死亡和 host block 都只产出明确分类的诊断，不自动重派。
 - 进程活着但沉默时只显示 active/heartbeat；不会隐式 kill。需要停止时显式 `cancel`。
 - Codex 的临时认证隔离未通过真实验证时必须返回 `UNSUPPORTED`，不能回退到默认 profile。
 
-完整异常和维护原因见 [`docs/v3-operations.md`](./docs/v3-operations.md)，冻结协议见 [`docs/v3-protocol-freeze.md`](./docs/v3-protocol-freeze.md)。
+完整异常和维护原因见 [`docs/v3-exception-handling.md`](./docs/v3-exception-handling.md) 与 [`docs/v3-operations.md`](./docs/v3-operations.md)，冻结协议见 [`docs/v3-protocol-freeze.md`](./docs/v3-protocol-freeze.md)。
 
 ## V2 兼容面
 

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { adapters, parseTerminal } from "../../lib/v3/adapters/index.mjs";
+import { adapters, classifyFailure, parseTerminal } from "../../lib/v3/adapters/index.mjs";
 
 const context = {
   command: "/usr/local/bin/reviewer", cwd: "/tmp/package", input: "review this bounded package",
   model: "test-model", effort: "low", env: { HOME: "/Users/test", CODEX_HOME: "/tmp/codex-auth", PATH: "/usr/bin", SECRET: "hidden" },
-  profile_path: "/tmp/profile.yaml", profile_name: "third-review-readonly", session_id: "native_session_1", resume_input: "continue with the repair request", codex_isolation_verified: true,
+  profile_path: "/tmp/profile.yaml", profile_name: "third-review-readonly", skills_dir: "/tmp/empty-skills", session_id: "native_session_1", resume_input: "continue with the repair request", codex_isolation_verified: true,
 };
 
 test("all built-in adapters use a direct CLI plan and retain only declared environment names", () => {
@@ -73,8 +73,20 @@ test("machine output parsers return final text and native session or report inco
   assert.equal(parseTerminal("codex", '{"type":"thread.started","thread_id":"x1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"partial"}}\n').error_code, "PROVIDER_PROTOCOL_INCOMPLETE");
 });
 
+test("provider process failures retain an actionable, non-retry classification", () => {
+  assert.equal(classifyFailure("unknown certificate verification error"), "NETWORK_TLS_CERTIFICATE");
+  assert.equal(classifyFailure("login required"), "AUTHENTICATION_FAILED");
+  assert.equal(classifyFailure("rate limit exceeded"), "RATE_LIMITED");
+  assert.equal(classifyFailure("ECONNRESET"), "NETWORK_UNAVAILABLE");
+  assert.equal(classifyFailure("temporary auth isolation is not verified"), "UNSUPPORTED");
+  assert.equal(classifyFailure("model not allowed for this account"), "PROCESS_EXIT_NONZERO");
+  assert.equal(classifyFailure("not allowed to read outside the package"), "PROVIDER_PERMISSION_DENIED");
+  assert.equal(classifyFailure("exit code 1"), "PROCESS_EXIT_NONZERO");
+});
+
 test("Kimi and OpenCode reject a start plan without their read-only profile", () => {
   assert.throws(() => adapters.kimi.buildStart({ ...context, profile_path: null }), { code: "CONFIG_INVALID" });
+  assert.throws(() => adapters.kimi.buildStart({ ...context, skills_dir: null }), { code: "CONFIG_INVALID" });
   assert.throws(() => adapters.opencode.buildStart({ ...context, profile_name: null }), { code: "CONFIG_INVALID" });
   assert.throws(() => adapters.codex.buildStart({ ...context, codex_isolation_verified: false }), { code: "UNSUPPORTED" });
   assert.throws(() => adapters.codex.buildStart({ ...context, env: { HOME: "/Users/test", PATH: "/usr/bin" } }), { code: "UNSUPPORTED" });

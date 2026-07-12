@@ -39,7 +39,7 @@
       "auth_mode": "native_login",
       "auth_env": [],
       "env_allowlist": [],
-      "profile": "/absolute/path/to/kimi-readonly-agent.yaml",
+      "profile": null,
       "backend": "kimi-cli",
       "config_ref": null
     },
@@ -52,7 +52,7 @@
       "auth_mode": "config_ref",
       "auth_env": [],
       "env_allowlist": [],
-      "profile": "third-review-readonly",
+      "profile": null,
       "backend": "opencode-cli",
       "config_ref": "~/.config/opencode/opencode.json"
     },
