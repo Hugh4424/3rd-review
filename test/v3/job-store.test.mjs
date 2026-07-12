@@ -33,6 +33,7 @@ test("durable job store binds nonce, provider receipt, opaque private refs, and 
   assert.equal(publicProvider.receipt_ref, `private://${first.request.runtime_id}/kimi/receipt`);
   assert.equal(store.readPrivate({ runtime_id: first.request.runtime_id, provider: "kimi", nonce: first.request.nonce, ref: "raw" }), "provider text");
   assert.equal(store.readPrivate({ runtime_id: first.request.runtime_id, provider: "kimi", nonce: first.request.nonce, ref: "receipt" }).session_id, "kimi_session");
+  assert.throws(() => store.readPrivate({ runtime_id: first.request.runtime_id, provider: "unknown", nonce: first.request.nonce, ref: "raw" }), { code: "BINDING_MISMATCH" });
   assert.deepEqual(store.begin({ request: request(first.request.nonce), config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }).job.result, result);
   assert.throws(() => store.begin({ request: request("different_nonce"), config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }), { code: "REPLAY_DETECTED" });
   assert.throws(() => store.readPrivate({ runtime_id: first.request.runtime_id, provider: "kimi", nonce: "different_nonce", ref: "raw" }), { code: "BINDING_MISMATCH" });
