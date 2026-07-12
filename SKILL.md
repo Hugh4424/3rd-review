@@ -1,58 +1,34 @@
 ---
 name: 3rd-review
-description: 通用异源 Agent 调用器。用户要求“审查、仔细审查、异源审查、找独立 reviewer”时使用；负责调用其他 provider，不生成业务 verdict 或报告。
-triggers:
-  - 审查
-  - 仔细审查
-  - 异源审查
-  - review
-  - third-party review
-mode: lightweight
+description: 通用异源 CLI 调用器。用户要求“审查、仔细审查、异源审查、找独立 reviewer”时使用；按全局配置调用其他 provider，返回原始意见、session id 和明确失败诊断，不生成业务 verdict、合同或报告。
 ---
 
-# 3rd-review V3
+# 3rd-review
 
-这是通用的异源 CLI Broker，不是审查规则引擎。
-
-- Broker：全局 provider tier、同源排除、直接 CLI、私有证据、session、状态、取消、有限恢复。
-- 调用方：准备有界材料和提示词，解释输出；wh-review 额外负责合同、业务 schema、报告和 stage-result。
-- 禁止把 `verdict`、finding、stage、合同语义或报告格式塞回 Broker。
-
-## 调用前
-
-1. 只传给 reviewer 完整但有界的材料 package；不要只给仓库路径让它无限探索。
-2. Host wrapper 必须显式填写 `host_hint.provider/backend/wrapper_hash`。同一 provider 会被排除。
-3. 配置来自 `~/.config/3rd-review/config.json`（目录 `0700`、文件 `0600`）。JSON 只存 CLI、model、thinking/effort、auth mode 和环境变量名；绝不存 API key 值。
-4. 不要设置默认 120/180 秒 deadline。需要硬上限时由调用方显式设置。
-
-## V3 CLI
+调用方负责准备精简 prompt、材料、审查合同和最终报告；本技能只执行异源 CLI。
 
 ```bash
 node {skill-root}/scripts/3rd-review.mjs run \
   --request=request.json --config=~/.config/3rd-review/config.json \
-  --host-provider=<host>
+  --host-provider=codex
 ```
 
-`request.json` 使用 V3 protocol：材料的 UTF-8 bytes/hash 必须一致，首次 `nonce/runtime_id` 为 `null`。CLI 返回 transport result：每个 provider 的 `execution_eligible`、`session_id`、`runtime_id` 和 opaque private refs。
+首次 request：
 
-```bash
-node {skill-root}/scripts/3rd-review.mjs status --runtime-id=<runtime>
-node {skill-root}/scripts/3rd-review.mjs read-private --runtime-id=<runtime> --provider=<id> --nonce=<nonce> --round=<n> --ref=raw|diagnostic|receipt|result
-node {skill-root}/scripts/3rd-review.mjs resume --request=<next-round-request.json> --config=<config>
-node {skill-root}/scripts/3rd-review.mjs cancel --runtime-id=<runtime> --provider=<id> --attempt-id=<attempt> --nonce=<nonce>
+```json
+{"version":4,"host_provider":"codex","prompt":"请独立审查以下变更...","continuation":null}
 ```
 
-## 路由与失败
+后续轮次只续跑已有 provider 的原生 session：
 
-- 同 tier 并行；只有当前层 **零** 个 `execution_eligible` 才进入下一层。
-- 保留成功和失败；调用方合并多个成功输出。
-- 每个 provider 只续跑自己的 native session。业务第 2 轮起使用新的 request、`previous_receipts` 映射和 bounded delta；同一轮 transport recovery 仍最多一次 resume **或** JSON repair；没有 silent fresh。
-- 认证、网络、TLS、空终态、输出超限、进程死亡和 host block 都只产出明确分类的诊断，不自动重派。
-- 进程活着但沉默时只显示 active/heartbeat；不会隐式 kill。需要停止时显式 `cancel`。
-- Codex 复用原生订阅登录态，不复制认证文件；首轮固定 `read-only` sandbox、隔离 materials cwd、忽略用户 config/rules。续跑只使用同一 native session，不能 `--ephemeral` 或 fresh fallback。
+```json
+{"version":4,"host_provider":"codex","prompt":"根据反馈再检查这两个问题...","continuation":{"runtime_id":"上一轮 runtime_id"}}
+```
 
-完整异常和维护原因见 [`docs/v3-exception-handling.md`](./docs/v3-exception-handling.md) 与 [`docs/v3-operations.md`](./docs/v3-operations.md)，冻结协议见 [`docs/v3-protocol-freeze.md`](./docs/v3-protocol-freeze.md)。
+- `tiers` 内并发；只有该层没有一个真实执行成功才进入下一层。
+- 自动排除 `host_provider`；成功和失败都返回，调用方自行合并成功意见。
+- 不自动重试、不 fresh fallback、不伪造成功。每个 provider 独立续跑自己的 session。
+- 临时状态在 `/tmp/3rd-review`，每次命令自动清理超过 24 小时且没有活跃进程的状态。
+- `status` 查看活跃进程；只有 `cancel` 会终止进程。没有默认 120/180 秒限制。
 
-## V2 兼容面
-
-`standalone.sh` 和 `scripts/run-heterologous-review.mjs` 仅用于旧调用方回归；禁止新增 provider、session、超时或报告逻辑。新的全局 skill 调用必须使用上面的 V3 CLI。
+查看完整异常语义与维护约束：[`docs/exceptions.md`](docs/exceptions.md)。
