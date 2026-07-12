@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { JobStore } from "../../lib/v3/job-store.mjs";
-import { createMaterial, RUNTIME_TTL_MS } from "../../lib/v3/protocol.mjs";
+import { createMaterial, RUNTIME_TTL_MS, sha256 } from "../../lib/v3/protocol.mjs";
 
 function request(nonce = null) {
   return { protocol_version: 3, request_id: "44444444-4444-4444-8444-444444444444", nonce, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "codex", backend: "cli", wrapper_hash: "test" }, material: createMaterial("bounded material"), contract_ref: "opaque://test/contract", force_tier: null, overrides: {} };
@@ -49,4 +49,15 @@ test("expired terminal runtimes are removed automatically but their request id s
   now += RUNTIME_TTL_MS + 1;
   assert.deepEqual(store.gcExpired(), [first.request.runtime_id]);
   assert.throws(() => store.begin({ request: request(first.request.nonce), config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }), { code: "NONCE_EXPIRED" });
+});
+
+test("an exclusive request reservation reports an active creator instead of replacing its index", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-store-reserve-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pending = request();
+  const index = path.join(root, ".3rd-review-requests", `${sha256(pending.request_id).slice(7)}.json`);
+  mkdirSync(path.dirname(index), { recursive: true, mode: 0o700 });
+  writeFileSync(index, '{"creating":true}\n', { mode: 0o600 });
+  const store = new JobStore({ runtimeRoot: root });
+  assert.throws(() => store.begin({ request: pending, config_hash: `sha256:${"a".repeat(64)}`, config_snapshot: "{}" }), { code: "DUPLICATE_ACTIVE_REQUEST" });
 });
