@@ -91,6 +91,14 @@ supervisor 没有默认 deadline，也不因 idle 自动重派或 fresh；它只
 
 `max_output_bytes` 是允许写入的总字节数：恰好等于上限可以正常完成，只有下一个字节到达才是 `OUTPUT_LIMIT`。如果进程在恰好写满后继续运行，它仍是 active，必须由显式 deadline 或用户取消结束；不能用隐式 wall-clock 补救。supervisor 只提供显式 `pruneTerminalBefore()` 释放内存；终态文件的 24 小时 TTL 由后续 broker GC 处理，不能在 status 查询时删除。
 
+## Phase 4 recovery 的不可变约束
+
+一个 provider 的 continuation 必须同时绑定 `runtime_id`、provider id、调用方显式提交的 native `session_id`、`config_hash`、profile hash 和 material hash。任何一个缺失或变化都不能改成 fresh：缺 session/已用过 recovery/已过期返回 `CONTINUATION_FAILED`，配置变化返回 `CONFIG_SNAPSHOT_CHANGED`，材料变化返回 `BINDING_MISMATCH`。
+
+每个 runtime/provider 合计最多一次自动 recovery：它要么是同 session resume，要么是完整输出的 `INVALID_JSON` repair；两者不能串联。认证、spawn、网络、进程死亡、idle、`OUTPUT_LIMIT` 和不完整 transport 不自动重试。active continuation 由独占 lock 保护，重复请求返回 `DUPLICATE_ACTIVE_REQUEST`，绝不能再开第二个进程。
+
+成功且 `execution_eligible=true` 的 continuation 才刷新私有 runtime 根目录内的 V3 expiry state；GC 只读取这个 state，不依赖容易被日志、lease 或失败诊断修改的目录 mtime。它仅删除已过期、没有 active lease 的真实目录，忽略 symlink 和并发中消失的目录。每个 provider 的 recovery count 和绑定也保存在同一个私有 runtime 内，Broker 重启或重复 `record()` 都不能重置它；若状态或 lease 无法安全持久化，返回 `RUNTIME_UNAVAILABLE`，不能报告成功却让 runtime 被错误清理。
+
 ## Phase 0 的可运行基线
 
 `scripts/3rd-review.mjs` 是唯一的新 V3 入口：
