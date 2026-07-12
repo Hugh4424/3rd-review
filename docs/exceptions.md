@@ -9,8 +9,9 @@
 | 网络、TLS、限流 | 保留该 provider 的失败诊断；同层零成功才尝试下一层 |
 | CLI 输出格式变化 | `PROVIDER_OUTPUT_INVALID`，不把半截输出当成功 |
 | prompt/output 超限 | 明确失败；调用方应缩小材料 |
-| 进程长时间运行 | `status` 显示 pid/heartbeat；不会因固定时限被杀 |
-| 用户取消 | 仅 `cancel` 终止；先发 SIGTERM，5 秒后仍存活才 SIGKILL，provider `status=cancelled`、错误码为 `CANCELLED` |
+| 静默但存活 | `heartbeat_at_ms` 由独立进程存活观测更新；`last_activity_at_ms` 仅在 stdout/stderr 有新字节时更新 |
+| 长时间运行 | 默认 `idle_timeout_ms=0`、`max_duration_ms=0`，不会因固定时限被杀；显式 idle 上限按**输出静默**而非存活判定，显式总时长上限按 wall-clock 判定，分别产生 `IDLE_TIMEOUT`、`PROCESS_TIMEOUT`；同刻触发时后者优先，先发 SIGTERM，5 秒后仍存活才 SIGKILL |
+| 用户取消 | `cancel` 终止；先发 SIGTERM，5 秒后仍存活才 SIGKILL，provider `status=cancelled`、错误码为 `CANCELLED`，优先于进程退出错误 |
 | broker 崩溃 | 保留 runtime state；后续 `status` 显示失联，不自动重跑原生 session |
 | 下一轮 | 仅续跑上一轮成功且有 session 的 provider；没有 session 明确失败 |
 | 临时文件 | 每次 `run`/`doctor`/`status` 清理超过 TTL 且无活跃 pid 的目录 |

@@ -4,7 +4,10 @@
     "root": "/tmp/3rd-review",
     "ttl_hours": 24,
     "max_prompt_bytes": 524288,
-    "max_output_bytes": 10485760
+    "max_output_bytes": 10485760,
+    "liveness_interval_ms": 1000,
+    "idle_timeout_ms": 0,
+    "max_duration_ms": 0
   },
   "tiers": [["claude-code", "kimi", "codex", "opencode"]],
   "providers": {
