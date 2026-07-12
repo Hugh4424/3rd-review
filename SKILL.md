@@ -37,8 +37,8 @@ node {skill-root}/scripts/3rd-review.mjs run \
 
 ```bash
 node {skill-root}/scripts/3rd-review.mjs status --runtime-id=<runtime>
-node {skill-root}/scripts/3rd-review.mjs read-private --runtime-id=<runtime> --provider=<id> --nonce=<nonce> --ref=raw|diagnostic|receipt
-node {skill-root}/scripts/3rd-review.mjs resume --runtime-id=<runtime> --provider=<id> --session-id=<native> --material-hash=<sha256> --nonce=<nonce> --resume-input=<bounded-delta> --config=<config>
+node {skill-root}/scripts/3rd-review.mjs read-private --runtime-id=<runtime> --provider=<id> --nonce=<nonce> --round=<n> --ref=raw|diagnostic|receipt|result
+node {skill-root}/scripts/3rd-review.mjs resume --request=<next-round-request.json> --config=<config>
 node {skill-root}/scripts/3rd-review.mjs cancel --runtime-id=<runtime> --provider=<id> --attempt-id=<attempt> --nonce=<nonce>
 ```
 
@@ -46,7 +46,7 @@ node {skill-root}/scripts/3rd-review.mjs cancel --runtime-id=<runtime> --provide
 
 - 同 tier 并行；只有当前层 **零** 个 `execution_eligible` 才进入下一层。
 - 保留成功和失败；调用方合并多个成功输出。
-- 每个 provider 只续跑自己的 native session。一次 provider/runtime 最多一次 resume **或** JSON repair；没有 silent fresh。
+- 每个 provider 只续跑自己的 native session。业务第 2 轮起使用新的 request、`previous_receipts` 映射和 bounded delta；同一轮 transport recovery 仍最多一次 resume **或** JSON repair；没有 silent fresh。
 - 认证、网络、空终态、输出超限、进程死亡和 host block 都只产出诊断，不自动重派。
 - 进程活着但沉默时只显示 active/heartbeat；不会隐式 kill。需要停止时显式 `cancel`。
 - Codex 的临时认证隔离未通过真实验证时必须返回 `UNSUPPORTED`，不能回退到默认 profile。

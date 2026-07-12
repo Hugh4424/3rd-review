@@ -52,6 +52,16 @@ test("material delivery rejects invalid Unicode and mismatched byte/hash declara
   );
 });
 
+test("round two binds a per-provider receipt map and rejects the ambiguous legacy scalar", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const next = request({ round: 2, runtime_id: "runtime_1", nonce: createNonce(), previous_receipt_hash: null, previous_receipts: { kimi: digest, "claude-code": digest } });
+  assert.deepEqual(validateRequest(next).previous_receipts, { kimi: digest, "claude-code": digest });
+  assert.throws(
+    () => validateRequest({ ...next, previous_receipts: undefined, previous_receipt_hash: digest }),
+    (error) => error instanceof ProtocolError && error.code === "REQUEST_INVALID",
+  );
+});
+
 test("config hash is canonical and rejects non-interoperable numbers", () => {
   const one = canonicalConfigHash({ z: [null, 3], a: { b: true, a: "x" } });
   const two = canonicalConfigHash({ a: { a: "x", b: true }, z: [null, 3] });

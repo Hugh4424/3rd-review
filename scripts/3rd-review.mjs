@@ -16,8 +16,9 @@ function usage() {
     "  3rd-review run --request=<request.json> --config=<config.json> [--output=<result.json>] [--runtime-root=<dir>]",
     "  3rd-review status --runtime-id=<id> [--runtime-root=<dir>]",
     "  3rd-review cancel --runtime-id=<id> --provider=<id> --attempt-id=<id> --nonce=<nonce> [--runtime-root=<dir>]",
-    "  3rd-review read-private --runtime-id=<id> --provider=<id> --nonce=<nonce> --ref=raw|diagnostic|receipt [--runtime-root=<dir>]",
-    "  3rd-review resume|repair --runtime-id=<id> --provider=<id> --session-id=<id> --material-hash=<sha256> --nonce=<nonce> --resume-input=<text> --config=<config.json>",
+    "  3rd-review read-private --runtime-id=<id> --provider=<id> --nonce=<nonce> --ref=raw|diagnostic|receipt|result [--round=<n>] [--runtime-root=<dir>]",
+    "  3rd-review resume --request=<round-request.json> --config=<config.json> [--runtime-root=<dir>]",
+    "  3rd-review repair --runtime-id=<id> --provider=<id> --session-id=<id> --material-hash=<sha256> --nonce=<nonce> --resume-input=<text> --config=<config.json>",
     "",
     "--adapter=mock remains a protocol fixture; all normal commands use the durable direct-CLI broker.",
   ].join("\n");
@@ -76,13 +77,22 @@ async function main() {
     return 0;
   }
   if (command === "read-private") {
-    console.log(JSON.stringify(broker().readPrivate({ runtime_id: required("runtime-id"), provider: required("provider"), nonce: required("nonce"), ref: required("ref") }), null, 2));
+    const roundValue = value("round");
+    const round = roundValue === null ? null : Number.parseInt(roundValue, 10);
+    if (roundValue !== null && (!Number.isSafeInteger(round) || round < 1)) throw new ProtocolError("REQUEST_INVALID", "--round must be a positive integer");
+    console.log(JSON.stringify(broker().readPrivate({ runtime_id: required("runtime-id"), provider: required("provider"), nonce: required("nonce"), ref: required("ref"), round }), null, 2));
     return 0;
   }
-  if (command === "resume" || command === "repair") {
+  if (command === "resume") {
+    const config = loadConfig(value("config"));
+    const request = readJson(value("request"), "--request");
+    console.log(JSON.stringify(await broker().run({ request, config, options: { cwd: value("cwd") ?? process.cwd() } }), null, 2));
+    return 0;
+  }
+  if (command === "repair") {
     const config = loadConfig(value("config"));
     const args = { runtime_id: required("runtime-id"), provider_id: required("provider"), session_id: required("session-id"), material_hash: required("material-hash"), nonce: required("nonce"), resume_input: required("resume-input"), config, options: { cwd: value("cwd") ?? process.cwd() } };
-    console.log(JSON.stringify(await broker()[command](args), null, 2));
+    console.log(JSON.stringify(await broker().repair(args), null, 2));
     return 0;
   }
   if (command !== "run") throw new ProtocolError("REQUEST_INVALID", `unknown command: ${command}`);

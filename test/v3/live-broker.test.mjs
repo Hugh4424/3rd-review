@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { LiveBroker } from "../../lib/v3/live-broker.mjs";
-import { createMaterial } from "../../lib/v3/protocol.mjs";
+import { createMaterial, createRequestId } from "../../lib/v3/protocol.mjs";
 
 const config = {
   config_hash: `sha256:${"a".repeat(64)}`,
@@ -79,4 +79,42 @@ test("live broker resumes only the recorded provider session and consumes the si
   assert.equal(resumed.execution_eligible, true);
   assert.equal(resumed.session_id, "native_session");
   await assert.rejects(broker.resume({ runtime_id: initial.runtime_id, provider_id: "alpha", session_id: "native_session", material_hash: request.material.input_hash, resume_input: "again", config, options: { cwd: root } }), { code: "CONTINUATION_FAILED" });
+});
+
+test("business continuation preserves each provider's immutable receipt lineage and final text", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "3rd-review-live-round-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const calls = [];
+  const supervisor = {
+    runtimeRoot: root,
+    async run(plan) {
+      const directory = path.join(root, plan.runtime_id, plan.provider);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const stdout = path.join(directory, `${plan.attempt_id}.stdout`);
+      const stderr = path.join(directory, `${plan.attempt_id}.stderr`);
+      const operation = plan.argv[0];
+      calls.push([plan.provider, operation, plan.argv.at(-1)]);
+      writeFileSync(stdout, operation === "resume" ? `round2-${plan.provider}` : `round1-${plan.provider}`, { mode: 0o600 });
+      writeFileSync(stderr, "", { mode: 0o600 });
+      return { status: "completed", persisted: true, stdout_path: stdout, stderr_path: stderr, output_bytes: 16, started_at_ms: 1, finished_at_ms: 2 };
+    },
+  };
+  const adapters = { get(id) { return {
+    buildStart: () => ({ command: process.execPath, argv: ["start"], cwd: root, env: {}, input: null }),
+    buildResume: ({ session_id, resume_input }) => ({ command: process.execPath, argv: ["resume", session_id, resume_input], cwd: root, env: {}, input: null }),
+    parse: (output) => ({ text: output.trim(), session_id: `${id}-session`, error_code: null }),
+  }; } };
+  const broker = new LiveBroker({ supervisor, adapters, recovery: { record() {} } });
+  const firstRequest = { protocol_version: 3, request_id: "66666666-6666-4666-8666-666666666666", nonce: null, round: 1, runtime_id: null, previous_receipt_hash: null, host_hint: { provider: "host", backend: "test", wrapper_hash: "test" }, material: createMaterial("first material"), contract_ref: "opaque://test/contract", force_tier: 0, overrides: {} };
+  const initial = await broker.run({ request: firstRequest, config, options: { cwd: root } });
+  const previous_receipts = Object.fromEntries(initial.providers.map((provider) => [provider.id, broker.readPrivate({ runtime_id: initial.runtime_id, provider: provider.id, nonce: initial.nonce, ref: "receipt", round: 1 }).receipt_hash]));
+  const secondRequest = { protocol_version: 3, request_id: createRequestId(), nonce: initial.nonce, round: 2, runtime_id: initial.runtime_id, previous_receipt_hash: null, previous_receipts, host_hint: firstRequest.host_hint, material: createMaterial("revised delta"), contract_ref: firstRequest.contract_ref, force_tier: null, overrides: {} };
+  const continued = await broker.run({ request: secondRequest, config, options: { cwd: root } });
+  assert.equal(continued.providers.length, 2);
+  assert.deepEqual(calls.map(([provider, operation]) => [provider, operation]), [["alpha", "start"], ["beta", "start"], ["alpha", "resume"], ["beta", "resume"]]);
+  assert.equal(broker.readPrivate({ runtime_id: initial.runtime_id, provider: "alpha", nonce: initial.nonce, ref: "result", round: 1 }), "round1-alpha");
+  assert.equal(broker.readPrivate({ runtime_id: initial.runtime_id, provider: "alpha", nonce: initial.nonce, ref: "result", round: 2 }), "round2-alpha");
+  const receipt = broker.readPrivate({ runtime_id: initial.runtime_id, provider: "alpha", nonce: initial.nonce, ref: "receipt", round: 2 });
+  assert.equal(receipt.parent_receipt_hash, previous_receipts.alpha);
+  assert.equal(receipt.material_hash, secondRequest.material.input_hash);
 });
