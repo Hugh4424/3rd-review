@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import kimi from "../lib/adapters/kimi.mjs";
 
@@ -18,4 +21,10 @@ test("Kimi does not turn a partial assistant event into success", () => {
   const parsed = kimi.parse('{"role":"assistant","content":"partial"}\n', "");
   assert.equal(parsed.ok, false);
   assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
+});
+
+test("Kimi uses only the frozen provider-private skills directory", () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const skills = path.join(runtime, "workspace", "kimi", "skills"); fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(skills, { recursive: true });
+  const result = kimi.start({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, "review", runtime);
+  assert.equal(result.cwd, cwd); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); assert.match(fs.readFileSync(path.join(runtime, "kimi", "reviewer.md"), "utf8"), /read and apply attached skills/i);
 });
