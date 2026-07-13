@@ -1,0 +1,108 @@
+# ADR 0001 — V4 CLI 审查执行合同
+
+**状态**：已采纳（2026-07-13）
+
+## 决策
+
+`3rd-review` 是通用、同步、CLI-first 的跨 provider broker。它不包含 workflow stage
+合同、业务技能、finding 合并、业务 verdict、报告或自动修复。V4 固定唯一的审查执行
+入口：
+
+```text
+3rd-review run --config=<config.json> --request=<request.json>
+```
+
+唯一的首轮附件扩展是下列完整三元组：
+
+```text
+--attachments=<manifest.json>
+--attachments-root=<absolute-root>
+--attachment-delivery=<file_only|always_embed>
+```
+
+三项必须一起出现。它们只允许首轮 request；包含 `continuation` 的 request 不得传附件。
+`--attachments-root` 必须是 config `attachment_roots` allowlist 中的真实目录，manifest
+的 source 必须是该 root 下的安全相对路径和允许 prefix。broker 校验 regular file、size
+和 SHA-256 后复制到 provider 私有 workspace；provider 不接触调用方真实仓库。
+
+## request 与续跑
+
+request 是 JSON，至少包含以下 V4 字段：
+
+```json
+{
+  "version": 4,
+  "host_provider": "codex",
+  "prompt": "frozen review packet prompt",
+  "continuation": null
+}
+```
+
+`host_provider` 是受支持的宿主 provider，broker 不让同源 provider 审查。调用方可选
+`provider_allowlist`，但其中只能有唯一、受支持且异源的 provider id。首轮的
+`continuation` 为 `null` 或省略；续跑唯一使用：
+
+```json
+{
+  "version": 4,
+  "host_provider": "codex",
+  "prompt": "delta-only continuation prompt",
+  "continuation": { "runtime_id": "<initial-runtime-uuid>" }
+}
+```
+
+续跑不接收 provider session id。broker 读取该 runtime 的私有状态，只续跑已完成且拥有
+原生 session 的 provider，并对冻结附件做完整性验证。runtime 过期、找不到、锁争用、
+附件变化或没有可续跑 session 都是显式错误/诊断，不能隐式创建新 runtime 或 fresh session。
+
+## stdout、exit code 与错误码
+
+成功执行时，`run` 向 stdout 输出一个 JSON 对象并以 exit code `0` 结束。输出包含
+`version`、`runtime_id`、`round`、`host_provider`、`selected_tier` 和每个 provider 的
+执行结果。provider 的 transport 失败、跳过、认证失败、超时、取消或输出解析失败仍属于
+该 JSON 的 provider result；它们不自动成为 broker 进程错误，也不表示业务 verdict。
+
+请求、配置、附件或 runtime 无法由 broker 接受时，CLI 向 stderr 输出：
+
+```json
+{ "error": { "code": "ERROR_CODE", "message": "details" } }
+```
+
+并以 exit code `2` 结束。error code 是稳定机器可读的失败分类，例如
+`REQUEST_INVALID`、`CONFIG_INVALID`、`ATTACHMENT_ROOT_FORBIDDEN`、
+`ATTACHMENT_HASH_MISMATCH`、`ATTACHMENT_IMMUTABLE`、`RUNTIME_EXPIRED`、
+`RUNTIME_BUSY`、`NO_CONTINUABLE_SESSION`、`PROVIDER_BUSY`、`PROMPT_TOO_LARGE` 和
+`ATTACHMENT_DELIVERY_UNSUPPORTED`。调用方必须保留 code 和诊断，不得把它们映射为 pass。
+
+收到 `SIGINT` 或 `SIGTERM` 时 broker 终止其 provider process tree 并写入
+`workflow_shutdown` 取消来源；CLI 分别以 signal exit code `130` 或 `143` 结束。
+
+## runtime、session 与私有原始输出
+
+`runtime_id` 是 broker 生成的 UUID，也是后续 request 允许携带的唯一续跑身份。每个
+provider 的 native `session_id`、原始 stdout/stderr、其私有文件引用和绝对路径由 runtime
+私有状态保存，不能从 `status` 获得。`run` 的 provider result 可以返回已解析输出、
+session id 和原始流 hash；调用方负责把这些视为私有证据并在公开投影中脱敏。
+
+取消只通过以下控制命令进行：
+
+```text
+3rd-review cancel --config=<config.json> --runtime-id=<uuid> \
+  --provider=<provider> --source=<source>
+```
+
+source 只能是 `user`、`workflow_shutdown`、`broker_idle_timeout` 或
+`broker_max_duration`。`status` 和 `doctor` 分别只读取脱敏 runtime 状态和执行环境
+能力；`doctor` 不做真实模型调用。
+
+## 兼容性边界
+
+`run-heterologous-review.mjs` 不是 V4 接口。任何旧 runner、旧 flag 或未列入
+`scripts/3rd-review.mjs` command allowlist 的参数都会被拒绝为 `REQUEST_INVALID`；调用方
+只能用本文固定的 `run --request` 合同执行审查。实现依据：
+
+- `scripts/3rd-review.mjs`
+- `lib/broker.mjs`
+- `lib/attachments.mjs`
+- `lib/runtime.mjs`
+- `docs/exceptions.md`
