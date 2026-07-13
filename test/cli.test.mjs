@@ -26,3 +26,10 @@ test("CLI requires all three attachment flags together", () => {
   const result = spawnSync(process.execPath, [cli, "run", `--config=${config}`, `--request=${request}`, "--attachments=manifest.json"], { encoding: "utf8" });
   assert.equal(result.status, 2); assert.match(result.stderr, /required together/);
 });
+
+test("CLI doctor verifies the supplied attachment root against configuration", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-cli-doctor-")); const cli = path.resolve("scripts/3rd-review.mjs"); const config = path.join(root, "config.json");
+  fs.writeFileSync(config, JSON.stringify({ version: 4, runtime: { root: path.join(root, "runtime"), max_duration_ms: 1000 }, attachment_roots: [{ root, sources: ["packets"] }], tiers: [["kimi"]], providers: { kimi: { command: path.resolve("test/fake-cli.mjs"), auth: { type: "native" } } } }));
+  const result = spawnSync(process.execPath, [cli, "doctor", `--config=${config}`, `--attachments-root=${root}`], { encoding: "utf8" });
+  assert.equal(result.status, 0); const output = JSON.parse(result.stdout); assert.deepEqual(output.capabilities, { attachments: true, cancel_source: true }); assert.deepEqual(output.attachment_root, { status: "ready" });
+});

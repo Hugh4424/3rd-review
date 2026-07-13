@@ -22,9 +22,18 @@ function config(root, tiers, attachmentRoot = null) {
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1000, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 
-test("doctor advertises broker and per-provider attachment/continuation capabilities", async () => {
-  const result = await new Broker(config(temp(), [["kimi", "opencode"]])).doctor();
+test("doctor requires configured attachment roots and verifies the requested root", async () => {
+  const unconfigured = await new Broker(config(temp(), [["kimi", "opencode"]])).doctor();
+  assert.deepEqual(unconfigured.capabilities, { attachments: false, cancel_source: true });
+  assert.deepEqual(unconfigured.attachment_root, { status: "unavailable", error: { code: "ATTACHMENT_ROOT_UNCONFIGURED" } });
+  const root = source(); const broker = new Broker(config(temp(), [["kimi", "opencode"]], root));
+  const result = await broker.doctor({ attachmentRoot: root });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
+  assert.deepEqual(result.attachment_root, { status: "ready" });
+  const forbidden = await broker.doctor({ attachmentRoot: temp() });
+  assert.deepEqual(forbidden.capabilities, { attachments: false, cancel_source: true });
+  assert.equal(forbidden.attachment_root.status, "unavailable");
+  assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
   assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["always_embed"] });
 });
@@ -70,9 +79,12 @@ test("Kimi gets a writable private root with a complete read-only bundle view", 
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].status, "completed"); const root = path.join(runtime, result.runtime_id, "work", "kimi"); const frozen = path.join(runtime, result.runtime_id, "workspace", "kimi"); assert.equal(fs.statSync(root).mode & 0o200, 0o200); for (const [name, contents] of files) { assert.equal(fs.readFileSync(path.join(root, "bundle", name), "utf8"), contents); assert.equal(fs.readFileSync(path.join(frozen, name), "utf8"), contents); assert.equal(fs.statSync(path.join(frozen, name)).mode & 0o222, 0); }
 });
 
-test("OpenCode always_embed sends the full 80KB attachment through stdin", async () => {
+test("OpenCode sends the full 80KB packet once then resumes with only the delta prompt", async () => {
   const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(80 * 1024)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 100_000; value.runtime.max_attachment_bytes = 100_000; value.providers.opencode.command = stdinOpenCode; const broker = new Broker(value); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const observed = JSON.parse(result.providers[0].output); assert.ok(observed.bytes > 80_000); assert.match(observed.head, /^PROMPT_HEAD/); assert.match(observed.tail, /ATTACHMENT_TAIL[\s\S]*<\/attachments>$/); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md")), false);
+  const resumed = await broker.run({ version: 4, host_provider: "codex", prompt: "DELTA_ONLY_MARKER inspect the fixed line", continuation: { runtime_id: result.runtime_id } });
+  assert.equal(resumed.providers[0].status, "completed"); assert.equal(resumed.providers[0].session_id, result.providers[0].session_id);
+  const delta = JSON.parse(resumed.providers[0].output); assert.equal(delta.bytes, Buffer.byteLength("DELTA_ONLY_MARKER inspect the fixed line")); assert.match(delta.head, /^DELTA_ONLY_MARKER/); assert.doesNotMatch(delta.tail, /ATTACHMENT_(HEAD|TAIL)/);
 });
 
 test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
@@ -81,7 +93,7 @@ test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
   const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.delivery_used, "always_embed");
 });
 
-test("a continuation setup failure preserves the prior completed session for a later round", async () => {
+test("an always_embed continuation uses the small delta prompt and preserves its session", async () => {
   const attachmentsRoot = source(); const runtime = temp();
   const first = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "first", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
   const constrained = config(runtime, [["opencode"]], attachmentsRoot); constrained.runtime.max_prompt_bytes = 20;
@@ -94,7 +106,7 @@ test("a continuation setup failure preserves the prior completed session for a l
     private_after_second: { status: afterSecond.status, session_id: afterSecond.session_id, delivery_used: afterSecond.delivery_used },
     third: { provider: third.providers[0].provider, status: third.providers[0].status, error: third.providers[0].error?.code, delivery_used: third.providers[0].delivery_used },
   }, {
-    second: { status: "failed", error: "PROMPT_TOO_LARGE", delivery_used: "always_embed" },
+    second: { status: "completed", error: undefined, delivery_used: "always_embed" },
     private_after_second: { status: "completed", session_id: first.providers[0].session_id, delivery_used: "always_embed" },
     third: { provider: "opencode", status: "completed", error: undefined, delivery_used: "always_embed" },
   });

@@ -12,6 +12,14 @@ node {skill-root}/scripts/3rd-review.mjs run \
   --request=request.json --config=~/.config/3rd-review/config.json
 ```
 
+部署前用同一 root 验证附件配置；`attachments:false` 或 `attachment_root.status !== "ready"` 时不得提交首轮附件：
+
+```bash
+node {skill-root}/scripts/3rd-review.mjs doctor \
+  --config=~/.config/3rd-review/config.json \
+  --attachments-root=/approved/packet-root
+```
+
 首轮可附带经过 hash/size 校验的只读材料。root 必须在配置的 `attachment_roots` 中：
 
 ```bash
