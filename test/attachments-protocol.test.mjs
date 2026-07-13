@@ -65,6 +65,11 @@ test("one request negotiates Kimi file_only and OpenCode always_embed", async ()
   assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
 });
 
+test("OpenCode always_embed preserves attachment head and tail beyond 2000 characters", async () => {
+  const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(3000)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot)); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const delivered = fs.readFileSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md"), "utf8"); assert.ok(delivered.length > 2000); assert.match(delivered, /ATTACHMENT_HEAD/); assert.match(delivered, /ATTACHMENT_TAIL/);
+});
+
 test("provider negotiation fails explicitly when fallback embedding is forbidden", async () => {
   const attachmentsRoot = source(); const broker = new Broker(config(temp(), [["opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", false) });
