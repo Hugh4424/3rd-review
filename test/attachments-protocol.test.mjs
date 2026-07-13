@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
-import { prepareAttachments } from "../lib/attachments.mjs";
+import { prepareAttachments, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
@@ -43,6 +43,18 @@ test("attachment validation rejects root, source, traversal, links, hashes and s
   assert.throws(() => prepareAttachments(linked, temp(), "kimi", 100, allow), { code: "ATTACHMENT_INVALID" });
 });
 
+test("attachment validation rejects duplicate destinations and hard links", () => {
+  const root = source(); const allow = [{ root, sources: ["skills"] }]; const input = packet(root); const duplicate = { ...input, manifest: { ...input.manifest, entries: [input.manifest.entries[0], { ...input.manifest.entries[0], source: "skills/review/SKILL.md" }] } };
+  assert.throws(() => prepareAttachments(duplicate, temp(), "kimi", 100, allow), { code: "ATTACHMENT_INVALID" });
+  fs.linkSync(path.join(root, "skills/review/SKILL.md"), path.join(root, "skills/review/hard.md")); const hard = { ...input, manifest: { ...input.manifest, entries: [{ ...input.manifest.entries[0], source: "skills/review/hard.md" }] } };
+  assert.throws(() => prepareAttachments(hard, temp(), "kimi", 100, allow), { code: "ATTACHMENT_INVALID" });
+});
+
+test("always_embed enforces the private embed budget", () => {
+  const root = temp(); const contents = "x".repeat(512 * 1024); fs.mkdirSync(path.join(root, "skills")); fs.writeFileSync(path.join(root, "skills", "large.md"), contents); const input = { root, delivery: "always_embed", manifest: { version: 1, bundle_id: "large", entries: [{ source: "skills/large.md", destination: "skills/large.md", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
+  assert.throws(() => validateAttachments(input, 1024 * 1024, [{ root, sources: ["skills"] }]), { code: "ATTACHMENT_EMBED_TOO_LARGE" });
+});
+
 test("one request negotiates Kimi file_only and OpenCode always_embed", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
@@ -63,6 +75,7 @@ test("provider negotiation fails explicitly when fallback embedding is forbidden
 test("continuation verifies frozen attachment identity and Kimi uses only private skills", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id }, attachments: packet(attachmentsRoot) }), { code: "ATTACHMENT_IMMUTABLE" });
   const frozen = path.join(runtime, first.runtime_id, "workspace/kimi/skills/review/SKILL.md");
   const second = await broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
   assert.equal(second.providers[0].status, "completed");

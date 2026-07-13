@@ -23,8 +23,8 @@ test("Kimi does not turn a partial assistant event into success", () => {
   assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
 });
 
-test("Kimi uses only the frozen provider-private skills directory", () => {
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const skills = path.join(runtime, "workspace", "kimi", "skills"); fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(skills, { recursive: true });
+test("Kimi runs from a writable cwd while reading the complete frozen bundle", () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const frozen = path.join(runtime, "workspace", "kimi"); const skills = path.join(frozen, "skills"); fs.mkdirSync(cwd, { recursive: true }); fs.mkdirSync(skills, { recursive: true }); fs.writeFileSync(path.join(frozen, "review-packet.v1.json"), "{}"); fs.mkdirSync(path.join(frozen, "contracts")); fs.writeFileSync(path.join(frozen, "contracts", "review.md"), "contract"); fs.chmodSync(frozen, 0o500);
   const result = kimi.start({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, "review", runtime);
-  assert.equal(result.cwd, cwd); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); assert.match(fs.readFileSync(path.join(runtime, "kimi", "reviewer.md"), "utf8"), /read and apply attached skills/i);
+  assert.equal(result.cwd, cwd); assert.equal(fs.statSync(cwd).mode & 0o200, 0o200); assert.equal(result.argv[result.argv.indexOf("--work-dir") + 1], frozen); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); assert.match(fs.readFileSync(path.join(runtime, "kimi", "reviewer.md"), "utf8"), /read and apply attached skills/i);
 });
