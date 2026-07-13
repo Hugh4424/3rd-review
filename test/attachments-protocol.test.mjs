@@ -18,7 +18,7 @@ function packet(root, delivery = "file_only", embed = true) {
 function source() { const root = temp(); fs.mkdirSync(path.join(root, "skills/review"), { recursive: true }); fs.writeFileSync(path.join(root, "skills/review/SKILL.md"), "lens"); return root; }
 function config(root, tiers, attachmentRoot = null) {
   const ids = [...new Set(tiers.flat())];
-  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1000, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
+  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1000, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 
 test("doctor advertises broker and per-provider attachment/continuation capabilities", async () => {
@@ -63,6 +63,11 @@ test("one request negotiates Kimi file_only and OpenCode always_embed", async ()
   const openCwd = path.join(runtime, result.runtime_id, "embed/opencode");
   assert.match(fs.readFileSync(path.join(openCwd, "review-input.md"), "utf8"), /<attachments mode="always_embed">/);
   assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
+});
+
+test("Kimi gets a writable private root with a complete read-only bundle view", async () => {
+  const attachmentsRoot = temp(); const files = [["review-packet.v1.json", "PACKET"], ["contracts/review.md", "CONTRACT"], ["skills/review/SKILL.md", "SKILL"]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(attachmentsRoot, name)), { recursive: true }); fs.writeFileSync(path.join(attachmentsRoot, name), contents); } const manifest = { version: 1, bundle_id: "complete", entries: files.map(([name, contents]) => ({ source: name, destination: name, size: Buffer.byteLength(contents), sha256: sha(contents), embed: false })) }; const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].status, "completed"); const root = path.join(runtime, result.runtime_id, "work", "kimi"); const frozen = path.join(runtime, result.runtime_id, "workspace", "kimi"); assert.equal(fs.statSync(root).mode & 0o200, 0o200); for (const [name, contents] of files) { assert.equal(fs.readFileSync(path.join(root, "bundle", name), "utf8"), contents); assert.equal(fs.readFileSync(path.join(frozen, name), "utf8"), contents); assert.equal(fs.statSync(path.join(frozen, name)).mode & 0o222, 0); }
 });
 
 test("OpenCode always_embed preserves attachment head and tail beyond 2000 characters", async () => {
