@@ -81,6 +81,25 @@ test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
   const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.delivery_used, "always_embed");
 });
 
+test("a continuation setup failure preserves the prior completed session for a later round", async () => {
+  const attachmentsRoot = source(); const runtime = temp();
+  const first = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "first", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
+  const constrained = config(runtime, [["opencode"]], attachmentsRoot); constrained.runtime.max_prompt_bytes = 20;
+  const second = await new Broker(constrained).run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
+  const afterSecond = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")).providers.opencode;
+  const third = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "recover", continuation: { runtime_id: first.runtime_id } });
+
+  assert.deepEqual({
+    second: { status: second.providers[0].status, error: second.providers[0].error?.code, delivery_used: second.providers[0].delivery_used },
+    private_after_second: { status: afterSecond.status, session_id: afterSecond.session_id, delivery_used: afterSecond.delivery_used },
+    third: { provider: third.providers[0].provider, status: third.providers[0].status, error: third.providers[0].error?.code, delivery_used: third.providers[0].delivery_used },
+  }, {
+    second: { status: "failed", error: "PROMPT_TOO_LARGE", delivery_used: "always_embed" },
+    private_after_second: { status: "completed", session_id: first.providers[0].session_id, delivery_used: "always_embed" },
+    third: { provider: "opencode", status: "completed", error: undefined, delivery_used: "always_embed" },
+  });
+});
+
 test("provider negotiation fails explicitly when fallback embedding is forbidden", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", false) });
