@@ -64,3 +64,16 @@ test("external termination stops liveness monitoring", async () => {
   await delay(25);
   assert.equal(liveness.length, settled);
 });
+
+test("large stdin write to an immediately exiting provider is a structured failure", async () => {
+  const result = await execute({
+    command: process.execPath,
+    argv: ["-e", "process.exit(0)"],
+    cwd: fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-process-test-")),
+    input: "x".repeat(1024 * 1024),
+    env: process.env,
+    redact: [],
+  }, { maxOutputBytes: 4096 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_STDIN_FAILED");
+});
