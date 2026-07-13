@@ -76,15 +76,18 @@ test("OpenCode always_embed sends the full 80KB attachment through stdin", async
 });
 
 test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
-  const attachmentsRoot = source(); const value = config(temp(), [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 20; const broker = new Broker(value);
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) }); assert.equal(result.providers[0].error.code, "PROMPT_TOO_LARGE");
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 20; const broker = new Broker(value);
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) }); assert.equal(result.providers[0].error.code, "PROMPT_TOO_LARGE"); assert.equal(result.providers[0].delivery_used, "always_embed");
+  const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.delivery_used, "always_embed");
 });
 
 test("provider negotiation fails explicitly when fallback embedding is forbidden", async () => {
-  const attachmentsRoot = source(); const broker = new Broker(config(temp(), [["opencode"]], attachmentsRoot));
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", false) });
   assert.equal(result.providers[0].status, "failed");
   assert.equal(result.providers[0].error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED");
+  assert.equal(Object.hasOwn(result.providers[0], "delivery_used"), false);
+  const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode, undefined);
 });
 
 test("continuation verifies frozen attachment identity and Kimi uses only private skills", async () => {
