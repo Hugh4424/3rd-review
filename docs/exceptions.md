@@ -15,7 +15,7 @@
 | 长时间运行 | 生产配置禁止 `idle_timeout_ms=0` 与 `max_duration_ms=0` 同时出现；Kimi 使用 360 秒硬总时限。idle 只看已验证的流进度，分别产生 `IDLE_TIMEOUT`、`PROCESS_TIMEOUT`；同刻触发时后者优先 |
 | 用户取消 | `cancel --source` 终止 provider process tree；`status=cancelled`、错误码 `CANCELLED`，来源写入 `error.source`，并保留 `cancellation_source` 兼容字段 |
 | broker 退出 | CLI 信号会终止 provider process tree 并记录 `cancellation_source=broker_shutdown`；后续 status/cleanup 发现 owner 丢失或 liveness lease 过期时标记 `ORPHANED_BROKER` 并回收 |
-| 并发 provider | 每个 provider 使用私有 workspace；Kimi 只读取冻结 skills，OpenCode 只接收嵌入内容；provider 不接触真实 repo |
+| 并发 provider | 每个 provider 使用私有 workspace；Kimi 的 cwd 可写但 bundle 视图只读，OpenCode 用 Read 分块读取完整 `review-input.md` 到 EOF，不使用会摘要截断的 `--file`；provider 不接触真实 repo |
 | 下一轮 | 仅续跑上一轮成功且有 session 的 provider；没有 session 明确失败 |
 | 原始输出 | stdout/stderr 分别写入 runtime 私有只读文件；ref、session、output、diagnostic、绝对路径不进入 `status` |
 | 临时文件 | 每次 `run`/`doctor`/`status` 清理超过 TTL 且无活跃 pid 的目录 |
