@@ -47,7 +47,7 @@ test("concurrent continuation atomically claims a provider and preserves unique 
   fs.writeFileSync(firstRequest, JSON.stringify({ version: 4, host_provider: "codex", prompt: "first", continuation: null }));
   const first = await collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${firstRequest}`]); assert.equal(first.code, 0); const initial = JSON.parse(first.stdout); assert.equal(initial.providers[0].status, "completed");
   fs.writeFileSync(nextRequest, JSON.stringify({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: initial.runtime_id } }));
-  const calls = await Promise.all([collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${nextRequest}`]), collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${nextRequest}`])]); const results = calls.map((item) => { assert.equal(item.code, 0, item.stderr); return JSON.parse(item.stdout); });
+  const firstCall = collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${nextRequest}`]); await delay(60); const calls = await Promise.all([firstCall, collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${nextRequest}`])]); const results = calls.map((item) => { assert.equal(item.code, 0, item.stderr); return JSON.parse(item.stdout); });
   assert.deepEqual(results.map((item) => item.round).sort(), [2, 3]); assert.equal(readRuntime(root, initial.runtime_id).round, 3);
   const providers = results.map((item) => item.providers[0]); assert.equal(providers.filter((item) => item.status === "completed").length, 1); assert.equal(providers.filter((item) => item.error?.code === "PROVIDER_BUSY").length, 1);
 });
