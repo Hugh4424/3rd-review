@@ -47,7 +47,7 @@ async function main() {
   if (command === "doctor") console.log(JSON.stringify(await broker.doctor({ attachmentRoot: value("attachments-root") ? path.resolve(value("attachments-root")) : null }), null, 2));
   else if (command === "run") console.log(JSON.stringify(await broker.run(runRequest()), null, 2));
   else if (command === "status") console.log(JSON.stringify(broker.status(required("runtime-id")), null, 2));
-  else if (command === "cancel") console.log(JSON.stringify(broker.cancel(required("runtime-id"), required("provider"), value("source") ?? "cli"), null, 2));
+  else if (command === "cancel") console.log(JSON.stringify(broker.cancel(required("runtime-id"), required("provider"), value("source") ?? "user"), null, 2));
 }
 main().catch((error) => { console.error(JSON.stringify({ error: publicError(error) })); process.exitCode = 2; }).finally(() => {
   if (forcedExit) clearTimeout(forcedExit);

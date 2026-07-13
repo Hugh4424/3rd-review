@@ -25,7 +25,7 @@ function collect(command, args) {
   return new Promise((resolve) => { const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }); let stdout = ""; let stderr = ""; child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; }); child.once("close", (code) => resolve({ code, stdout, stderr })); });
 }
 
-test("SIGTERM to broker cancels its provider tree with broker_shutdown provenance", async () => {
+test("SIGTERM to broker cancels its provider tree with workflow_shutdown provenance", async () => {
   const root = temp(); const config = path.join(root, "config.json"); const request = path.join(root, "request.json");
   fs.writeFileSync(config, JSON.stringify({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10_000, max_output_bytes: 100_000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 10_000, orphan_timeout_ms: 100 }, tiers: [["kimi"]], providers: { kimi: { enabled: true, command: slow, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } }));
   fs.writeFileSync(request, JSON.stringify({ version: 4, host_provider: "codex", prompt: "review", continuation: null }));
@@ -36,7 +36,7 @@ test("SIGTERM to broker cancels its provider tree with broker_shutdown provenanc
   const settled = readRuntime(root, runtime).providers.kimi;
   assert.equal(settled.status, "cancelled");
   assert.equal(settled.error.code, "CANCELLED");
-  assert.equal(settled.cancellation_source, "broker_shutdown");
+  assert.equal(settled.cancellation_source, "workflow_shutdown");
   await delay(30);
   assert.equal(isAlive(running.providers.kimi.pid), false);
 });

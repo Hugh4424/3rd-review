@@ -7,6 +7,7 @@ import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
 import { prepareAttachments, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
+import { createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
@@ -146,6 +147,14 @@ test("raw output is private and public status does not leak refs, output, sessio
 test("cancel source is persisted and projected on CANCELLED error", async () => {
   const runtime = temp(); const value = config(runtime, [["kimi"]]); value.providers.kimi.command = slow; const broker = new Broker(value);
   const running = broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null }); await new Promise((resolve) => setTimeout(resolve, 80));
-  const runtimeId = fs.readdirSync(runtime).find((name) => /^[0-9a-f-]{36}$/i.test(name)); assert.deepEqual(broker.cancel(runtimeId, "kimi", "workflowhub"), { cancelled: true, source: "workflowhub" });
-  const result = await running; assert.equal(result.providers[0].error.source, "workflowhub"); assert.equal(result.providers[0].cancellation_source, "workflowhub");
+  const runtimeId = fs.readdirSync(runtime).find((name) => /^[0-9a-f-]{36}$/i.test(name)); assert.deepEqual(broker.cancel(runtimeId, "kimi", "workflow_shutdown"), { cancelled: true, source: "workflow_shutdown" });
+  const result = await running; assert.equal(result.providers[0].error.source, "workflow_shutdown"); assert.equal(result.providers[0].cancellation_source, "workflow_shutdown");
+});
+
+test("cancellation provenance is limited to the documented enum", () => {
+  const runtime = temp(); const state = createRuntime(runtime, 24, "codex");
+  assert.throws(() => requestCancellation(runtime, state.runtime_id, "kimi", "workflowhub"), { code: "REQUEST_INVALID" });
+  for (const source of ["user", "workflow_shutdown", "broker_idle_timeout", "broker_max_duration"]) {
+    assert.doesNotThrow(() => requestCancellation(runtime, state.runtime_id, "kimi", source));
+  }
 });
