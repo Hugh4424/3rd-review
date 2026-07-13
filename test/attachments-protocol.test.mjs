@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
-import { prepareAttachments, validateAttachments } from "../lib/attachments.mjs";
+import { prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
@@ -31,12 +31,22 @@ test("doctor requires configured attachment roots and verifies the requested roo
   const result = await broker.doctor({ attachmentRoot: root });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.attachment_root, { status: "ready" });
+  assert.equal(result.verification, "workspace_copy_only");
   const forbidden = await broker.doctor({ attachmentRoot: temp() });
   assert.deepEqual(forbidden.capabilities, { attachments: false, cancel_source: true });
   assert.equal(forbidden.attachment_root.status, "unavailable");
   assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
   assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["always_embed"] });
+});
+
+test("doctor attachment probe copies and locks a private bundle without touching the packet root", () => {
+  const runtime = temp(); const packetRoot = source(); const before = fs.readdirSync(packetRoot);
+  for (const provider of ["kimi", "opencode"]) probeAttachmentWorkspace(runtime, provider, 1);
+  assert.deepEqual(fs.readdirSync(packetRoot), before);
+  assert.equal(fs.readdirSync(runtime).some((name) => name.startsWith("attachment-probe-")), false);
+  const file = path.join(runtime, "not-a-directory"); fs.writeFileSync(file, "x");
+  assert.throws(() => probeAttachmentWorkspace(file, "kimi", 1), { code: "ATTACHMENT_PROBE_FAILED" });
 });
 
 test("attachment validation rejects root, source, traversal, links, hashes and size overflow", () => {
