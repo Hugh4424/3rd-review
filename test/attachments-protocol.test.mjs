@@ -7,7 +7,7 @@ import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
 import { prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
-import { createRuntime, requestCancellation } from "../lib/runtime.mjs";
+import { cancellationRequested, cancellationSource, createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
@@ -83,6 +83,23 @@ test("one request negotiates Kimi file_only and OpenCode always_embed", async ()
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
   const openCwd = path.join(runtime, result.runtime_id, "embed/opencode");
   assert.equal(fs.existsSync(path.join(openCwd, "review-input.md")), false); assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
+});
+
+test("first-round provider_allowlist is a strict route intersection", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, provider_allowlist: ["kimi"], attachments: packet(attachmentsRoot, "file_only", true) });
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi"]);
+  assert.equal(result.providers[0].delivery_used, "file_only");
+});
+
+test("continuation intersects its frozen allowlist with completed sessions only", async () => {
+  const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]]));
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, provider_allowlist: ["kimi", "opencode"] });
+  const statePath = path.join(runtime, first.runtime_id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  state.providers.opencode.status = "running"; fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+  const resumed = await broker.run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: first.runtime_id }, provider_allowlist: ["kimi", "opencode"] });
+  assert.deepEqual(resumed.providers.map((item) => item.provider), ["kimi"]);
+  assert.equal(resumed.providers[0].session_id, first.providers.find((item) => item.provider === "kimi").session_id);
 });
 
 test("Kimi gets a writable private root with a complete read-only bundle view", async () => {
@@ -167,4 +184,11 @@ test("cancellation provenance is limited to the documented enum", () => {
   for (const source of ["user", "workflow_shutdown", "broker_idle_timeout", "broker_max_duration"]) {
     assert.doesNotThrow(() => requestCancellation(runtime, state.runtime_id, "kimi", source));
   }
+});
+
+test("a tampered cancellation marker remains explicit instead of defaulting to user", () => {
+  const runtime = temp(); const state = createRuntime(runtime, 24, "codex");
+  fs.writeFileSync(path.join(runtime, state.runtime_id, ".cancel-kimi"), JSON.stringify({ version: 1, source: "forged" }));
+  assert.equal(cancellationRequested(runtime, state.runtime_id, "kimi"), true);
+  assert.equal(cancellationSource(runtime, state.runtime_id, "kimi"), "invalid");
 });
