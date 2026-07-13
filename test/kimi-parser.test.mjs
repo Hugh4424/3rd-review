@@ -23,8 +23,28 @@ test("Kimi does not turn a partial assistant event into success", () => {
   assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
 });
 
+test("Kimi rejects a terminal resume hint when the assistant emitted thinking only", () => {
+  const id = "57d02175-7367-499e-b72a-84465218ae4e";
+  const parsed = kimi.parse(`${JSON.stringify({ type: "final", role: "assistant", content: [{ type: "think", think: "private reasoning" }] })}\n`, `To resume this session: kimi -r ${id}`);
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.error.code, "PROVIDER_OUTPUT_INVALID");
+});
+
+test("Kimi accepts a text terminal transcript with its explicit native resume hint", () => {
+  const id = "57d02175-7367-499e-b72a-84465218ae4e";
+  const parsed = kimi.parse(`${JSON.stringify({ role: "assistant", content: [{ type: "think", think: "reasoning" }, { type: "text", text: "R1_ACK kimi DIFF_HEAD DIFF_TAIL" }] })}\n`, `To resume this session: kimi -r ${id}`);
+  assert.deepEqual(parsed, { ok: true, text: "R1_ACK kimi DIFF_HEAD DIFF_TAIL", session_id: id, usage: null });
+});
+
+test("Kimi continuation passes the parser-issued native session to --session", () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-resume-")); const cwd = path.join(runtime, "work", "kimi"); fs.mkdirSync(cwd, { recursive: true });
+  const id = "57d02175-7367-499e-b72a-84465218ae4e";
+  const result = kimi.resume({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, id, "delta", runtime);
+  assert.equal(result.argv[result.argv.indexOf("--session") + 1], id);
+});
+
 test("Kimi runs from a writable cwd while reading the complete frozen bundle without exposing an absolute bundle path", () => {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const bundle = path.join(cwd, "bundle"); const skills = path.join(bundle, "skills"); fs.mkdirSync(skills, { recursive: true }); fs.writeFileSync(path.join(bundle, "review-packet.v1.json"), "{}"); fs.mkdirSync(path.join(bundle, "contracts")); fs.writeFileSync(path.join(bundle, "contracts", "review.md"), "contract"); fs.chmodSync(bundle, 0o500);
   const result = kimi.start({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, "review", runtime);
-  assert.equal(result.cwd, cwd); assert.equal(fs.statSync(cwd).mode & 0o200, 0o200); assert.equal(result.argv[result.argv.indexOf("--work-dir") + 1], cwd); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); const system = fs.readFileSync(path.join(runtime, "kimi", "reviewer.md"), "utf8"); assert.match(system, /read and apply attached skills/i); assert.match(system, /relative `bundle` directory/i); assert.doesNotMatch(system, new RegExp(bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))); assert.match(system, /review-packet\.v1\.json.*contracts.*skills/is);
+  assert.equal(result.cwd, cwd); assert.equal(fs.statSync(cwd).mode & 0o200, 0o200); assert.equal(result.argv[result.argv.indexOf("--work-dir") + 1], cwd); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); const system = fs.readFileSync(path.join(runtime, "kimi", "reviewer.md"), "utf8"); assert.match(system, /read and apply attached skills/i); assert.match(system, /relative `bundle` directory/i); assert.match(system, /Use the provided ReadFile tool.*relative bundle paths/i); assert.doesNotMatch(system, new RegExp(bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))); assert.match(system, /review-packet\.v1\.json.*contracts.*skills/is);
 });
