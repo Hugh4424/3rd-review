@@ -10,6 +10,7 @@ import { validateConfig } from "../lib/config.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
+const stdinOpenCode = path.resolve("test/stdin-opencode-cli.mjs");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-attachments-"));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 function packet(root, delivery = "file_only", embed = true) {
@@ -61,8 +62,7 @@ test("one request negotiates Kimi file_only and OpenCode always_embed", async ()
   assert.ok(result.providers.every((item) => item.status === "completed"));
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
   const openCwd = path.join(runtime, result.runtime_id, "embed/opencode");
-  assert.match(fs.readFileSync(path.join(openCwd, "review-input.md"), "utf8"), /<attachments mode="always_embed">/);
-  assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
+  assert.equal(fs.existsSync(path.join(openCwd, "review-input.md")), false); assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
 });
 
 test("Kimi gets a writable private root with a complete read-only bundle view", async () => {
@@ -70,9 +70,14 @@ test("Kimi gets a writable private root with a complete read-only bundle view", 
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].status, "completed"); const root = path.join(runtime, result.runtime_id, "work", "kimi"); const frozen = path.join(runtime, result.runtime_id, "workspace", "kimi"); assert.equal(fs.statSync(root).mode & 0o200, 0o200); for (const [name, contents] of files) { assert.equal(fs.readFileSync(path.join(root, "bundle", name), "utf8"), contents); assert.equal(fs.readFileSync(path.join(frozen, name), "utf8"), contents); assert.equal(fs.statSync(path.join(frozen, name)).mode & 0o222, 0); }
 });
 
-test("OpenCode always_embed preserves attachment head and tail beyond 2000 characters", async () => {
-  const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(3000)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot)); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const delivered = fs.readFileSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md"), "utf8"); assert.ok(delivered.length > 2000); assert.match(delivered, /ATTACHMENT_HEAD/); assert.match(delivered, /ATTACHMENT_TAIL/);
+test("OpenCode always_embed sends the full 80KB attachment through stdin", async () => {
+  const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(80 * 1024)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 100_000; value.runtime.max_attachment_bytes = 100_000; value.providers.opencode.command = stdinOpenCode; const broker = new Broker(value); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const observed = JSON.parse(result.providers[0].output); assert.ok(observed.bytes > 80_000); assert.match(observed.head, /^PROMPT_HEAD/); assert.match(observed.tail, /ATTACHMENT_TAIL[\s\S]*<\/attachments>$/); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md")), false);
+});
+
+test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
+  const attachmentsRoot = source(); const value = config(temp(), [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 20; const broker = new Broker(value);
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) }); assert.equal(result.providers[0].error.code, "PROMPT_TOO_LARGE");
 });
 
 test("provider negotiation fails explicitly when fallback embedding is forbidden", async () => {
