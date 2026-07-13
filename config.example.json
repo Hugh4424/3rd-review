@@ -7,7 +7,8 @@
     "max_output_bytes": 10485760,
     "liveness_interval_ms": 1000,
     "idle_timeout_ms": 0,
-    "max_duration_ms": 0
+    "max_duration_ms": 360000,
+    "orphan_timeout_ms": 30000
   },
   "tiers": [["claude-code", "kimi", "codex", "opencode"]],
   "providers": {

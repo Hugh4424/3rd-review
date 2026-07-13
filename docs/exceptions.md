@@ -9,10 +9,11 @@
 | 网络、TLS、限流 | 保留该 provider 的失败诊断；同层零成功才尝试下一层 |
 | CLI 输出格式变化 | `PROVIDER_OUTPUT_INVALID`，不把半截输出当成功 |
 | prompt/output 超限 | 明确失败；调用方应缩小材料 |
-| 静默但存活 | `heartbeat_at_ms` 由独立进程存活观测更新；`last_activity_at_ms` 仅在 stdout/stderr 有新字节时更新 |
-| 长时间运行 | 默认 `idle_timeout_ms=0`、`max_duration_ms=0`，不会因固定时限被杀；显式 idle 上限按**输出静默**而非存活判定，显式总时长上限按 wall-clock 判定，分别产生 `IDLE_TIMEOUT`、`PROCESS_TIMEOUT`；同刻触发时后者优先，先发 SIGTERM，5 秒后仍存活才 SIGKILL |
-| 用户取消 | `cancel` 终止；先发 SIGTERM，5 秒后仍存活才 SIGKILL，provider `status=cancelled`、错误码为 `CANCELLED`，优先于进程退出错误 |
-| broker 崩溃 | 保留 runtime state；后续 `status` 显示失联，不自动重跑原生 session |
+| 静默但存活 | `process_alive_at_ms` 仅表示 PID 存活；`last_progress_at_ms` 仅由已解析的 provider 流事件更新，二者不能互相替代 |
+| 长时间运行 | 生产配置禁止 `idle_timeout_ms=0` 与 `max_duration_ms=0` 同时出现；Kimi 使用 360 秒硬总时限。idle 只看已验证的流进度，分别产生 `IDLE_TIMEOUT`、`PROCESS_TIMEOUT`；同刻触发时后者优先 |
+| 用户取消 | `cancel` 终止 provider process tree；`status=cancelled`、错误码 `CANCELLED`，并记录 `cancellation_source=caller` |
+| broker 退出 | CLI 信号会终止 provider process tree 并记录 `cancellation_source=broker_shutdown`；后续 status/cleanup 发现 owner 丢失或 liveness lease 过期时标记 `ORPHANED_BROKER` 并回收 |
+| 并发 provider | 每个 provider 使用 `workspace/<provider>/review-input.md` 与独立 profile/skills；禁止共享 workspace 文件 |
 | 下一轮 | 仅续跑上一轮成功且有 session 的 provider；没有 session 明确失败 |
 | 临时文件 | 每次 `run`/`doctor`/`status` 清理超过 TTL 且无活跃 pid 的目录 |
 

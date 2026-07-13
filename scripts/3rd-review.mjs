@@ -18,13 +18,29 @@ function validateArgs(command) {
   }
 }
 
+let activeBroker = null;
+let shutdownSignal = null;
+let forcedExit = null;
+function shutdown(signal) {
+  if (shutdownSignal) return;
+  shutdownSignal = signal;
+  activeBroker?.shutdown();
+  forcedExit = setTimeout(() => process.exit(128 + (signal === "SIGINT" ? 2 : 15)), 6_000);
+  forcedExit.unref();
+}
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+
 async function main() {
   const command = process.argv[2]; if (!command || command === "help" || command === "--help") { console.log(usage()); return; }
   validateArgs(command);
-  const broker = new Broker(loadConfig(value("config") ?? undefined));
+  const broker = new Broker(loadConfig(value("config") ?? undefined)); activeBroker = broker;
   if (command === "doctor") console.log(JSON.stringify(await broker.doctor(), null, 2));
   else if (command === "run") console.log(JSON.stringify(await broker.run(json(required("request"))), null, 2));
   else if (command === "status") console.log(JSON.stringify(broker.status(required("runtime-id")), null, 2));
   else if (command === "cancel") console.log(JSON.stringify(broker.cancel(required("runtime-id"), required("provider")), null, 2));
 }
-main().catch((error) => { console.error(JSON.stringify({ error: publicError(error) })); process.exitCode = 2; });
+main().catch((error) => { console.error(JSON.stringify({ error: publicError(error) })); process.exitCode = 2; }).finally(() => {
+  if (forcedExit) clearTimeout(forcedExit);
+  if (shutdownSignal) process.exitCode = 128 + (shutdownSignal === "SIGINT" ? 2 : 15);
+});
