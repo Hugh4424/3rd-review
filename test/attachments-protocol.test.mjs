@@ -76,13 +76,13 @@ test("always_embed enforces the private embed budget", () => {
   assert.throws(() => validateAttachments(input, 1024 * 1024, [{ root, sources: ["skills"] }]), { code: "ATTACHMENT_EMBED_TOO_LARGE" });
 });
 
-test("one request negotiates Kimi file_only and OpenCode always_embed", async () => {
+test("file_only sends Kimi a private bundle and rejects OpenCode", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
-  assert.ok(result.providers.every((item) => item.status === "completed"));
+  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
+  const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.status, "failed"); assert.equal(openCode.error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED"); assert.equal(Object.hasOwn(openCode, "delivery_used"), false);
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
-  const openCwd = path.join(runtime, result.runtime_id, "embed/opencode");
-  assert.equal(fs.existsSync(path.join(openCwd, "review-input.md")), false); assert.equal(fs.existsSync(path.join(openCwd, "skills")), false);
+  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed/opencode")), false);
 });
 
 test("first-round provider_allowlist is a strict route intersection", async () => {
@@ -123,7 +123,7 @@ test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
 
 test("an always_embed continuation uses the small delta prompt and preserves its session", async () => {
   const attachmentsRoot = source(); const runtime = temp();
-  const first = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "first", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
+  const first = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "first", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) });
   const constrained = config(runtime, [["opencode"]], attachmentsRoot); constrained.runtime.max_prompt_bytes = 20;
   const second = await new Broker(constrained).run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
   const afterSecond = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")).providers.opencode;

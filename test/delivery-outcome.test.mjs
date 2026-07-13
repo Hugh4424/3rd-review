@@ -67,7 +67,6 @@ function config(root, tiers, attachmentRoot) {
 
 for (const [policy, provider, expected] of [
   ["file_only", "kimi", "file_only"],
-  ["file_only", "opencode", "always_embed"],
   ["always_embed", "kimi", "file_only"],
   ["always_embed", "opencode", "always_embed"],
 ]) {
@@ -89,6 +88,27 @@ for (const [policy, provider, expected] of [
   });
 }
 
+test("file_only never falls back to an always_embed provider", async () => {
+  const attachmentRoot = source();
+  const runtimeRoot = temp();
+  const result = await new Broker(config(runtimeRoot, [["opencode"]], attachmentRoot)).run({
+    version: 4,
+    host_provider: "codex",
+    prompt: "review",
+    continuation: null,
+    provider_allowlist: ["opencode"],
+    attachments: attachments(attachmentRoot, "file_only"),
+  });
+
+  assert.deepEqual(result.providers.map((item) => item.provider), ["opencode"]);
+  assert.equal(result.providers[0].status, "failed");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED");
+  assert.equal(Object.hasOwn(result.providers[0], "delivery_used"), false);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, result.runtime_id, "embed", "opencode")), false);
+  const state = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
+  assert.equal(state.providers.opencode, undefined);
+});
+
 test("a provider with no compatible attachment capability fails explicitly and is not silently skipped", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
@@ -107,7 +127,7 @@ test("a provider with no compatible attachment capability fails explicitly and i
   assert.equal(unsupported.error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED");
 });
 
-test("continuation reuses and reports each provider's first-round delivery_used", async () => {
+test("continuation reuses only the file_only provider session", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
   const first = await broker.run({
@@ -125,7 +145,9 @@ test("continuation reuses and reports each provider's first-round delivery_used"
   });
 
   assert.equal(first.providers.find((item) => item.provider === "kimi").delivery_used, "file_only");
-  assert.equal(first.providers.find((item) => item.provider === "opencode").delivery_used, "always_embed");
+  assert.equal(first.providers.find((item) => item.provider === "opencode").error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED");
+  assert.equal(Object.hasOwn(first.providers.find((item) => item.provider === "opencode"), "delivery_used"), false);
+  assert.deepEqual(second.providers.map((item) => item.provider), ["kimi"]);
   for (const item of second.providers) {
     assert.equal(item.status, "completed");
     assert.equal(item.delivery_used, first.providers.find((prior) => prior.provider === item.provider).delivery_used);
