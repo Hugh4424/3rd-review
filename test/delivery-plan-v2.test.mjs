@@ -78,7 +78,7 @@ test("file_only fails closed when triad filename, outer hash, or packet hash bin
 });
 
 test("always_embed measures the complete rendered prompt once and fails before a provider session", async () => {
-  const input = source(); const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 1024 * 1024)).run({ version: 4, host_provider: "codex", prompt: "p".repeat(500 * 1024), continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
+  const input = source(); const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 511 * 1024)).run({ version: 4, host_provider: "codex", prompt: "p".repeat(520 * 1024), continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
   assert.equal(result.providers[0].error.code, "MATERIAL_TOO_LARGE");
   assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
