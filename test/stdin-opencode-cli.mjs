@@ -4,4 +4,4 @@ if (args.includes("--version")) { console.log("stdin-opencode 1.0"); process.exi
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => { console.log(JSON.stringify({ type: "session.completed", session_id: "opencode-stdin-session", text: JSON.stringify({ bytes: Buffer.byteLength(input), head: input.slice(0, 40), tail: input.slice(-40) }) })); });
+process.stdin.on("end", () => { console.log(JSON.stringify({ type: "session.completed", session_id: "opencode-stdin-session", text: JSON.stringify({ bytes: Buffer.byteLength(input), head: input.slice(0, 128), tail: input.slice(-128) }) })); });
