@@ -147,8 +147,13 @@ test("run may expose delivery outcome while status keeps attachment internals pr
   assert.equal(result.providers[0].delivery_used, "file_only");
   assert.equal(typeof result.providers[0].session_id, "string");
   assert.equal(typeof result.providers[0].output, "string");
+  assert.match(result.providers[0].raw_stdout_sha256, /^[a-f0-9]{64}$/);
+  assert.match(result.providers[0].raw_stderr_sha256, /^[a-f0-9]{64}$/);
+  const privateState = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
+  assert.equal(privateState.providers.kimi.raw_stdout_sha256, result.providers[0].raw_stdout_sha256);
+  assert.equal(privateState.providers.kimi.raw_stderr_sha256, result.providers[0].raw_stderr_sha256);
   const status = JSON.stringify(broker.status(result.runtime_id));
-  assert.doesNotMatch(status, /attachments|attachment_delivery|bundle_id|manifest_hash|workspace|raw_stdout_ref|raw_stderr_ref|session_id|kimi opinion/);
+  assert.doesNotMatch(status, /attachments|attachment_delivery|bundle_id|manifest_hash|workspace|raw_stdout_ref|raw_stderr_ref|raw_stdout_sha256|raw_stderr_sha256|session_id|kimi opinion/);
   assert.equal(status.includes(attachmentRoot), false);
   assert.equal(status.includes(runtimeRoot), false);
 });
