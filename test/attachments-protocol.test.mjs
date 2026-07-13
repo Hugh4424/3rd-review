@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
-import { prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cancellationRequested, cancellationSource, createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
@@ -18,7 +18,7 @@ function packet(root, delivery = "file_only", embed = true) {
   const names = ["skills/review/SKILL.md", "review-packet.v1.json", "changes.diff", "manifest.json"];
   return { root, delivery, manifest: { version: 1, bundle_id: "bundle-1", entries: names.map((source) => { const value = fs.readFileSync(path.join(root, source)); return { source, destination: source, size: value.length, sha256: sha(value), embed }; }) } };
 }
-function source() { const root = temp(); const diff = "DIFF_HEAD\nDIFF_TAIL\n"; const review = { version: "review-packet.v1", packet_hash: "1".repeat(64), manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; const packet = `${JSON.stringify(review)}\n`; const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), contents); } const manifest = { packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments: files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })) }; fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`); return root; }
+function source() { const root = temp(); const diff = "DIFF_HEAD\nDIFF_TAIL\n"; const review = { version: "review-packet.v1", manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review); const packet = `${JSON.stringify(review)}\n`; const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), contents); } const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("bundle-1", outer) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`); return root; }
 function config(root, tiers, attachmentRoot = null) {
   const ids = [...new Set(tiers.flat())];
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1000, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
@@ -77,12 +77,12 @@ test("attachment validation does not render always_embed material before deliver
   assert.doesNotThrow(() => validateAttachments(input, 1024 * 1024, [{ root, sources: ["skills"] }]));
 });
 
-test("file_only sends Kimi and OpenCode private bundles", async () => {
+test("file_only refuses to start Kimi or OpenCode without a verified OS sandbox", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
-  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
-  const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.status, "completed"); assert.equal(openCode.delivery_used, "file_only");
-  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
+  assert.equal(result.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(openCode.delivery_used, "file_only");
+  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), false);
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed/opencode")), false);
 });
 
@@ -103,17 +103,15 @@ test("continuation intersects its frozen allowlist with completed sessions only"
   assert.equal(resumed.providers[0].session_id, first.providers.find((item) => item.provider === "kimi").session_id);
 });
 
-test("Kimi gets a writable private root with a complete read-only bundle view", async () => {
-  const attachmentsRoot = source(); const extra = ["contracts/review.md", "CONTRACT"]; fs.mkdirSync(path.join(attachmentsRoot, "contracts"), { recursive: true }); fs.writeFileSync(path.join(attachmentsRoot, extra[0]), extra[1]); const included = ["review-packet.v1.json", "changes.diff", "skills/review/SKILL.md", extra[0]]; const inner = JSON.parse(fs.readFileSync(path.join(attachmentsRoot, "manifest.json"), "utf8")); inner.attachments = included.map((destination) => { const contents = fs.readFileSync(path.join(attachmentsRoot, destination)); return { destination, size: contents.length, sha256: sha(contents) }; }); fs.writeFileSync(path.join(attachmentsRoot, "manifest.json"), `${JSON.stringify(inner)}\n`); const files = [...included, "manifest.json"].map((name) => [name, fs.readFileSync(path.join(attachmentsRoot, name), "utf8")]); const manifest = { version: 1, bundle_id: "complete", entries: files.map(([name, contents]) => ({ source: name, destination: name, size: Buffer.byteLength(contents), sha256: sha(contents), embed: false })) }; const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].status, "completed"); const root = path.join(runtime, result.runtime_id, "work", "kimi"); const frozen = path.join(runtime, result.runtime_id, "workspace", "kimi"); assert.equal(fs.statSync(root).mode & 0o200, 0o200); for (const [name, contents] of files) { assert.equal(fs.readFileSync(path.join(root, "bundle", name), "utf8"), contents); assert.equal(fs.readFileSync(path.join(frozen, name), "utf8"), contents); assert.equal(fs.statSync(path.join(frozen, name)).mode & 0o222, 0); }
+test("Kimi file_only stops before creating a provider workspace when sandbox proof is unavailable", async () => {
+  const attachmentsRoot = source(); const extra = ["contracts/review.md", "CONTRACT"]; fs.mkdirSync(path.join(attachmentsRoot, "contracts"), { recursive: true }); fs.writeFileSync(path.join(attachmentsRoot, extra[0]), extra[1]); const included = ["review-packet.v1.json", "changes.diff", "skills/review/SKILL.md", extra[0]]; const inner = JSON.parse(fs.readFileSync(path.join(attachmentsRoot, "manifest.json"), "utf8")); inner.attachments = included.map((destination) => { const contents = fs.readFileSync(path.join(attachmentsRoot, destination)); return { destination, size: contents.length, sha256: sha(contents) }; }); const outer = [...inner.attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: false })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: false }]; inner.delivery_manifest_hash = canonicalDeliveryManifestHash("complete", outer); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(path.join(attachmentsRoot, "manifest.json"), `${JSON.stringify(inner)}\n`); const files = [...included, "manifest.json"].map((name) => [name, fs.readFileSync(path.join(attachmentsRoot, name), "utf8")]); const manifest = { version: 1, bundle_id: "complete", entries: files.map(([name, contents]) => ({ source: name, destination: name, size: Buffer.byteLength(contents), sha256: sha(contents), embed: false })) }; const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "work", "kimi")), false);
 });
 
 test("OpenCode sends the full 80KB packet once then resumes with only the delta prompt", async () => {
   const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(80 * 1024)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 100_000; value.runtime.max_attachment_bytes = 100_000; value.providers.opencode.command = stdinOpenCode; const broker = new Broker(value); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const observed = JSON.parse(result.providers[0].output); assert.ok(observed.bytes > 80_000); assert.match(observed.head, /^PROMPT_HEAD/); assert.match(observed.tail, /ATTACHMENT_TAIL[\s\S]*<\/attachments>$/); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md")), false);
-  const resumed = await broker.run({ version: 4, host_provider: "codex", prompt: "DELTA_ONLY_MARKER inspect the fixed line", continuation: { runtime_id: result.runtime_id } });
-  assert.equal(resumed.providers[0].status, "completed"); assert.equal(resumed.providers[0].session_id, result.providers[0].session_id);
-  const delta = JSON.parse(resumed.providers[0].output); assert.equal(delta.bytes, Buffer.byteLength("DELTA_ONLY_MARKER inspect the fixed line")); assert.match(delta.head, /^DELTA_ONLY_MARKER/); assert.doesNotMatch(delta.tail, /ATTACHMENT_(HEAD|TAIL)/);
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "DELTA_ONLY_MARKER inspect the fixed line", continuation: { runtime_id: result.runtime_id } }), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
@@ -126,19 +124,7 @@ test("an always_embed continuation uses the small delta prompt and preserves its
   const attachmentsRoot = source(); const runtime = temp();
   const first = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "first", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) });
   const constrained = config(runtime, [["opencode"]], attachmentsRoot); constrained.runtime.max_prompt_bytes = 20;
-  const second = await new Broker(constrained).run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
-  const afterSecond = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")).providers.opencode;
-  const third = await new Broker(config(runtime, [["opencode"]], attachmentsRoot)).run({ version: 4, host_provider: "codex", prompt: "recover", continuation: { runtime_id: first.runtime_id } });
-
-  assert.deepEqual({
-    second: { status: second.providers[0].status, error: second.providers[0].error?.code, delivery_used: second.providers[0].delivery_used },
-    private_after_second: { status: afterSecond.status, session_id: afterSecond.session_id, delivery_used: afterSecond.delivery_used },
-    third: { provider: third.providers[0].provider, status: third.providers[0].status, error: third.providers[0].error?.code, delivery_used: third.providers[0].delivery_used },
-  }, {
-    second: { status: "completed", error: undefined, delivery_used: "always_embed" },
-    private_after_second: { status: "completed", session_id: first.providers[0].session_id, delivery_used: "always_embed" },
-    third: { provider: "opencode", status: "completed", error: undefined, delivery_used: "always_embed" },
-  });
+  await assert.rejects(() => new Broker(constrained).run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } }), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("file_only rejects bundles without the required triad", async () => {
@@ -150,16 +136,12 @@ test("file_only rejects bundles without the required triad", async () => {
   const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.session_id, undefined);
 });
 
-test("continuation verifies frozen attachment identity and Kimi uses only private skills", async () => {
+test("file_only Kimi has no continuation session when sandbox proof is unavailable", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
-  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id }, attachments: packet(attachmentsRoot) }), { code: "ATTACHMENT_IMMUTABLE" });
-  const frozen = path.join(runtime, first.runtime_id, "workspace/kimi/skills/review/SKILL.md");
+  assert.equal(first.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const second = await broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(second.providers[0].status, "completed");
-  fs.chmodSync(frozen, 0o600); fs.writeFileSync(frozen, "swap");
-  const third = await broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(third.providers[0].error.code, "ATTACHMENT_IMMUTABLE");
+  assert.equal(second.providers[0].error.code, "NO_CONTINUABLE_SESSION");
 });
 
 test("raw output is private and public status does not leak refs, output, sessions or absolute paths", async () => {

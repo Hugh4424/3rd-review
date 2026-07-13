@@ -21,7 +21,6 @@ function runRequest() {
   const result = json(required("request")); const manifest = value("attachments"); const root = value("attachments-root"); const delivery = value("attachment-delivery");
   if (manifest || root || delivery) {
     if (!manifest || !root || !delivery) throw new ReviewError("REQUEST_INVALID", "--attachments, --attachments-root, and --attachment-delivery are required together");
-    if (result.continuation) throw new ReviewError("ATTACHMENT_IMMUTABLE", "continuation must not pass attachment flags");
     result.attachments = { manifest: json(manifest), root: path.resolve(root), delivery };
   }
   return result;

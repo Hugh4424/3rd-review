@@ -46,6 +46,7 @@ node {skill-root}/scripts/3rd-review.mjs run \
 - 订阅 CLI 使用 `auth.type:"native"`；API-key provider 使用 `auth.type:"env"` 并只填写 `auth.env` 的变量名，绝不写入值。
 - 不自动重试、不 fresh fallback、不伪造成功。每个 provider 独立续跑自己的 session。
 - `file_only` 先生成 delivery plan，再把完整、hash/size 校验的 `review-packet.v1.json`、`changes.diff`、`manifest.json` 复制到 provider 专用只读 bundle。Kimi 和 OpenCode 只读取该 bundle；prompt 不嵌入 diff，也不泄露宿主路径、worktree 或 git。
+- `file_only` 还要求已验证的 OS 路径 ACL sandbox；cwd、只读权限和 system prompt 都不算隔离。当前 macOS `sandbox-exec` 无法在不重新开放宿主路径的前提下证明该 ACL，因此 broker 返回 `ATTACHMENT_SANDBOX_UNAVAILABLE`，不会启动 provider。
 - `always_embed` 只在 provider 明确支持时使用：broker 渲染完整最终 prompt 后一次计算 UTF-8 总量；超过 512KB 返回 `MATERIAL_TOO_LARGE`，不产生 session 或可续跑结果。不得用 diff chunk 绕过该上限。
 - 续跑不重传附件；broker 会重新验证首轮冻结副本的 size/hash/身份。
 - `status` 是公开投影，不返回 session、review output、raw output ref 或绝对路径。

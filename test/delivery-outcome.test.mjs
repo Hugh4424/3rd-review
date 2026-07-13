@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 
@@ -14,14 +15,14 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 function source() {
   const root = temp();
   const diff = "DIFF_HEAD\nDIFF_TAIL\n";
-  const review = { version: "review-packet.v1", packet_hash: "1".repeat(64), manifest_hash: "2".repeat(64), diff_sha256: sha(diff) };
+  const review = { version: "review-packet.v1", manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review);
   const packet = `${JSON.stringify(review)}\n`;
   fs.mkdirSync(path.join(root, "skills/review"), { recursive: true });
   fs.writeFileSync(path.join(root, "skills/review/SKILL.md"), "lens");
   fs.writeFileSync(path.join(root, "review-packet.v1.json"), packet);
   fs.writeFileSync(path.join(root, "changes.diff"), diff);
   const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]];
-  fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify({ packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments: files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })) })}\n`);
+  const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   return root;
 }
 
@@ -67,7 +68,6 @@ function config(root, tiers, attachmentRoot) {
 }
 
 for (const [policy, provider, expected] of [
-  ["file_only", "kimi", "file_only"],
   ["always_embed", "opencode", "always_embed"],
 ]) {
   test(`${policy} policy reports ${provider} delivery_used=${expected}`, async () => {
@@ -88,7 +88,7 @@ for (const [policy, provider, expected] of [
   });
 }
 
-test("file_only uses OpenCode's real private attachment capability", async () => {
+test("file_only OpenCode fails closed without an OS sandbox", async () => {
   const attachmentRoot = source();
   const runtimeRoot = temp();
   const result = await new Broker(config(runtimeRoot, [["opencode"]], attachmentRoot)).run({
@@ -101,14 +101,15 @@ test("file_only uses OpenCode's real private attachment capability", async () =>
   });
 
   assert.deepEqual(result.providers.map((item) => item.provider), ["opencode"]);
-  assert.equal(result.providers[0].status, "completed");
+  assert.equal(result.providers[0].status, "failed");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   assert.equal(result.providers[0].delivery_used, "file_only");
   assert.equal(fs.existsSync(path.join(runtimeRoot, result.runtime_id, "embed", "opencode")), false);
   const state = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
   assert.equal(state.providers.opencode.delivery.delivery_mode, "file_only");
 });
 
-test("a file_only provider set runs without embedding fallback", async () => {
+test("a file_only provider set reports sandbox failure without embedding fallback", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
   const result = await broker.run({
@@ -120,13 +121,14 @@ test("a file_only provider set runs without embedding fallback", async () => {
   });
 
   assert.deepEqual(result.providers.map((item) => item.provider).sort(), ["kimi", "opencode"]);
-  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
+  assert.equal(result.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const openCode = result.providers.find((item) => item.provider === "opencode");
-  assert.equal(openCode.status, "completed");
+  assert.equal(openCode.status, "failed");
+  assert.equal(openCode.error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   assert.equal(openCode.delivery_used, "file_only");
 });
 
-test("continuation reuses only the file_only provider session", async () => {
+test("file_only sandbox failure creates no continuable session", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
   const first = await broker.run({
@@ -143,13 +145,10 @@ test("continuation reuses only the file_only provider session", async () => {
     continuation: { runtime_id: first.runtime_id },
   });
 
-  assert.equal(first.providers.find((item) => item.provider === "kimi").delivery_used, "file_only");
-  assert.equal(first.providers.find((item) => item.provider === "opencode").delivery_used, "file_only");
-  assert.deepEqual(second.providers.map((item) => item.provider).sort(), ["kimi", "opencode"]);
-  for (const item of second.providers) {
-    assert.equal(item.status, "completed");
-    assert.equal(item.delivery_used, first.providers.find((prior) => prior.provider === item.provider).delivery_used);
-  }
+  assert.equal(first.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(first.providers.find((item) => item.provider === "opencode").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.deepEqual(second.providers.map((item) => item.provider), [null]);
+  assert.equal(second.providers[0].error.code, "NO_CONTINUABLE_SESSION");
 });
 
 test("run may expose delivery outcome while status keeps attachment internals private", async () => {
@@ -165,10 +164,8 @@ test("run may expose delivery outcome while status keeps attachment internals pr
   });
 
   assert.equal(result.providers[0].delivery_used, "file_only");
-  assert.equal(typeof result.providers[0].session_id, "string");
-  assert.equal(typeof result.providers[0].output, "string");
-  assert.match(result.providers[0].raw_stdout_sha256, /^[a-f0-9]{64}$/);
-  assert.match(result.providers[0].raw_stderr_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(result.providers[0].session_id, undefined);
   const privateState = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
   assert.equal(privateState.providers.kimi.raw_stdout_sha256, result.providers[0].raw_stdout_sha256);
   assert.equal(privateState.providers.kimi.raw_stderr_sha256, result.providers[0].raw_stderr_sha256);
