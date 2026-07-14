@@ -1,7 +1,35 @@
 #!/usr/bin/env node
+import readline from "node:readline";
 const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("fake-cli 1.0"); process.exit(0); }
-if (args.includes("-p")) console.log(JSON.stringify({ result: "claude opinion", session_id: "claude-session" }));
+if (args.includes("app-server")) {
+  const send = (value) => console.log(JSON.stringify(value));
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
+    else if (["thread/start", "thread/resume"].includes(message.method)) send({ id: message.id, result: { thread: { id: message.params.threadId ?? "codex-session" } } });
+    else if (message.method === "turn/start") {
+      send({ id: message.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
+      send({ method: "turn/started", params: { threadId: message.params.threadId, turn: { id: "turn-1", status: "inProgress", items: [] } } });
+      send({ method: "item/completed", params: { threadId: message.params.threadId, turnId: "turn-1", item: { id: "item-1", type: "agentMessage", text: "codex opinion" } } });
+      send({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: "turn-1", status: "completed", items: [] } } });
+    }
+  });
+}
+else if (args.includes("--wire")) {
+  const sessionIndex = args.indexOf("--session");
+  const session = sessionIndex >= 0 ? args[sessionIndex + 1] : "12345678-1234-1234-1234-123456789abc";
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocol_version: "1.10" } }));
+    if (message.method === "prompt") {
+      console.log(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "TextPart", payload: { text: "kimi opinion" } } }));
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { status: "finished" } }));
+      console.error(`To resume this session: kimi -r ${session}`);
+    }
+  });
+}
+else if (args.includes("-p")) console.log(`${JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" })}\n${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "claude opinion", session_id: "claude-session" })}`);
 else if (args.includes("exec")) console.log(`${JSON.stringify({ type: "thread.started", thread_id: "codex-session" })}\n${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "codex opinion" } })}\n${JSON.stringify({ type: "turn.completed" })}`);
 else if (args.includes("--output-format")) console.log(JSON.stringify({ type: "final", session_id: "kimi-session", text: "kimi opinion" }));
 else if (args.includes("run")) console.log(JSON.stringify({ type: "session.completed", session_id: "opencode-session", text: "opencode opinion" }));

@@ -11,19 +11,26 @@ import { cleanup, createRuntime, isAlive, readRuntime, updateRuntime } from "../
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const silent = path.resolve("test/silent-cli.mjs");
+const slowSuccess = path.resolve("test/slow-success-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
+const deadHealth = { healthCheckIntervalMs: 10, probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "test probe" }) };
 function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000 }, tiers, providers: Object.fromEntries(["claude-code", "kimi", "codex", "opencode"].map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
 
-test("runtime timeout configuration rejects an unbounded production lifecycle", () => {
+test("deprecated timeout fields remain accepted but have no lifecycle requirement", () => {
   const value = config(temp(), [["kimi"]]);
+  delete value.runtime.idle_timeout_ms; delete value.runtime.max_duration_ms;
+  const defaults = validateConfig(value);
+  assert.equal(defaults.runtime.idle_timeout_ms, 360_000);
+  assert.equal(defaults.runtime.max_duration_ms, 900_000);
+  value.runtime.idle_timeout_ms = 0;
   value.runtime.max_duration_ms = 0;
-  assert.throws(() => validateConfig(value), /cannot both be 0/);
-  value.runtime.max_duration_ms = 360_000;
-  assert.equal(validateConfig(value).runtime.max_duration_ms, 360_000);
+  assert.equal(validateConfig(value).runtime.idle_timeout_ms, 0);
+  value.runtime.max_duration_ms = 900_000;
+  assert.equal(validateConfig(value).runtime.max_duration_ms, 900_000);
   value.runtime.max_duration_ms = -1;
   assert.throws(() => validateConfig(value), /non-negative integer/);
 });
@@ -113,13 +120,10 @@ test("cleanup reaps an orphaned broker process and records ORPHANED_BROKER", asy
   assert.equal(isAlive(orphan.pid), false);
 });
 
-test("broker preserves IDLE_TIMEOUT and PROCESS_TIMEOUT", async () => {
-  const idle = config(temp(), [["opencode"]]); idle.providers.opencode.command = slow; idle.runtime.idle_timeout_ms = 30;
-  const idleResult = await new Broker(idle).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(idleResult.providers[0].error.code, "IDLE_TIMEOUT");
-  const duration = config(temp(), [["opencode"]]); duration.providers.opencode.command = slow; duration.runtime.max_duration_ms = 30;
-  const durationResult = await new Broker(duration).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(durationResult.providers[0].error.code, "PROCESS_TIMEOUT");
+test("deprecated timeout values do not terminate a live provider", async () => {
+  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slowSuccess; value.runtime.idle_timeout_ms = 30; value.runtime.max_duration_ms = 15;
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.equal(result.providers[0].status, "completed");
 });
 
 test("broker updates last progress for parsed stream output", async () => {
@@ -142,12 +146,12 @@ test("Kimi records stream progress and APIEmptyResponseError retries", async () 
   assert.equal(typeof item.last_progress_at_ms, "number");
 });
 
-test("silent Kimi hits its hard duration limit and leaves no live process", async () => {
-  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slow; value.runtime.max_duration_ms = 30;
-  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+test("a confirmed-dead Kimi process is terminated without a semantic verdict", async () => {
+  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slow; value.runtime.idle_timeout_ms = 30;
+  const result = await new Broker(value, deadHealth).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   const item = result.providers[0]; const state = readRuntime(root, result.runtime_id).providers.kimi;
   assert.equal(item.status, "failed");
-  assert.equal(item.error.code, "PROCESS_TIMEOUT");
+  assert.equal(item.error.code, "PROCESS_DEAD");
   assert.equal(item.last_progress_at_ms, null);
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(isAlive(state.pid), false);

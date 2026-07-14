@@ -12,9 +12,9 @@ const fake = path.resolve("test/fake-cli.mjs");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-outcome-"));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 
-function source(delivery = "file_only") {
+function source(delivery = "file_only", diffValue = null) {
   const root = temp();
-  const diff = "DIFF_HEAD\nDIFF_TAIL\n";
+  const diff = diffValue ?? "DIFF_HEAD\nDIFF_TAIL\n";
   const embed = delivery === "always_embed"; const review = { version: "review-packet.v1", manifest_hash: canonicalMaterialManifestHash("delivery-outcome", [{ target: "skills/review/SKILL.md", sha256: sha("lens"), size: 4, embed }, { target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed }]), diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review);
   const packet = `${JSON.stringify(review)}\n`;
   fs.mkdirSync(path.join(root, "skills/review"), { recursive: true });
@@ -25,6 +25,29 @@ function source(delivery = "file_only") {
   const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   return root;
 }
+
+test("broker delivers and records a derived triad while retaining the raw material hash", async () => {
+  const absolute = "/Users/Hugh/private/deleted.mjs";
+  const attachmentRoot = source("always_embed", `diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-${absolute}\n+clean\n`);
+  const runtimeRoot = temp();
+  const inputAttachments = attachments(attachmentRoot, "always_embed");
+  const rawHash = canonicalMaterialManifestHash("delivery-outcome", inputAttachments.manifest.entries.map(({ destination: target, sha256, size, embed }) => ({ target, sha256, size, embed })));
+  const result = await new Broker(config(runtimeRoot, [["opencode"]], attachmentRoot)).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: inputAttachments });
+  const provider = result.providers[0];
+  assert.equal(provider.status, "completed");
+  assert.equal(provider.delivery.raw_material_manifest_hash, rawHash);
+  assert.notEqual(provider.delivery.material_manifest_hash, rawHash);
+  assert.equal(provider.delivery.material_representation, "sanitized");
+  assert.equal(provider.delivery.redaction.rule_version, "host-root-prefix.v1");
+  assert.equal(provider.delivery.redaction.replacement_count, 1);
+  assert.equal(provider.delivery.redaction.raw_material_manifest_hash, rawHash);
+  assert.equal(provider.delivery.redaction.derived_material_manifest_hash, provider.delivery.material_manifest_hash);
+  assert.equal(provider.delivery.redaction.residual_scan, "passed");
+  assert.equal(provider.delivery.redaction.roots.find((item) => item.root_id === "home").count, 1);
+  const frozen = path.join(runtimeRoot, result.runtime_id, "workspace", "opencode");
+  assert.equal(fs.readFileSync(path.join(frozen, "changes.diff"), "utf8").includes(absolute), false);
+  assert.equal(fs.readFileSync(path.join(frozen, "review-packet.v1.json"), "utf8").includes(absolute), false);
+});
 
 function attachments(root, delivery, embed = delivery === "always_embed") {
   return {

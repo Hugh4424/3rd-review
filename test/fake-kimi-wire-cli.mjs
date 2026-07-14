@@ -9,9 +9,10 @@ input.on("line", (line) => {
   const request = JSON.parse(line);
   if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocol_version: "1.10" } });
   if (request.method === "prompt") {
-    process.stderr.write("APIEmptyResponseError: empty response\nAPIEmptyResponseError: empty response\n");
-    send({ jsonrpc: "2.0", method: "event", params: { type: "StepRetry", payload: { n: 1, next_attempt: 2, max_attempts: 3, wait_s: 0, error_type: "APIEmptyResponseError" } } });
-    send({ jsonrpc: "2.0", method: "event", params: { type: "ContentPart", payload: { type: "text", text: "kimi opinion" } } });
+    send({ jsonrpc: "2.0", method: "event", params: { type: "TurnBegin", payload: { user_input: request.params.user_input } } });
+    send({ jsonrpc: "2.0", method: "event", params: { type: "StepBegin", payload: { n: 1 } } });
+    send({ jsonrpc: "2.0", method: "event", params: { type: "ContentPart", payload: { type: "text", text: "WIRE_FIXTURE_OK" } } });
+    send({ jsonrpc: "2.0", method: "event", params: { type: "TurnEnd", payload: {} } });
     send({ jsonrpc: "2.0", id: request.id, result: { status: "finished" } });
   }
 });
