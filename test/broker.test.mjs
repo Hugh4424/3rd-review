@@ -96,7 +96,7 @@ test("providers receive isolated workspaces and independent review inputs", asyn
   const root = temp(); const value = config(root, [["kimi", "opencode"]]); value.runtime.max_duration_ms = 360_000;
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "UNIQUE_REVIEW_PACKET", continuation: null });
   const runtime = path.join(root, result.runtime_id, "workspace");
-  assert.equal(fs.readFileSync(path.join(runtime, "kimi", "review-input.md"), "utf8"), "UNIQUE_REVIEW_PACKET");
+  const kimiInput = fs.readFileSync(path.join(runtime, "kimi", "review-input.md"), "utf8"); assert.match(kimiInput, /^Review only the supplied instruction/); assert.match(kimiInput, /UNIQUE_REVIEW_PACKET$/);
   assert.equal(fs.existsSync(path.join(runtime, "opencode", "review-input.md")), false);
   assert.equal(fs.existsSync(path.join(runtime, "review-input.md")), false);
 });

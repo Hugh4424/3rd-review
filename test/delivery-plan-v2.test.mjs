@@ -4,9 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
+import { EMBED_BUDGET, canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { loadConfig, validateConfig, validateSystemFileOnlyPolicy } from "../lib/config.mjs";
+import opencode from "../lib/adapters/opencode.mjs";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-plan-v2-"));
@@ -167,6 +168,19 @@ test("always_embed measures the complete rendered prompt once and fails before a
   assert.equal(state.providers.opencode.session_id, undefined);
   const resumed = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: result.runtime_id } });
   assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+});
+
+test("always_embed counts adapter model instruction before its single 512KB gate", async () => {
+  const input = source("", "always_embed"); const roots = [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const checked = validateAttachments({ root: input.root, delivery: "always_embed", manifest: input.attachmentManifest }, 2 * 1024 * 1024, roots);
+  const plain = planDelivery({ capabilities: { attachment_delivery: ["always_embed"] } }, checked, "review", 2 * 1024 * 1024);
+  const original = opencode.modelInstruction; opencode.modelInstruction = "i".repeat(EMBED_BUDGET - Buffer.byteLength(plain.provider_prompt, "utf8") + 1);
+  try {
+    assert.throws(() => planDelivery(opencode, checked, "review", 2 * 1024 * 1024), { code: "MATERIAL_TOO_LARGE" });
+    const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 2 * 1024 * 1024)).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
+    assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "MATERIAL_TOO_LARGE"); assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
+    const state = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(state.providers.opencode.session_id, undefined);
+    const resumed = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: result.runtime_id } }); assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+  } finally { opencode.modelInstruction = original; }
 });
 
 test("continuation cannot gain a session after file_only sandbox setup failure", async () => {
