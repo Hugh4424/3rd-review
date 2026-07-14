@@ -20,6 +20,9 @@ if (args[0] === "serve") {
   process.on("SIGTERM", stop); process.on("SIGINT", stop);
 } else if (args[0] === "run") {
   const port = Number(new URL(value("--attach")).port); const state = path.join(os.tmpdir(), `opencode-health-${port}.json`);
+  if (args.includes("--session")) { setTimeout(() => fs.writeFileSync(state, "{}"), 20); setTimeout(() => process.exit(0), 40); }
+  else {
   console.log(JSON.stringify({ type: "step_start", sessionID: "fixture_session", part: { id: "part_start" } }));
   setTimeout(() => fs.writeFileSync(state, "{}"), 20); setInterval(() => {}, 1_000);
+  }
 } else if (args.includes("--version")) console.log("fixture 1");

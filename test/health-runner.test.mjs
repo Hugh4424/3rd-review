@@ -60,3 +60,27 @@ test("cancellation wins before probe, after probe, and immediately before publis
 test("adapters without a probe fail closed after two stream-fallback rounds", async () => {
   const { clock, decisions, runner } = setup({ intervalMs: 10 }); await clock.tick(10); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "event-1" }); await clock.tick(10); assert.deepEqual(decisions, []); await clock.tick(10); assert.deepEqual(decisions, []); await clock.tick(10); assert.equal(decisions[0].error.code, "HEALTH_UNVERIFIABLE");
 });
+
+test("unchanged busy health becomes PROCESS_STALLED after five checks", async () => {
+  const { clock, decisions } = setup({ intervalMs: 10, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
+  await clock.tick(50); assert.deepEqual(decisions, []);
+  await clock.tick(10); assert.equal(decisions[0].error.code, "PROCESS_STALLED");
+});
+
+test("unchanged progressing and retry statuses cannot renew health forever", async () => {
+  for (const status of ["progressing", "retry"]) {
+    const { clock, decisions } = setup({ intervalMs: 10, probeSession: async () => ({ status, session_id: "s", cursor: "same", raw: null, error: null, evidence: status }) });
+    await clock.tick(60); assert.equal(decisions[0].error.code, "PROCESS_STALLED", status);
+  }
+});
+
+test("changing probe cursor keeps a long-running provider healthy", async () => {
+  let cursor = 0; const { clock, decisions, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status: "busy", session_id: "s", cursor: `c-${++cursor}`, raw: null, error: null, evidence: "moving" }) });
+  await clock.tick(120); assert.deepEqual(decisions, []); assert.equal(runner.snapshot().stagnant, 0); runner.stop();
+});
+
+test("stream progress resets an almost-stalled busy provider", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 10, probeSession: async ({ cursor }) => ({ status: "busy", session_id: "s", cursor: cursor ?? "same", raw: null, error: null, evidence: "busy" }) });
+  await clock.tick(50); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "stream-new" });
+  await clock.tick(40); assert.deepEqual(decisions, []); await clock.tick(10); assert.equal(decisions[0].error.code, "PROCESS_STALLED");
+});

@@ -55,6 +55,11 @@ test("an injected health probe explicitly overrides the adapter plan probe", asy
   assert.equal(result.ok, false); assert.equal(result.error.code, "PROCESS_DEAD"); assert.equal(injectedCalls, 1); assert.equal(planCalls, 0);
 });
 
+test("PID liveness cannot keep an unchanged busy health session alive", async () => {
+  const liveness = []; const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "200" }), probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "unchanged" }) }, { maxOutputBytes: 4096, healthCheckIntervalMs: 10, livenessIntervalMs: 2, onLiveness: (value) => liveness.push(value) });
+  assert.ok(liveness.length > 5); assert.equal(result.ok, false); assert.equal(result.error.code, "PROCESS_STALLED");
+});
+
 test("completed health raw is harvested and a hanging wrapper is internally terminated", async () => {
   const raw = `${JSON.stringify({ type: "session.completed", session_id: "health-session", text: "health opinion" })}\n`;
   const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), probeSession: async () => ({ status: "completed", session_id: "health-session", cursor: "done", raw: { stdout: raw, stderr: "" }, error: null, evidence: "terminal" }) }, { maxOutputBytes: 4096, healthCheckIntervalMs: 10, validateCompleted: (value) => value.stdout === raw });

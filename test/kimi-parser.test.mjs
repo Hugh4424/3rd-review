@@ -44,8 +44,14 @@ test("Kimi continuation passes the parser-issued native session to --session", (
 });
 
 test("Kimi does not create a provider profile beside its attachment workspace", () => {
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const bundle = path.join(cwd, "bundle"); const skills = path.join(bundle, "skills"); fs.mkdirSync(skills, { recursive: true }); fs.writeFileSync(path.join(bundle, "review-packet.v1.json"), "{}"); fs.mkdirSync(path.join(bundle, "contracts")); fs.writeFileSync(path.join(bundle, "contracts", "review.md"), "contract"); fs.chmodSync(bundle, 0o500);
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-private-skills-")); const cwd = path.join(runtime, "work", "kimi"); const bundle = path.join(cwd, "bundle"); const skills = path.join(bundle, "skills"); fs.mkdirSync(path.join(skills, "review"), { recursive: true }); fs.writeFileSync(path.join(skills, "review", "SKILL.md"), "review"); fs.writeFileSync(path.join(bundle, "review-packet.v1.json"), "{}"); fs.mkdirSync(path.join(bundle, "contracts")); fs.writeFileSync(path.join(bundle, "contracts", "review.md"), "contract"); fs.chmodSync(bundle, 0o500);
   const hostAttachmentRoot = "/host/attachment-root/never-disclose";
   const result = kimi.start({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, "review", runtime);
   assert.equal(result.cwd, cwd); assert.equal(fs.statSync(cwd).mode & 0o200, 0o200); assert.equal(result.argv[result.argv.indexOf("--work-dir") + 1], cwd); assert.equal(result.argv[result.argv.indexOf("--skills-dir") + 1], skills); assert.equal(result.argv.includes("--agent-file"), false); assert.equal(fs.existsSync(path.join(cwd, ".broker-profile")), false); assert.doesNotMatch(result.argv.join(" "), new RegExp(hostAttachmentRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("Kimi continuation omits --skills-dir when a delta bundle has no skills", () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-delta-no-skills-")); const cwd = path.join(runtime, "work", "kimi"); const bundle = path.join(cwd, "bundle"); fs.mkdirSync(path.join(bundle, "skills"), { recursive: true }); fs.writeFileSync(path.join(bundle, "changes.diff"), "delta");
+  const result = kimi.resume({ id: "kimi", command: "kimi", model: null, thinking: null, auth: { env: [] }, env: [] }, cwd, "57d02175-7367-499e-b72a-84465218ae4e", "review delta", runtime);
+  assert.equal(result.argv.includes("--skills-dir"), false);
 });

@@ -117,6 +117,14 @@ test("real Broker R2 accepts a validated file_only delta without a sandbox wrapp
   const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.equal(after.continuation_materials.length, 1);
 });
 
+test("OpenCode R2 keeps its R1 execution cwd while atomically refreshing bundle to the delta", async () => {
+  const initial = source("R1_ONLY", "file_only", "stable-r1"); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots); const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_CURRENT", "file_only", "stable-r2"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest } }); const firstOutput = JSON.parse(first.providers[0].output);
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "file_only", manifest: delta.attachmentManifest } }); const secondOutput = JSON.parse(second.providers[0].output);
+  assert.equal(second.providers[0].status, "completed"); assert.equal(secondOutput.cwd, firstOutput.cwd); assert.equal(firstOutput.cwd, fs.realpathSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle"))); assert.equal(firstOutput.has_triage_files, true); assert.equal(secondOutput.has_triage_files, true); assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle", "changes.diff"), "utf8"), /R2_CURRENT/);
+  assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "workspace", "opencode", "changes.diff"), "utf8"), /R1_ONLY/); assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "workspace", "opencode-delta-2", "changes.diff"), "utf8"), /R2_CURRENT/);
+});
+
 test("always_embed R2 reuses its native session and records an ordered hash-bound delta", async () => {
   const initial = source("", "always_embed", "r1-bundle"); const runtime = temp(); const value = config(runtime, initial.root, "opencode");
   const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
@@ -141,6 +149,55 @@ test("always_embed R2 reuses its native session and records an ordered hash-boun
   assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "workspace", "opencode-delta-2", "attachments-manifest.json"), "utf8")).bundle_id, "r2-bundle");
   assert.equal(state.continuation_materials[1].provider_initial_material_manifest_hash, state.attachments.provider_material.manifest_hash);
   assert.equal(state.providers.opencode.delivery.material_manifest_hash, state.continuation_materials[1].provider_material_manifest_hash);
+});
+
+test("reuse_frozen_material corrects format in the original provider session without publishing a delta", async () => {
+  const initial = source("", "always_embed", "format-r1"); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, provider_allowlist: ["opencode"] });
+  assert.equal(first.providers[0].status, "completed");
+  const corrected = await broker.run({ version: 4, host_provider: "codex", prompt: "return only corrected JSON", continuation: { runtime_id: first.runtime_id, reuse_frozen_material: true }, provider_allowlist: ["opencode"] });
+  assert.equal(corrected.providers[0].status, "completed"); assert.equal(corrected.providers[0].session_id, first.providers[0].session_id);
+  const providerOutput = JSON.parse(corrected.providers[0].output); const sessionIndex = providerOutput.args.indexOf("--session"); assert.equal(providerOutput.args[sessionIndex + 1], first.providers[0].session_id);
+  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8"));
+  assert.deepEqual(state.continuation_materials ?? [], []); assert.equal(state.round, 2);
+  assert.equal(fs.readdirSync(path.join(runtime, first.runtime_id, "raw", "opencode")).filter((name) => name.endsWith(".stdout")).length, 2);
+  assert.equal(corrected.providers[0].delivery.material_manifest_hash, state.attachments.provider_material.manifest_hash);
+});
+
+test("reuse_frozen_material after R2 reuses that provider session's latest frozen delta", async () => {
+  const initial = source("", "always_embed", "format-r1"); const runtime = temp(); const value = config(runtime, initial.root, "opencode");
+  const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
+  const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_DELTA", "always_embed", "format-r2"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, provider_allowlist: ["opencode"] });
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest }, provider_allowlist: ["opencode"] });
+  const corrected = await broker.run({ version: 4, host_provider: "codex", prompt: "correct R2 JSON", continuation: { runtime_id: first.runtime_id, reuse_frozen_material: true }, provider_allowlist: ["opencode"] });
+  assert.equal(corrected.providers[0].status, "completed", JSON.stringify(corrected.providers)); assert.equal(corrected.providers[0].session_id, second.providers[0].session_id);
+  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")); assert.equal(state.continuation_materials.length, 1); assert.equal(state.continuation_materials[0].bundle_id, "format-r2");
+  assert.equal(corrected.providers[0].delivery.material_manifest_hash, state.continuation_materials[0].provider_material_manifest_hash);
+  assert.equal(fs.readdirSync(path.join(runtime, first.runtime_id, "raw", "opencode")).filter((name) => name.endsWith(".stdout")).length, 3);
+});
+
+test("reuse_frozen_material rejects an old material delivery or another session's delta", async () => {
+  const make = async () => { const initial = source("", "always_embed", "format-gate-r1"); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); const checked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots); const delta = continuationDelta(checked.manifest_hash, 1, null, "R2", "always_embed", "format-gate-r2"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, provider_allowlist: ["opencode"] }); await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest }, provider_allowlist: ["opencode"] }); return { broker, runtime, id: first.runtime_id }; };
+  for (const mutate of [
+    (state) => { state.providers.opencode.delivery.material_manifest_hash = state.attachments.provider_material.manifest_hash; },
+    (state) => { state.continuation_materials[0].provider_sessions.opencode = "other-session"; },
+  ]) {
+    const { broker, runtime, id } = await make(); const statePath = path.join(runtime, id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8")); mutate(state); fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+    const result = await broker.run({ version: 4, host_provider: "codex", prompt: "correct", continuation: { runtime_id: id, reuse_frozen_material: true }, provider_allowlist: ["opencode"] }); assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
+  }
+});
+
+test("reuse_frozen_material is explicit, single-provider, attachment-free, and fail-closed", async () => {
+  const initial = source("", "always_embed", "format-gates"); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, provider_allowlist: ["opencode"] });
+  const base = { version: 4, host_provider: "codex", prompt: "correct", continuation: { runtime_id: first.runtime_id, reuse_frozen_material: true } };
+  await assert.rejects(() => broker.run(base), { code: "REQUEST_INVALID" });
+  await assert.rejects(() => broker.run({ ...base, provider_allowlist: ["opencode"], attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } }), { code: "REQUEST_INVALID" });
+  const frozenDiff = path.join(runtime, first.runtime_id, "workspace", "opencode", "changes.diff"); fs.chmodSync(frozenDiff, 0o600); fs.appendFileSync(frozenDiff, "forged");
+  const forged = await broker.run({ ...base, provider_allowlist: ["opencode"] }); assert.equal(forged.providers[0].error.code, "ATTACHMENT_IMMUTABLE");
+  const emptyRuntime = temp(); const emptyBroker = new Broker(config(emptyRuntime, initial.root, "opencode")); const empty = await emptyBroker.run({ version: 4, host_provider: "codex", prompt: "no material", continuation: null, provider_allowlist: ["opencode"] });
+  await assert.rejects(() => emptyBroker.run({ version: 4, host_provider: "codex", prompt: "correct", continuation: { runtime_id: empty.runtime_id, reuse_frozen_material: true }, provider_allowlist: ["opencode"] }), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("explicit continuation retries a confirmed-dead provider in its original session", async () => {

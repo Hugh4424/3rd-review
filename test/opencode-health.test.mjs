@@ -11,13 +11,14 @@ const response = (value, status = 200) => new Response(JSON.stringify(value), { 
 const healthFixture = path.resolve("test/opencode-health-fixture.mjs");
 
 test("OpenCode start and resume attach to one loopback server owned by the plan", () => {
-  const first = opencode.start(provider, "/tmp/provider-work", "review", "/tmp/runtime");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-provider-work-"));
+  const first = opencode.start(provider, cwd, "review", "/tmp/runtime");
   assert.match(first.healthServer.url, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.equal(first.clientArgv.includes("--attach"), true);
   assert.equal(first.clientArgv[first.clientArgv.indexOf("--attach") + 1], first.healthServer.url);
   assert.equal(first.clientArgv.includes("--session"), false);
 
-  const resumed = opencode.resume(provider, "/tmp/provider-work", "ses_keep", "delta", "/tmp/runtime");
+  const resumed = opencode.resume(provider, cwd, "ses_keep", "delta", "/tmp/runtime");
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--attach") + 1], resumed.healthServer.url);
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--session") + 1], "ses_keep");
   assert.deepEqual(resumed.healthServer.bind, { hostname: "127.0.0.1", port: Number(new URL(resumed.healthServer.url).port) });
@@ -77,4 +78,16 @@ test("OpenCode harvests a terminal session when its attached CLI hangs and clean
   assert.equal(result.ok, true); assert.equal(result.health_harvested, true); assert.equal(opencode.parse(result.stdout, result.stderr).text, "FIXTURE_APPROVED");
   await new Promise((resolve) => setTimeout(resolve, 100));
   await assert.rejects(fetch(`${plan.healthServer.url}/global/health`, { signal: AbortSignal.timeout(200) }));
+});
+
+test("OpenCode continuation harvests its known session when the attached client exits with no output", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-health-resume-")); const plan = opencode.resume({ ...provider, command: healthFixture }, cwd, "fixture_session", "continue");
+  const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000, probeDeadlineMs: 1_000, validateCompleted: (raw) => opencode.parse(raw.stdout, raw.stderr).ok });
+  assert.equal(result.ok, true); assert.equal(opencode.parse(result.stdout, result.stderr).session_id, "fixture_session"); assert.equal(opencode.parse(result.stdout, result.stderr).text, "FIXTURE_APPROVED");
+});
+
+test("OpenCode continuation fails explicitly when a zero-output client has no terminal session", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-health-missing-")); const plan = opencode.resume({ ...provider, command: healthFixture }, cwd, "missing_session", "continue");
+  const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000, probeDeadlineMs: 1_000, validateCompleted: (raw) => opencode.parse(raw.stdout, raw.stderr).ok });
+  assert.equal(result.ok, false); assert.match(result.stderr, /was not terminal after client exit/); assert.equal(result.stdout, "");
 });
