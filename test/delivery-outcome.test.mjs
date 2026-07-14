@@ -85,6 +85,7 @@ for (const [policy, provider, expected] of [
     assert.equal(result.providers[0].delivery_used, expected);
     const privateState = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
     assert.equal(privateState.providers[provider].delivery_used, expected);
+    const delivery = privateState.providers[provider].delivery; assert.equal(delivery.material_total_bytes, attachments(attachmentRoot, policy).manifest.entries.reduce((sum, entry) => sum + entry.size, 0)); assert.equal(Object.hasOwn(delivery, "total_bytes"), false); if (policy === "always_embed") assert.ok(delivery.rendered_prompt_bytes > delivery.material_total_bytes);
   });
 }
 
@@ -107,6 +108,8 @@ test("file_only OpenCode fails closed without an OS sandbox", async () => {
   assert.equal(fs.existsSync(path.join(runtimeRoot, result.runtime_id, "embed", "opencode")), false);
   const state = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
   assert.equal(state.providers.opencode.delivery.delivery_mode, "file_only");
+  assert.equal(Object.hasOwn(state.providers.opencode.delivery, "rendered_prompt_bytes"), false);
+  assert.equal(Object.hasOwn(state.providers.opencode.delivery, "total_bytes"), false);
 });
 
 test("a file_only provider set reports sandbox failure without embedding fallback", async () => {
