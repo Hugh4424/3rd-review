@@ -22,7 +22,7 @@ function source() {
   fs.writeFileSync(path.join(root, "review-packet.v1.json"), packet);
   fs.writeFileSync(path.join(root, "changes.diff"), diff);
   const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]];
-  const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: "file_only", packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer, "file_only") }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   return root;
 }
 
@@ -117,7 +117,7 @@ test("a file_only provider set reports sandbox failure without embedding fallbac
     host_provider: "codex",
     prompt: "review",
     continuation: null,
-    attachments: attachments(attachmentRoot, "file_only", false),
+    attachments: attachments(attachmentRoot, "file_only"),
   });
 
   assert.deepEqual(result.providers.map((item) => item.provider).sort(), ["kimi", "opencode"]);
@@ -179,6 +179,6 @@ test("doctor keeps broker and provider delivery capabilities", async () => {
   const attachmentRoot = source();
   const result = await new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot)).doctor();
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
-  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
-  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: [] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["always_embed"] });
 });

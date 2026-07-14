@@ -4,8 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, validateAttachments, validateContinuationTriad } from "../lib/attachments.mjs";
-import { fileOnlySandboxProbe } from "../lib/attachment-sandbox.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 
@@ -23,7 +22,7 @@ function source() {
   }
   const attachments = files.map(([destination, value]) => ({ destination, sha256: sha(value), size: Buffer.byteLength(value) }));
   const outerFiles = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }];
-  const manifest = { version: "review-attachment-manifest.v1", packet_hash: packet.packet_hash, manifest_hash: packet.manifest_hash, diff_sha256: packet.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("v2", outerFiles) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest);
+  const manifest = { version: "review-attachment-manifest.v1", delivery_mode: "file_only", packet_hash: packet.packet_hash, manifest_hash: packet.manifest_hash, diff_sha256: packet.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("v2", outerFiles, "file_only") }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest);
   fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   const all = [...files, ["manifest.json", `${JSON.stringify(manifest)}\n`]];
   return {
@@ -37,21 +36,17 @@ function config(runtime, root, provider, maxPromptBytes = 1024 * 1024) {
   return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
 }
 
-test("file_only plans before rendering and gives OpenCode only its isolated triad", async (t) => {
-  if (!fileOnlySandboxProbe().ready) return t.skip("no verified OS path ACL sandbox on this platform");
+function continuationDelta(initialMaterialHash) {
+  const delta = source(); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence: 1, previous_delivery_manifest_hash: null }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
+}
+
+test("file_only never starts OpenCode before a verified external sandbox wrapper", async () => {
   const input = source(); const runtime = temp();
   const result = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "SHORT_REVIEW_INSTRUCTION", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  assert.equal(result.providers[0].status, "completed");
+  assert.equal(result.providers[0].status, "failed");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   assert.equal(result.providers[0].delivery_used, "file_only");
-  const observed = JSON.parse(result.providers[0].output);
-  assert.equal(observed.input, "SHORT_REVIEW_INSTRUCTION");
-  assert.doesNotMatch(observed.input, /DIFF_(HEAD|MIDDLE|TAIL)|<attachments|review-packet\.v1\.json/);
-  assert.equal(observed.has_triage_files, true);
-  assert.equal(observed.diff_head, true); assert.equal(observed.diff_middle, true); assert.equal(observed.diff_tail, true);
-  assert.deepEqual({ packet_hash: observed.packet_hash, manifest_hash: observed.manifest_hash, diff_sha256: observed.diff_sha256 }, { packet_hash: input.packet.packet_hash, manifest_hash: input.packet.manifest_hash, diff_sha256: input.packet.diff_sha256 });
-  assert.equal(observed.cwd.includes(input.root), false);
-  const state = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8"));
-  assert.deepEqual(state.providers.opencode.delivery, { delivery_mode: "file_only", material_manifest_hash: sha(JSON.stringify({ version: 1, bundle_id: "v2", files: input.attachmentManifest.entries.map(({ destination, sha256, size, embed }) => ({ target: destination, sha256, size, embed })) })), total_bytes: input.attachmentManifest.entries.reduce((sum, item) => sum + item.size, 0), provider_visible_attachment_manifest: input.attachmentManifest.entries.map(({ destination, sha256, size }) => ({ destination, sha256, size })) });
+  assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
 });
 
 test("file_only fails closed before provider execution when the OS sandbox cannot prove its path ACL", async () => {
@@ -73,20 +68,34 @@ test("file_only rejects a triad whose inner manifest omits a delivered file", as
 
 test("file_only rejects a paired packet and inner-manifest forgery even when the diff is unchanged", async () => {
   const input = source(); const packetPath = path.join(input.root, "review-packet.v1.json"); const packet = JSON.parse(fs.readFileSync(packetPath, "utf8")); packet.acceptance_design_excerpt = "FORGED_PACKET_CONTEXT"; fs.writeFileSync(packetPath, `${JSON.stringify(packet)}\n`);
-  const packetEntry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(packetPath); packetEntry.size = bytes.length; packetEntry.sha256 = sha(bytes); const innerPath = path.join(input.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); const innerPacket = inner.attachments.find((item) => item.destination === "review-packet.v1.json"); innerPacket.size = bytes.length; innerPacket.sha256 = sha(bytes); const outerFiles = input.attachmentManifest.entries.map(({ destination: target, sha256, size, embed }) => ({ target, sha256, size, embed })); inner.delivery_manifest_hash = canonicalDeliveryManifestHash(input.attachmentManifest.bundle_id, outerFiles); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const innerEntry = input.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const innerBytes = fs.readFileSync(innerPath); innerEntry.size = innerBytes.length; innerEntry.sha256 = sha(innerBytes);
+  const packetEntry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(packetPath); packetEntry.size = bytes.length; packetEntry.sha256 = sha(bytes); const innerPath = path.join(input.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); const innerPacket = inner.attachments.find((item) => item.destination === "review-packet.v1.json"); innerPacket.size = bytes.length; innerPacket.sha256 = sha(bytes); const outerFiles = input.attachmentManifest.entries.map(({ destination: target, sha256, size, embed }) => ({ target, sha256, size, embed })); inner.delivery_manifest_hash = canonicalDeliveryManifestHash(input.attachmentManifest.bundle_id, outerFiles, "file_only"); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const innerEntry = input.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const innerBytes = fs.readFileSync(innerPath); innerEntry.size = innerBytes.length; innerEntry.sha256 = sha(innerBytes);
   const result = await new Broker(config(temp(), input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
   assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
 });
 
+test("file_only outer canonical binds delivery mode and embed semantics", () => {
+  const input = source(); input.attachmentManifest.entries.find((item) => item.destination === "changes.diff").embed = false;
+  const checked = validateAttachments({ root: input.root, delivery: "file_only", manifest: input.attachmentManifest }, 2 * 1024 * 1024, [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]);
+  assert.throws(() => validateFileOnlyTriad(checked), { code: "MATERIAL_INCOMPLETE" });
+});
+
 test("continuation delta triad binds the initial material hash and ordered predecessor", () => {
   const initial = source(); const roots = [{ root: initial.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, roots);
-  assert.throws(() => validateContinuationTriad(initialChecked, { manifest_hash: initialChecked.manifest_hash, continuation_materials: [] }), { code: "MATERIAL_INCOMPLETE" });
+  assert.throws(() => validateContinuationTriad(initialChecked, { attachments: { manifest_hash: initialChecked.manifest_hash }, continuation_materials: [] }), { code: "MATERIAL_INCOMPLETE" });
   const delta = source(); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialChecked.manifest_hash, sequence: 1, previous_delivery_manifest_hash: null }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes);
   const checked = validateAttachments({ root: delta.root, delivery: "file_only", manifest: delta.attachmentManifest }, 2 * 1024 * 1024, [{ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]);
-  assert.doesNotThrow(() => validateContinuationTriad(checked, { manifest_hash: initialChecked.manifest_hash, continuation_materials: [] }));
-  assert.throws(() => validateContinuationTriad(checked, { manifest_hash: "0".repeat(64), continuation_materials: [] }), { code: "MATERIAL_INCOMPLETE" });
-  assert.throws(() => validateContinuationTriad(checked, { manifest_hash: initialChecked.manifest_hash, continuation_materials: [{ delivery_manifest_hash: "f".repeat(64) }] }), { code: "MATERIAL_INCOMPLETE" });
+  assert.doesNotThrow(() => validateContinuationTriad(checked, { attachments: { manifest_hash: initialChecked.manifest_hash }, continuation_materials: [] }));
+  assert.throws(() => validateContinuationTriad(checked, { attachments: { manifest_hash: "0".repeat(64) }, continuation_materials: [] }), { code: "MATERIAL_INCOMPLETE" });
+  assert.throws(() => validateContinuationTriad(checked, { attachments: { manifest_hash: initialChecked.manifest_hash }, continuation_materials: [{ delivery_manifest_hash: "f".repeat(64) }] }), { code: "MATERIAL_INCOMPLETE" });
+});
+
+test("real Broker R2 setup failure does not consume its delta sequence", async () => {
+  const initial = source(); const delta = continuationDelta("0".repeat(64)); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } }); assert.equal(first.providers[0].status, "completed");
+  const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, [{ root: initial.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]); const statePath = path.join(runtime, first.runtime_id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8")); state.attachments = { requested_delivery: "file_only", bundle_id: initialChecked.bundle_id, manifest_hash: initialChecked.manifest_hash, files: initialChecked.files }; fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+  const rebound = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: rebound.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: rebound.root, delivery: "file_only", manifest: rebound.attachmentManifest } });
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.deepEqual(after.continuation_materials ?? [], []);
 });
 
 test("file_only fails closed when triad filename, outer hash, or packet hash binding is wrong", async (t) => {
@@ -117,12 +126,10 @@ test("always_embed measures the complete rendered prompt once and fails before a
   assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
 });
 
-test("continuation refuses a file_only provider whose recorded material hash changed", async (t) => {
-  if (!fileOnlySandboxProbe().ready) return t.skip("no verified OS path ACL sandbox on this platform");
+test("continuation cannot gain a session after file_only sandbox setup failure", async () => {
   const input = source(); const runtime = temp(); const broker = new Broker(config(runtime, input.root, "opencode"));
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  const statePath = path.join(runtime, first.runtime_id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8")); state.providers.opencode.delivery.material_manifest_hash = "0".repeat(64); fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
+  assert.equal(first.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const resumed = await broker.run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(resumed.providers[0].status, "failed");
-  assert.equal(resumed.providers[0].error.code, "MATERIAL_INCOMPLETE");
+  assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
 });
