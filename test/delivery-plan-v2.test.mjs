@@ -48,6 +48,27 @@ function continuationSandbox() {
   return { command, args: [] };
 }
 
+function sandboxExecProbeWrapper() {
+  const directory = temp(); const command = path.join(directory, "sandbox-exec-probe-wrapper.sh");
+  fs.writeFileSync(command, `#!/bin/sh
+for arg in "$@"; do case "$arg" in --sentinel=*) sentinel="\${arg#--sentinel=}";; esac; done
+if [ "$1" = "--3rd-review-probe" ]; then
+  policy="(version 1) (deny default) (allow process-exec) (allow process-fork) (allow file-read*) (deny file-read* (literal \\\"$sentinel\\\"))"
+  /usr/bin/sandbox-exec -p "$policy" /usr/bin/cat "$sentinel" >/dev/null 2>&1
+  if [ "$?" -ne 0 ]; then printf '{"version":1,"sentinel_readable":false}\\n'; exit 0; fi
+  printf '{"version":1,"sentinel_readable":true}\\n'; exit 1
+fi
+exit 64
+`, { mode: 0o500 });
+  return { command, args: [] };
+}
+
+test("doctor enables file_only only after a trusted wrapper blocks a sandboxed sentinel read", async () => {
+  const input = source(); const value = config(temp(), input.root, "opencode", 1024 * 1024, sandboxExecProbeWrapper());
+  const report = await new Broker(value).doctor({ attachmentRoot: input.root }); const provider = report.providers.find((item) => item.provider === "opencode");
+  assert.equal(provider.status, "ready"); assert.ok(provider.capabilities.attachment_delivery.includes("file_only"));
+});
+
 test("file_only never starts OpenCode before a verified external sandbox wrapper", async () => {
   const input = source(); const runtime = temp();
   const result = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "SHORT_REVIEW_INSTRUCTION", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
