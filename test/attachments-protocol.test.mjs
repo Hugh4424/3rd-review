@@ -38,8 +38,8 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.deepEqual(forbidden.capabilities, { attachments: false, cancel_source: true });
   assert.equal(forbidden.attachment_root.status, "unavailable");
   assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
-  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: [] });
-  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["always_embed"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
 });
 
 test("doctor attachment probe copies and locks a private bundle without touching the packet root", () => {
@@ -78,12 +78,12 @@ test("attachment validation does not render always_embed material before deliver
   assert.doesNotThrow(() => validateAttachments(input, 1024 * 1024, [{ root, sources: ["skills"] }]));
 });
 
-test("file_only refuses to start Kimi or OpenCode without a verified OS sandbox", async () => {
+test("file_only runs Kimi and OpenCode from frozen provider-private workspaces", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", false) });
-  assert.equal(result.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(openCode.delivery_used, "file_only");
-  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), false);
+  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
+  const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.status, "completed"); assert.equal(openCode.delivery_used, "file_only");
+  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed/opencode")), false);
 });
 
@@ -104,7 +104,7 @@ test("continuation intersects its frozen allowlist with completed sessions only"
   assert.equal(resumed.providers[0].session_id, first.providers.find((item) => item.provider === "kimi").session_id);
 });
 
-test("Kimi file_only stops before provider execution when sandbox proof is unavailable", async () => {
+test("Kimi file_only rejects an incomplete review triad before provider execution", async () => {
   const attachmentsRoot = source(); const extra = ["contracts/review.md", "CONTRACT"]; fs.mkdirSync(path.join(attachmentsRoot, "contracts"), { recursive: true }); fs.writeFileSync(path.join(attachmentsRoot, extra[0]), extra[1]); const included = ["review-packet.v1.json", "changes.diff", "skills/review/SKILL.md", extra[0]]; const inner = JSON.parse(fs.readFileSync(path.join(attachmentsRoot, "manifest.json"), "utf8")); inner.attachments = included.map((destination) => { const contents = fs.readFileSync(path.join(attachmentsRoot, destination)); return { destination, size: contents.length, sha256: sha(contents) }; }); const outer = [...inner.attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: false })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: false }]; inner.delivery_manifest_hash = canonicalDeliveryManifestHash("complete", outer, "file_only"); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(path.join(attachmentsRoot, "manifest.json"), `${JSON.stringify(inner)}\n`); const files = [...included, "manifest.json"].map((name) => [name, fs.readFileSync(path.join(attachmentsRoot, name), "utf8")]); const manifest = { version: 1, bundle_id: "complete", entries: files.map(([name, contents]) => ({ source: name, destination: name, size: Buffer.byteLength(contents), sha256: sha(contents), embed: false })) }; const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
   await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }), { code: "MATERIAL_INCOMPLETE" });
 });
@@ -132,12 +132,11 @@ test("file_only rejects bundles without the required triad", async () => {
   await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest: { version: 1, bundle_id: "incomplete", entries: [packet(attachmentsRoot).manifest.entries[0]] } } }), { code: "MATERIAL_INCOMPLETE" }); assert.deepEqual(fs.readdirSync(runtime), []);
 });
 
-test("file_only Kimi has no continuation session when sandbox proof is unavailable", async () => {
+test("file_only Kimi creates a native continuation session", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
-  assert.equal(first.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "continue", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(second.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+  assert.equal(first.providers[0].status, "completed");
+  assert.equal(typeof first.providers[0].session_id, "string");
 });
 
 test("raw output is private and public status does not leak refs, output, sessions or absolute paths", async () => {

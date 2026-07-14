@@ -25,6 +25,11 @@
 的 source 必须是该 root 下的安全相对路径和允许 prefix。broker 校验 regular file、size
 和 SHA-256 后复制到 provider 私有 workspace；provider 不接触调用方真实仓库。
 
+`file_only` 使用该 provider 私有 workspace 交付冻结文件，不要求 `/etc` policy 或
+`/usr/local` wrapper。broker 会拒绝 symlink、hard link、路径穿越、size/hash 不符，并在
+运行与续跑前复验冻结副本。这个边界保证材料完整性和稳定路径，不声称替代操作系统 sandbox；
+adapter 可继续使用宿主 CLI 原生的只读模式。
+
 ## request 与续跑
 
 request 是 JSON，至少包含以下 V4 字段：

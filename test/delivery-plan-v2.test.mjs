@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { EMBED_BUDGET, canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
-import { loadConfig, validateConfig, validateSystemFileOnlyPolicy } from "../lib/config.mjs";
+import { loadConfig, validateConfig } from "../lib/config.mjs";
 import opencode from "../lib/adapters/opencode.mjs";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -44,37 +44,8 @@ function continuationDelta(initialMaterialHash, sequence = 1, previous_delivery_
   const delta = source(label, delivery, bundleId); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence, previous_delivery_manifest_hash }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
 }
 
-function continuationSandbox() {
-  const directory = temp(); const command = path.join(directory, "trusted-test-wrapper.mjs");
-  fs.writeFileSync(command, `#!/usr/bin/env node\nimport { spawnSync } from \"node:child_process\";\nconst args = process.argv.slice(2);\nif (args.includes(\"--3rd-review-probe\")) { console.log(JSON.stringify({ version: 1, sentinel_readable: false })); process.exit(0); }\nconst marker = args.indexOf(\"--\"); const child = spawnSync(args[marker + 1], args.slice(marker + 2), { stdio: \"inherit\" }); process.exit(child.status ?? 1);\n`, { mode: 0o500 });
-  return { command, args: [] };
-}
-
-function sandboxExecProbeWrapper() {
-  const directory = temp(); const command = path.join(directory, "sandbox-exec-probe-wrapper.sh");
-  fs.writeFileSync(command, `#!/bin/sh
-for arg in "$@"; do case "$arg" in --sentinel=*) sentinel="\${arg#--sentinel=}";; esac; done
-if [ "$1" = "--3rd-review-probe" ]; then
-  policy="(version 1) (deny default) (allow process-exec) (allow process-fork) (allow file-read*) (deny file-read* (literal \\\"$sentinel\\\"))"
-  /usr/bin/sandbox-exec -p "$policy" /usr/bin/cat "$sentinel" >/dev/null 2>&1
-  if [ "$?" -ne 0 ]; then printf '{"version":1,"sentinel_readable":false}\\n'; exit 0; fi
-  printf '{"version":1,"sentinel_readable":true}\\n'; exit 1
-fi
-exit 64
-`, { mode: 0o500 });
-  return { command, args: [] };
-}
-
-test("a caller-forged wrapper object cannot enable file_only", async () => {
-  const input = source(); const value = config(temp(), input.root, "opencode"); value.file_only_sandbox = { command: continuationSandbox().command, args: [], sha256: "0".repeat(64), provider_visible_root: "/attachments", trusted: true };
-  const report = await new Broker(value).doctor({ attachmentRoot: input.root }); const provider = report.providers.find((item) => item.provider === "opencode");
-  assert.equal(provider.status, "ready"); assert.doesNotMatch(JSON.stringify(provider.capabilities), /file_only/);
-});
-
-test("system sandbox policy parser is separate from caller configuration", () => {
-  const policy = validateSystemFileOnlyPolicy({ command: "/usr/local/libexec/3rd-review-wrapper", args: ["--locked"], sha256: "a".repeat(64), provider_visible_root: "/attachments" });
-  assert.deepEqual(policy, { command: "/usr/local/libexec/3rd-review-wrapper", args: ["--locked"], sha256: "a".repeat(64), provider_visible_root: "/attachments" });
-  assert.throws(() => validateConfig({ version: 4, runtime: {}, file_only_sandbox: policy, tiers: [["opencode"]], providers: { opencode: { command: opencodeCli, auth: { type: "native" } } } }), { code: "CONFIG_INVALID" });
+test("legacy file_only sandbox configuration is rejected", () => {
+  assert.throws(() => validateConfig({ version: 4, runtime: {}, file_only_sandbox: { required: true }, tiers: [["opencode"]], providers: { opencode: { command: opencodeCli, auth: { type: "native" } } } }), { code: "CONFIG_INVALID" });
 });
 
 test("loaded broker config is frozen so caller mutation cannot alter a capability fingerprint", () => {
@@ -82,25 +53,23 @@ test("loaded broker config is frozen so caller mutation cannot alter a capabilit
   assert.ok(Object.isFrozen(loaded)); assert.ok(Object.isFrozen(loaded.runtime)); assert.throws(() => { loaded.runtime.root = "/attacker"; }, TypeError);
 });
 
-test("file_only never starts OpenCode before a verified external sandbox wrapper", async () => {
+test("file_only starts OpenCode in a frozen provider-private workspace", async () => {
   const input = source(); const runtime = temp();
   const result = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "SHORT_REVIEW_INSTRUCTION", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(result.providers[0].status, "completed");
   assert.equal(result.providers[0].delivery_used, "file_only");
-  assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
+  assert.equal(typeof result.providers[0].session_id, "string");
 });
 
-test("file_only reports missing trusted sandbox before provider delivery capability", async () => {
+test("file_only still enforces provider delivery capability", async () => {
   const input = source(); const result = await new Broker(config(temp(), input.root, "codex")).run({ version: 4, host_provider: "kimi", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED");
 });
 
-test("file_only fails closed before provider execution when the OS sandbox cannot prove its path ACL", async () => {
+test("file_only records exact delivery before provider execution", async () => {
   const input = source(); const result = await new Broker(config(temp(), input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
+  assert.equal(result.providers[0].status, "completed");
+  assert.equal(result.providers[0].delivery_used, "file_only");
 });
 
 test("file_only rejects a triad whose inner manifest omits a delivered file", async () => {
@@ -140,12 +109,12 @@ test("continuation delta triad binds the initial material hash and ordered prede
   assert.throws(() => validateContinuationTriad(checked, { attachments: { manifest_hash: initialChecked.manifest_hash }, continuation_materials: [{ delivery_manifest_hash: "f".repeat(64) }] }), { code: "MATERIAL_INCOMPLETE" });
 });
 
-test("real Broker R2 setup failure does not consume its delta sequence", async () => {
+test("real Broker R2 accepts a validated file_only delta without a sandbox wrapper", async () => {
   const initial = source("", "always_embed"); const delta = continuationDelta("0".repeat(64)); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } }); assert.equal(first.providers[0].status, "completed");
   const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, [{ root: initial.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]); const statePath = path.join(runtime, first.runtime_id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8")); state.attachments = { ...state.attachments, requested_delivery: "file_only", bundle_id: initialChecked.bundle_id, manifest_hash: initialChecked.manifest_hash, files: initialChecked.files }; fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
   const rebound = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: rebound.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: rebound.root, delivery: "file_only", manifest: rebound.attachmentManifest } });
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.deepEqual(after.continuation_materials ?? [], []);
+  assert.equal(result.providers[0].status, "completed");
+  const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.equal(after.continuation_materials.length, 1);
 });
 
 test("always_embed R2 reuses its native session and records an ordered hash-bound delta", async () => {
@@ -417,10 +386,9 @@ test("always_embed counts adapter model instruction before its single 512KB gate
   } finally { opencode.modelInstruction = original; }
 });
 
-test("continuation cannot gain a session after file_only sandbox setup failure", async () => {
+test("file_only creates a native continuation session", async () => {
   const input = source(); const runtime = temp(); const broker = new Broker(config(runtime, input.root, "opencode"));
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
-  assert.equal(first.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  const resumed = await broker.run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+  assert.equal(first.providers[0].status, "completed");
+  assert.equal(typeof first.providers[0].session_id, "string");
 });

@@ -112,7 +112,7 @@ for (const [policy, provider, expected] of [
   });
 }
 
-test("file_only OpenCode fails closed without an OS sandbox", async () => {
+test("file_only OpenCode uses its frozen provider-private workspace", async () => {
   const attachmentRoot = source();
   const runtimeRoot = temp();
   const result = await new Broker(config(runtimeRoot, [["opencode"]], attachmentRoot)).run({
@@ -125,8 +125,7 @@ test("file_only OpenCode fails closed without an OS sandbox", async () => {
   });
 
   assert.deepEqual(result.providers.map((item) => item.provider), ["opencode"]);
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(result.providers[0].status, "completed");
   assert.equal(result.providers[0].delivery_used, "file_only");
   assert.equal(fs.existsSync(path.join(runtimeRoot, result.runtime_id, "embed", "opencode")), false);
   const state = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
@@ -135,7 +134,7 @@ test("file_only OpenCode fails closed without an OS sandbox", async () => {
   assert.equal(Object.hasOwn(state.providers.opencode.delivery, "total_bytes"), false);
 });
 
-test("a file_only provider set reports sandbox failure without embedding fallback", async () => {
+test("a file_only provider set runs without embedding fallback", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
   const result = await broker.run({
@@ -147,14 +146,13 @@ test("a file_only provider set reports sandbox failure without embedding fallbac
   });
 
   assert.deepEqual(result.providers.map((item) => item.provider).sort(), ["kimi", "opencode"]);
-  assert.equal(result.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
   const openCode = result.providers.find((item) => item.provider === "opencode");
-  assert.equal(openCode.status, "failed");
-  assert.equal(openCode.error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+  assert.equal(openCode.status, "completed");
   assert.equal(openCode.delivery_used, "file_only");
 });
 
-test("file_only sandbox failure creates no continuable session", async () => {
+test("file_only creates native continuable sessions", async () => {
   const attachmentRoot = source();
   const broker = new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot));
   const first = await broker.run({
@@ -164,17 +162,8 @@ test("file_only sandbox failure creates no continuable session", async () => {
     continuation: null,
     attachments: attachments(attachmentRoot, "file_only"),
   });
-  const second = await broker.run({
-    version: 4,
-    host_provider: "codex",
-    prompt: "continue",
-    continuation: { runtime_id: first.runtime_id },
-  });
-
-  assert.equal(first.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  assert.equal(first.providers.find((item) => item.provider === "opencode").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  assert.deepEqual(second.providers.map((item) => item.provider), [null]);
-  assert.equal(second.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+  assert.equal(typeof first.providers.find((item) => item.provider === "kimi").session_id, "string");
+  assert.equal(typeof first.providers.find((item) => item.provider === "opencode").session_id, "string");
 });
 
 test("run may expose delivery outcome while status keeps attachment internals private", async () => {
@@ -190,8 +179,8 @@ test("run may expose delivery outcome while status keeps attachment internals pr
   });
 
   assert.equal(result.providers[0].delivery_used, "file_only");
-  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
-  assert.equal(result.providers[0].session_id, undefined);
+  assert.equal(result.providers[0].status, "completed");
+  assert.equal(typeof result.providers[0].session_id, "string");
   const privateState = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
   assert.equal(privateState.providers.kimi.raw_stdout_sha256, result.providers[0].raw_stdout_sha256);
   assert.equal(privateState.providers.kimi.raw_stderr_sha256, result.providers[0].raw_stderr_sha256);
@@ -205,6 +194,6 @@ test("doctor keeps broker and provider delivery capabilities", async () => {
   const attachmentRoot = source();
   const result = await new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot)).doctor();
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
-  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: [] });
-  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["always_embed"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
 });
