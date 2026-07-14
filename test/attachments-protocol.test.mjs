@@ -84,6 +84,10 @@ test("file_only runs Kimi and OpenCode from frozen provider-private workspaces",
   assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
   const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.status, "completed"); assert.equal(openCode.delivery_used, "file_only");
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
+  const kimiWork = path.join(runtime, result.runtime_id, "work/kimi"); const kimiBundle = path.join(kimiWork, "bundle");
+  assert.equal(fs.statSync(kimiWork).mode & 0o200, 0o200);
+  assert.equal(fs.statSync(kimiBundle).mode & 0o222, 0);
+  assert.equal(fs.statSync(path.join(kimiBundle, "changes.diff")).mode & 0o222, 0);
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed/opencode")), false);
 });
 
