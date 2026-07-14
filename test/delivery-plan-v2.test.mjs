@@ -37,8 +37,8 @@ function config(runtime, root, provider, maxPromptBytes = 1024 * 1024) {
   return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
 }
 
-function continuationDelta(initialMaterialHash, sequence = 1, previous_delivery_manifest_hash = null, label = "") {
-  const delta = source(label); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence, previous_delivery_manifest_hash }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
+function continuationDelta(initialMaterialHash, sequence = 1, previous_delivery_manifest_hash = null, label = "", delivery = "file_only") {
+  const delta = source(label, delivery); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence, previous_delivery_manifest_hash }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
 }
 
 function continuationSandbox() {
@@ -143,6 +143,46 @@ test("real Broker R2 setup failure does not consume its delta sequence", async (
   const rebound = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: rebound.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: rebound.root, delivery: "file_only", manifest: rebound.attachmentManifest } });
   assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.deepEqual(after.continuation_materials ?? [], []);
+});
+
+test("always_embed R2 reuses its native session and records an ordered hash-bound delta", async () => {
+  const initial = source("", "always_embed"); const runtime = temp(); const value = config(runtime, initial.root, "opencode");
+  const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
+  const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_DELTA", "always_embed"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const deltaDeliveryHash = JSON.parse(fs.readFileSync(path.join(delta.root, "manifest.json"), "utf8")).delivery_manifest_hash;
+  const delta2 = continuationDelta(initialChecked.manifest_hash, 2, deltaDeliveryHash, "R3_DELTA", "always_embed"); value.attachment_roots.push({ root: delta2.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } });
+  assert.equal(first.providers[0].status, "completed");
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest } });
+  assert.equal(second.providers[0].status, "completed"); assert.equal(second.providers[0].session_id, first.providers[0].session_id);
+  assert.equal(second.providers[0].delivery_used, "always_embed");
+  const third = await broker.run({ version: 4, host_provider: "codex", prompt: "R3_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta2.root, delivery: "always_embed", manifest: delta2.attachmentManifest } });
+  assert.equal(third.providers[0].status, "completed"); assert.equal(third.providers[0].session_id, first.providers[0].session_id);
+  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8"));
+  assert.deepEqual(state.continuation_materials, [
+    { sequence: 1, manifest_hash: validateAttachments({ root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots).manifest_hash, delivery_manifest_hash: deltaDeliveryHash, initial_material_manifest_hash: initialChecked.manifest_hash, provider_sessions: { opencode: first.providers[0].session_id } },
+    { sequence: 2, manifest_hash: validateAttachments({ root: delta2.root, delivery: "always_embed", manifest: delta2.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots).manifest_hash, delivery_manifest_hash: JSON.parse(fs.readFileSync(path.join(delta2.root, "manifest.json"), "utf8")).delivery_manifest_hash, initial_material_manifest_hash: initialChecked.manifest_hash, provider_sessions: { opencode: first.providers[0].session_id } },
+  ]);
+});
+
+test("R2 rejects a delivery-mode mismatch before provider execution", async () => {
+  const initial = source("", "always_embed"); const runtime = temp(); const value = config(runtime, initial.root, "opencode");
+  const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
+  const delta = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } });
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "file_only", manifest: delta.attachmentManifest } }), { code: "MATERIAL_INCOMPLETE" });
+  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")); assert.deepEqual(state.continuation_materials ?? [], []);
+});
+
+test("oversized always_embed R2 is MATERIAL_TOO_LARGE without a provider result or continuation verdict", async () => {
+  const initial = source("", "always_embed"); const runtime = temp(); const value = config(runtime, initial.root, "opencode", 2 * 1024 * 1024);
+  const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
+  const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_LARGE", "always_embed"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } });
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "x".repeat(EMBED_BUDGET), continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest } });
+  assert.equal(second.providers[0].status, "failed"); assert.equal(second.providers[0].error.code, "MATERIAL_TOO_LARGE"); assert.equal(Object.hasOwn(second.providers[0], "session_id"), false);
+  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")); assert.equal(state.providers.opencode.status, "completed"); assert.equal(state.providers.opencode.session_id, first.providers[0].session_id); assert.deepEqual(state.continuation_materials ?? [], []); assert.equal(state.continuation_reservation ?? null, null);
 });
 
 test("file_only fails closed when triad filename, outer hash, or packet hash binding is wrong", async (t) => {
