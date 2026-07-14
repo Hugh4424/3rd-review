@@ -82,7 +82,7 @@ test("file_only refuses to start Kimi or OpenCode without a verified OS sandbox"
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", true) });
   assert.equal(result.providers.find((item) => item.provider === "kimi").error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(openCode.delivery_used, "file_only");
-  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), false);
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed/opencode")), false);
 });
 
@@ -105,13 +105,12 @@ test("continuation intersects its frozen allowlist with completed sessions only"
 
 test("Kimi file_only stops before provider execution when sandbox proof is unavailable", async () => {
   const attachmentsRoot = source(); const extra = ["contracts/review.md", "CONTRACT"]; fs.mkdirSync(path.join(attachmentsRoot, "contracts"), { recursive: true }); fs.writeFileSync(path.join(attachmentsRoot, extra[0]), extra[1]); const included = ["review-packet.v1.json", "changes.diff", "skills/review/SKILL.md", extra[0]]; const inner = JSON.parse(fs.readFileSync(path.join(attachmentsRoot, "manifest.json"), "utf8")); inner.attachments = included.map((destination) => { const contents = fs.readFileSync(path.join(attachmentsRoot, destination)); return { destination, size: contents.length, sha256: sha(contents) }; }); const outer = [...inner.attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: false })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: false }]; inner.delivery_manifest_hash = canonicalDeliveryManifestHash("complete", outer, "file_only"); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(path.join(attachmentsRoot, "manifest.json"), `${JSON.stringify(inner)}\n`); const files = [...included, "manifest.json"].map((name) => [name, fs.readFileSync(path.join(attachmentsRoot, name), "utf8")]); const manifest = { version: 1, bundle_id: "complete", entries: files.map(([name, contents]) => ({ source: name, destination: name, size: Buffer.byteLength(contents), sha256: sha(contents), embed: false })) }; const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "work", "kimi")), true);
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest } }); assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE"); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "work", "kimi")), false);
 });
 
-test("OpenCode sends the full 80KB packet once then resumes with only the delta prompt", async () => {
+test("always_embed rejects a single-file pseudo packet", async () => {
   const attachmentsRoot = temp(); const contents = `ATTACHMENT_HEAD\n${"x".repeat(80 * 1024)}\nATTACHMENT_TAIL`; fs.mkdirSync(path.join(attachmentsRoot, "skills")); fs.writeFileSync(path.join(attachmentsRoot, "skills", "packet.md"), contents); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 100_000; value.runtime.max_attachment_bytes = 100_000; value.providers.opencode.command = stdinOpenCode; const broker = new Broker(value); const input = { root: attachmentsRoot, delivery: "always_embed", manifest: { version: 1, bundle_id: "large-packet", entries: [{ source: "skills/packet.md", destination: "review-packet.v1.json", size: Buffer.byteLength(contents), sha256: sha(contents), embed: true }] } };
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].status, "completed"); const observed = JSON.parse(result.providers[0].output); assert.ok(observed.bytes > 80_000); assert.match(observed.head, /^PROMPT_HEAD/); assert.match(observed.tail, /ATTACHMENT_TAIL[\s\S]*<\/attachments>$/); assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "embed", "opencode", "review-input.md")), false);
-  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "DELTA_ONLY_MARKER inspect the fixed line", continuation: { runtime_id: result.runtime_id } }), { code: "MATERIAL_INCOMPLETE" });
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }); assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
 });
 
 test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
@@ -131,7 +130,7 @@ test("file_only rejects bundles without the required triad", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot));
   const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest: { version: 1, bundle_id: "incomplete", entries: [packet(attachmentsRoot).manifest.entries[0]] } } });
   assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   assert.equal(result.providers[0].delivery_used, "file_only");
   const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.session_id, undefined);
 });

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { loadConfig, validateConfig, validateSystemFileOnlyPolicy } from "../lib/config.mjs";
 
@@ -87,6 +87,11 @@ test("file_only never starts OpenCode before a verified external sandbox wrapper
   assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
 });
 
+test("file_only reports missing trusted sandbox before provider delivery capability", async () => {
+  const input = source(); const result = await new Broker(config(temp(), input.root, "codex")).run({ version: 4, host_provider: "kimi", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
+});
+
 test("file_only fails closed before provider execution when the OS sandbox cannot prove its path ACL", async () => {
   const input = source(); const result = await new Broker(config(temp(), input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
@@ -100,7 +105,7 @@ test("file_only rejects a triad whose inner manifest omits a delivered file", as
   const manifestEntry = input.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(path.join(input.root, "manifest.json")); manifestEntry.size = bytes.length; manifestEntry.sha256 = sha(bytes);
   const runtime = temp(); const result = await new Broker(config(runtime, input.root, "kimi")).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
 });
 
@@ -109,13 +114,19 @@ test("file_only rejects a paired packet and inner-manifest forgery even when the
   const packetEntry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(packetPath); packetEntry.size = bytes.length; packetEntry.sha256 = sha(bytes); const innerPath = path.join(input.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); const innerPacket = inner.attachments.find((item) => item.destination === "review-packet.v1.json"); innerPacket.size = bytes.length; innerPacket.sha256 = sha(bytes); const outerFiles = input.attachmentManifest.entries.map(({ destination: target, sha256, size, embed }) => ({ target, sha256, size, embed })); inner.delivery_manifest_hash = canonicalDeliveryManifestHash(input.attachmentManifest.bundle_id, outerFiles, "file_only"); inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const innerEntry = input.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const innerBytes = fs.readFileSync(innerPath); innerEntry.size = innerBytes.length; innerEntry.sha256 = sha(innerBytes);
   const result = await new Broker(config(temp(), input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "file_only", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "MATERIAL_INCOMPLETE");
+  assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
 });
 
 test("file_only outer canonical binds delivery mode and embed semantics", () => {
   const input = source(); input.attachmentManifest.entries.find((item) => item.destination === "changes.diff").embed = false;
   const checked = validateAttachments({ root: input.root, delivery: "file_only", manifest: input.attachmentManifest }, 2 * 1024 * 1024, [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]);
   assert.throws(() => validateFileOnlyTriad(checked), { code: "MATERIAL_INCOMPLETE" });
+});
+
+test("always_embed requires the same complete hash-bound triad", () => {
+  const input = source(); const roots = [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const worker = { capabilities: { attachment_delivery: ["always_embed"] } };
+  const incomplete = { ...input.attachmentManifest, entries: input.attachmentManifest.entries.filter((entry) => entry.destination !== "manifest.json") }; const checkedIncomplete = validateAttachments({ root: input.root, delivery: "always_embed", manifest: incomplete }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedIncomplete, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
+  const forged = JSON.parse(fs.readFileSync(path.join(input.root, "review-packet.v1.json"), "utf8")); forged.packet_hash = "0".repeat(64); fs.writeFileSync(path.join(input.root, "review-packet.v1.json"), `${JSON.stringify(forged)}\n`); const entry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(path.join(input.root, "review-packet.v1.json")); entry.size = bytes.length; entry.sha256 = sha(bytes); const checkedForged = validateAttachments({ root: input.root, delivery: "always_embed", manifest: input.attachmentManifest }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedForged, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("continuation delta triad binds the initial material hash and ordered predecessor", () => {
@@ -147,7 +158,7 @@ test("file_only fails closed when triad filename, outer hash, or packet hash bin
       if (mutate[0] === "outer hash") { await assert.rejects(() => broker.run(request), { code: "ATTACHMENT_HASH_MISMATCH" }); return; }
       const result = await broker.run(request);
       assert.equal(result.providers[0].status, "failed");
-      assert.ok(["MATERIAL_INCOMPLETE", "ATTACHMENT_HASH_MISMATCH"].includes(result.providers[0].error.code));
+      assert.ok(["ATTACHMENT_SANDBOX_UNAVAILABLE", "ATTACHMENT_HASH_MISMATCH"].includes(result.providers[0].error.code));
       assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
     });
   }
