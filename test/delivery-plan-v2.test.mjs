@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
-import { loadConfig, validateConfig } from "../lib/config.mjs";
+import { loadConfig, validateConfig, validateSystemFileOnlyPolicy } from "../lib/config.mjs";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-plan-v2-"));
@@ -32,8 +32,8 @@ function source(label = "") {
   };
 }
 
-function config(runtime, root, provider, maxPromptBytes = 1024 * 1024, sandbox = null) {
-  return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, ...(sandbox ? { file_only_sandbox: { ...sandbox, provider_visible_root: "/attachments", sha256: sha(fs.readFileSync(sandbox.command)) } } : {}), attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
+function config(runtime, root, provider, maxPromptBytes = 1024 * 1024) {
+  return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
 }
 
 function continuationDelta(initialMaterialHash, sequence = 1, previous_delivery_manifest_hash = null, label = "") {
@@ -61,18 +61,21 @@ exit 64
   return { command, args: [] };
 }
 
-test("a caller-forged trusted wrapper object cannot enable file_only", async () => {
-  const input = source(); const value = config(temp(), input.root, "opencode", 1024 * 1024, continuationSandbox()); value.file_only_sandbox.trusted = true;
+test("a caller-forged wrapper object cannot enable file_only", async () => {
+  const input = source(); const value = config(temp(), input.root, "opencode"); value.file_only_sandbox = { command: continuationSandbox().command, args: [], sha256: "0".repeat(64), provider_visible_root: "/attachments", trusted: true };
   const report = await new Broker(value).doctor({ attachmentRoot: input.root }); const provider = report.providers.find((item) => item.provider === "opencode");
   assert.equal(provider.status, "ready"); assert.doesNotMatch(JSON.stringify(provider.capabilities), /file_only/);
 });
 
-test("a loader-trusted wrapper that only self-reports safety fails the real run probe", async () => {
-  const input = source(); const sandbox = continuationSandbox(); const raw = JSON.parse(JSON.stringify(config(temp(), input.root, "opencode", 1024 * 1024, sandbox))); const home = temp(); const previousHome = process.env.HOME;
-  try {
-    process.env.HOME = home; const target = path.join(home, ".config", "3rd-review"); fs.mkdirSync(target, { recursive: true, mode: 0o700 }); const file = path.join(target, "config.json"); fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 }); const loaded = loadConfig();
-    const report = await new Broker(loaded).doctor({ attachmentRoot: input.root }); const provider = report.providers.find((item) => item.provider === "opencode"); assert.doesNotMatch(JSON.stringify(provider.capabilities), /file_only/);
-  } finally { process.env.HOME = previousHome; }
+test("system sandbox policy parser is separate from caller configuration", () => {
+  const policy = validateSystemFileOnlyPolicy({ command: "/usr/local/libexec/3rd-review-wrapper", args: ["--locked"], sha256: "a".repeat(64), provider_visible_root: "/attachments" });
+  assert.deepEqual(policy, { command: "/usr/local/libexec/3rd-review-wrapper", args: ["--locked"], sha256: "a".repeat(64), provider_visible_root: "/attachments" });
+  assert.throws(() => validateConfig({ version: 4, runtime: {}, file_only_sandbox: policy, tiers: [["opencode"]], providers: { opencode: { command: capture, auth: { type: "native" } } } }), { code: "CONFIG_INVALID" });
+});
+
+test("loaded broker config is frozen so caller mutation cannot alter a capability fingerprint", () => {
+  const input = source(); const raw = config(temp(), input.root, "opencode"); const file = path.join(temp(), "caller-config.json"); fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 }); const loaded = loadConfig(file);
+  assert.ok(Object.isFrozen(loaded)); assert.ok(Object.isFrozen(loaded.runtime)); assert.throws(() => { loaded.runtime.root = "/attacker"; }, TypeError);
 });
 
 test("file_only never starts OpenCode before a verified external sandbox wrapper", async () => {
