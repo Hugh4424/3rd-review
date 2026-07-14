@@ -129,7 +129,7 @@ test("an always_embed continuation uses the small delta prompt and preserves its
 
 test("file_only rejects bundles without the required triad", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["opencode"]], attachmentsRoot));
-  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest: { version: 1, bundle_id: "incomplete", entries: [packet(attachmentsRoot).manifest.entries[0]] } } }), { code: "MATERIAL_INCOMPLETE" }); const runtimeId = fs.readdirSync(runtime).find((name) => fs.existsSync(path.join(runtime, name, "state.json"))); const state = JSON.parse(fs.readFileSync(path.join(runtime, runtimeId, "state.json"), "utf8")); assert.equal(state.attachments, undefined);
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: attachmentsRoot, delivery: "file_only", manifest: { version: 1, bundle_id: "incomplete", entries: [packet(attachmentsRoot).manifest.entries[0]] } } }), { code: "MATERIAL_INCOMPLETE" }); assert.deepEqual(fs.readdirSync(runtime), []);
 });
 
 test("file_only Kimi has no continuation session when sandbox proof is unavailable", async () => {
