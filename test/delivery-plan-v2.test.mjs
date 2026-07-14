@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { loadConfig, validateConfig, validateSystemFileOnlyPolicy } from "../lib/config.mjs";
 
@@ -12,17 +12,17 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-plan-v2-"));
 const capture = path.resolve("test/capture-cli.mjs");
 
-function source(label = "") {
+function source(label = "", delivery = "file_only") {
   const root = temp();
   const diff = `DIFF_HEAD\n${"x".repeat(24 * 1024)}\nDIFF_MIDDLE\n${"y".repeat(24 * 1024)}\nDIFF_TAIL\n${label}`;
-  const packet = { version: "review-packet.v1", manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; packet.packet_hash = canonicalPacketHash(packet);
+  const packet = { version: "review-packet.v1", manifest_hash: canonicalMaterialManifestHash("v2", [{ target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed: true }]), diff_sha256: sha(diff) }; packet.packet_hash = canonicalPacketHash(packet);
   const files = [["review-packet.v1.json", `${JSON.stringify(packet)}\n`], ["changes.diff", diff]];
   for (const [name, value] of files) {
     const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value);
   }
   const attachments = files.map(([destination, value]) => ({ destination, sha256: sha(value), size: Buffer.byteLength(value) }));
   const outerFiles = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }];
-  const manifest = { version: "review-attachment-manifest.v1", delivery_mode: "file_only", packet_hash: packet.packet_hash, manifest_hash: packet.manifest_hash, diff_sha256: packet.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("v2", outerFiles, "file_only") }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest);
+  const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: packet.packet_hash, manifest_hash: packet.manifest_hash, diff_sha256: packet.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("v2", outerFiles, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest);
   fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   const all = [...files, ["manifest.json", `${JSON.stringify(manifest)}\n`]];
   return {
@@ -124,9 +124,10 @@ test("file_only outer canonical binds delivery mode and embed semantics", () => 
 });
 
 test("always_embed requires the same complete hash-bound triad", () => {
-  const input = source(); const roots = [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const worker = { capabilities: { attachment_delivery: ["always_embed"] } };
+  const input = source("", "always_embed"); const roots = [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const worker = { capabilities: { attachment_delivery: ["always_embed"] } };
   const incomplete = { ...input.attachmentManifest, entries: input.attachmentManifest.entries.filter((entry) => entry.destination !== "manifest.json") }; const checkedIncomplete = validateAttachments({ root: input.root, delivery: "always_embed", manifest: incomplete }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedIncomplete, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
   const forged = JSON.parse(fs.readFileSync(path.join(input.root, "review-packet.v1.json"), "utf8")); forged.packet_hash = "0".repeat(64); fs.writeFileSync(path.join(input.root, "review-packet.v1.json"), `${JSON.stringify(forged)}\n`); const entry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(path.join(input.root, "review-packet.v1.json")); entry.size = bytes.length; entry.sha256 = sha(bytes); const checkedForged = validateAttachments({ root: input.root, delivery: "always_embed", manifest: input.attachmentManifest }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedForged, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
+  const mismatched = source(); const mismatchRoots = [{ root: mismatched.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const checkedMismatch = validateAttachments({ root: mismatched.root, delivery: "always_embed", manifest: mismatched.attachmentManifest }, 2 * 1024 * 1024, mismatchRoots); assert.throws(() => planDelivery(worker, checkedMismatch, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("continuation delta triad binds the initial material hash and ordered predecessor", () => {
@@ -140,7 +141,7 @@ test("continuation delta triad binds the initial material hash and ordered prede
 });
 
 test("real Broker R2 setup failure does not consume its delta sequence", async () => {
-  const initial = source(); const delta = continuationDelta("0".repeat(64)); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } }); assert.equal(first.providers[0].status, "completed");
+  const initial = source("", "always_embed"); const delta = continuationDelta("0".repeat(64)); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } }); assert.equal(first.providers[0].status, "completed");
   const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, [{ root: initial.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]); const statePath = path.join(runtime, first.runtime_id, "state.json"); const state = JSON.parse(fs.readFileSync(statePath, "utf8")); state.attachments = { requested_delivery: "file_only", bundle_id: initialChecked.bundle_id, manifest_hash: initialChecked.manifest_hash, files: initialChecked.files }; fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`);
   const rebound = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: rebound.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: rebound.root, delivery: "file_only", manifest: rebound.attachmentManifest } });
   assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
@@ -165,7 +166,7 @@ test("file_only fails closed when triad filename, outer hash, or packet hash bin
 });
 
 test("always_embed measures the complete rendered prompt once and fails before a provider session", async () => {
-  const input = source(); const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 511 * 1024)).run({ version: 4, host_provider: "codex", prompt: "p".repeat(520 * 1024), continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
+  const input = source("", "always_embed"); const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 511 * 1024)).run({ version: 4, host_provider: "codex", prompt: "p".repeat(520 * 1024), continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
   assert.equal(result.providers[0].status, "failed");
   assert.equal(result.providers[0].error.code, "MATERIAL_TOO_LARGE");
   assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);

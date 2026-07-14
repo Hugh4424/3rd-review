@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalPacketHash } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 
@@ -12,17 +12,17 @@ const fake = path.resolve("test/fake-cli.mjs");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-outcome-"));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 
-function source() {
+function source(delivery = "file_only") {
   const root = temp();
   const diff = "DIFF_HEAD\nDIFF_TAIL\n";
-  const review = { version: "review-packet.v1", manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review);
+  const review = { version: "review-packet.v1", manifest_hash: canonicalMaterialManifestHash("delivery-outcome", [{ target: "skills/review/SKILL.md", sha256: sha("lens"), size: 4, embed: true }, { target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed: true }]), diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review);
   const packet = `${JSON.stringify(review)}\n`;
   fs.mkdirSync(path.join(root, "skills/review"), { recursive: true });
   fs.writeFileSync(path.join(root, "skills/review/SKILL.md"), "lens");
   fs.writeFileSync(path.join(root, "review-packet.v1.json"), packet);
   fs.writeFileSync(path.join(root, "changes.diff"), diff);
   const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]];
-  const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: "file_only", packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer, "file_only") }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("delivery-outcome", outer, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   return root;
 }
 
@@ -71,7 +71,7 @@ for (const [policy, provider, expected] of [
   ["always_embed", "opencode", "always_embed"],
 ]) {
   test(`${policy} policy reports ${provider} delivery_used=${expected}`, async () => {
-    const attachmentRoot = source();
+    const attachmentRoot = source(policy);
     const runtimeRoot = temp();
     const result = await new Broker(config(runtimeRoot, [[provider]], attachmentRoot)).run({
       version: 4,
