@@ -12,9 +12,9 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-plan-v2-"));
 const capture = path.resolve("test/capture-cli.mjs");
 
-function source() {
+function source(label = "") {
   const root = temp();
-  const diff = `DIFF_HEAD\n${"x".repeat(24 * 1024)}\nDIFF_MIDDLE\n${"y".repeat(24 * 1024)}\nDIFF_TAIL\n`;
+  const diff = `DIFF_HEAD\n${"x".repeat(24 * 1024)}\nDIFF_MIDDLE\n${"y".repeat(24 * 1024)}\nDIFF_TAIL\n${label}`;
   const packet = { version: "review-packet.v1", manifest_hash: "2".repeat(64), diff_sha256: sha(diff) }; packet.packet_hash = canonicalPacketHash(packet);
   const files = [["review-packet.v1.json", `${JSON.stringify(packet)}\n`], ["changes.diff", diff]];
   for (const [name, value] of files) {
@@ -32,12 +32,20 @@ function source() {
   };
 }
 
-function config(runtime, root, provider, maxPromptBytes = 1024 * 1024) {
-  return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
+function config(runtime, root, provider, maxPromptBytes = 1024 * 1024, sandbox = null) {
+  const result = validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: maxPromptBytes, max_output_bytes: 100_000, max_attachment_bytes: 2 * 1024 * 1024, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000, orphan_timeout_ms: 100 }, ...(sandbox ? { file_only_sandbox: { ...sandbox, sha256: sha(fs.readFileSync(sandbox.command)) } } : {}), attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers: [[provider]], providers: { [provider]: { enabled: true, command: capture, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] } } });
+  if (result.file_only_sandbox) result.file_only_sandbox.trusted = true;
+  return result;
 }
 
-function continuationDelta(initialMaterialHash) {
-  const delta = source(); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence: 1, previous_delivery_manifest_hash: null }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
+function continuationDelta(initialMaterialHash, sequence = 1, previous_delivery_manifest_hash = null, label = "") {
+  const delta = source(label); const innerPath = path.join(delta.root, "manifest.json"); const inner = JSON.parse(fs.readFileSync(innerPath, "utf8")); inner.continuation = { initial_material_manifest_hash: initialMaterialHash, sequence, previous_delivery_manifest_hash }; inner.inner_manifest_hash = canonicalInnerManifestHash(inner); fs.writeFileSync(innerPath, `${JSON.stringify(inner)}\n`); const entry = delta.attachmentManifest.entries.find((item) => item.destination === "manifest.json"); const bytes = fs.readFileSync(innerPath); entry.size = bytes.length; entry.sha256 = sha(bytes); return delta;
+}
+
+function continuationSandbox() {
+  const directory = temp(); const command = path.join(directory, "trusted-test-wrapper.mjs");
+  fs.writeFileSync(command, `#!/usr/bin/env node\nimport { spawnSync } from \"node:child_process\";\nconst args = process.argv.slice(2);\nif (args.includes(\"--3rd-review-probe\")) { console.log(JSON.stringify({ version: 1, sentinel_readable: false })); process.exit(0); }\nconst marker = args.indexOf(\"--\"); const child = spawnSync(args[marker + 1], args.slice(marker + 2), { stdio: \"inherit\" }); process.exit(child.status ?? 1);\n`, { mode: 0o500 });
+  return { command, args: [] };
 }
 
 test("file_only never starts OpenCode before a verified external sandbox wrapper", async () => {
@@ -96,6 +104,46 @@ test("real Broker R2 setup failure does not consume its delta sequence", async (
   const rebound = continuationDelta(initialChecked.manifest_hash); value.attachment_roots.push({ root: rebound.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "R2_SHORT_INSTRUCTION", continuation: { runtime_id: first.runtime_id }, attachments: { root: rebound.root, delivery: "file_only", manifest: rebound.attachmentManifest } });
   assert.equal(result.providers[0].error.code, "ATTACHMENT_SANDBOX_UNAVAILABLE");
   const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.deepEqual(after.continuation_materials ?? [], []);
+});
+
+test("R1 to R3 follows the same provider native-session material chain", async () => {
+  const initial = source(); const runtime = temp(); const sandbox = continuationSandbox(); const value = config(runtime, initial.root, "opencode", 1024 * 1024, sandbox); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest } });
+  assert.equal(first.providers[0].status, "completed");
+  const initialHash = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")).attachments.manifest_hash;
+  const r2 = continuationDelta(initialHash); value.attachment_roots.push({ root: r2.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: r2.root, delivery: "file_only", manifest: r2.attachmentManifest } });
+  assert.equal(second.providers[0].status, "completed");
+  const statePath = path.join(runtime, first.runtime_id, "state.json"); const afterR2 = JSON.parse(fs.readFileSync(statePath, "utf8")); const predecessor = afterR2.continuation_materials[0].delivery_manifest_hash;
+  const r3 = continuationDelta(initialHash, 2, predecessor); value.attachment_roots.push({ root: r3.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const third = await broker.run({ version: 4, host_provider: "codex", prompt: "R3", continuation: { runtime_id: first.runtime_id }, attachments: { root: r3.root, delivery: "file_only", manifest: r3.attachmentManifest } });
+  assert.equal(third.providers[0].status, "completed");
+  const afterR3 = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.equal(afterR3.continuation_materials.length, 2); assert.equal(afterR3.continuation_materials[1].provider_sessions.opencode, afterR3.providers.opencode.session_id);
+  const fork = continuationDelta(initialHash, 3, afterR3.continuation_materials[1].delivery_manifest_hash); value.attachment_roots.push({ root: fork.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); afterR3.continuation_materials[1].provider_sessions.opencode = "other-native-session"; fs.writeFileSync(statePath, `${JSON.stringify(afterR3)}\n`);
+  const forked = await broker.run({ version: 4, host_provider: "codex", prompt: "R4", continuation: { runtime_id: first.runtime_id }, attachments: { root: fork.root, delivery: "file_only", manifest: fork.attachmentManifest } });
+  assert.equal(forked.providers[0].status, "failed"); assert.equal(forked.providers[0].error.code, "MATERIAL_INCOMPLETE");
+});
+
+test("R3 rejects a delta with the wrong predecessor before provider execution", async () => {
+  const initial = source(); const runtime = temp(); const value = config(runtime, initial.root, "opencode", 1024 * 1024, continuationSandbox()); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest } }); const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8"));
+  const r2 = continuationDelta(state.attachments.manifest_hash); value.attachment_roots.push({ root: r2.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: r2.root, delivery: "file_only", manifest: r2.attachmentManifest } });
+  const wrong = continuationDelta(state.attachments.manifest_hash, 2, "f".repeat(64)); value.attachment_roots.push({ root: wrong.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "R3", continuation: { runtime_id: first.runtime_id }, attachments: { root: wrong.root, delivery: "file_only", manifest: wrong.attachmentManifest } }), { code: "MATERIAL_INCOMPLETE" });
+});
+
+test("concurrent R2 requests reserve one delta before either provider starts", async () => {
+  const initial = source(); const runtime = temp(); const value = config(runtime, initial.root, "opencode", 1024 * 1024, continuationSandbox());
+  value.providers.kimi = { ...value.providers.opencode, id: "kimi" }; value.tiers = [["opencode", "kimi"]]; const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest } });
+  assert.deepEqual(first.providers.map((item) => item.status), ["completed", "completed"]); const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8"));
+  const left = continuationDelta(state.attachments.manifest_hash, 1, null, "left"); const right = continuationDelta(state.attachments.manifest_hash, 1, null, "right");
+  value.attachment_roots.push({ root: left.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }, { root: right.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
+  const [a, b] = await Promise.all([
+    broker.run({ version: 4, host_provider: "codex", prompt: "R2-left", continuation: { runtime_id: first.runtime_id }, provider_allowlist: ["opencode"], attachments: { root: left.root, delivery: "file_only", manifest: left.attachmentManifest } }),
+    broker.run({ version: 4, host_provider: "codex", prompt: "R2-right", continuation: { runtime_id: first.runtime_id }, provider_allowlist: ["kimi"], attachments: { root: right.root, delivery: "file_only", manifest: right.attachmentManifest } }),
+  ]);
+  const outcomes = [a.providers[0], b.providers[0]]; assert.equal(outcomes.filter((item) => item.status === "completed").length, 1); assert.equal(outcomes.filter((item) => item.error?.code === "MATERIAL_INCOMPLETE").length, 1);
 });
 
 test("file_only fails closed when triad filename, outer hash, or packet hash binding is wrong", async (t) => {
