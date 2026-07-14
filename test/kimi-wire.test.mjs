@@ -51,6 +51,22 @@ test("Kimi Wire preserves every assistant text part in order", () => {
   assert.equal(kimi.parse(stdout, `To resume this session: kimi -r ${session}`).text, "APPROVED");
 });
 
+test("Kimi Wire preserves streaming JSON whitespace, newlines, and fences byte-for-byte", async () => {
+  const tokens = ["```json", "\n", "{", "\n  ", "\"verdict\"", ":", " ", "\"pass\"", "\n", "}", "\n", "```"];
+  const events = tokens.map((text, index) => ({ jsonrpc: "2.0", method: "event", params: { type: index % 2 ? "TextPart" : "ContentPart", payload: { type: "text", text } } }));
+  const terminal = { jsonrpc: "2.0", id: "prompt", result: { status: "finished" } };
+  const stdout = [...events, terminal].map(JSON.stringify).join("\n");
+  const expected = tokens.join("");
+  assert.equal(kimi.parse(stdout, `To resume this session: kimi -r ${session}`).text, expected);
+
+  const plan = kimi.start(provider, "/tmp/work", "review", "/tmp/runtime");
+  for (const event of events) feed(plan, event);
+  feed(plan, terminal); hint(plan);
+  const health = await plan.probeSession();
+  assert.equal(health.status, "completed");
+  assert.equal(kimi.parse(health.raw.stdout, `To resume this session: kimi -r ${session}`).text, expected);
+});
+
 test("Kimi Wire terminal cancellation and failure are not semantic completion", async () => {
   for (const response of [
     { result: { status: "cancelled" }, code: "CANCELLED" },
