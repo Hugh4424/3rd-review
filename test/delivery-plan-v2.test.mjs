@@ -15,20 +15,20 @@ const capture = path.resolve("test/capture-cli.mjs");
 function source(label = "", delivery = "file_only") {
   const root = temp();
   const diff = `DIFF_HEAD\n${"x".repeat(24 * 1024)}\nDIFF_MIDDLE\n${"y".repeat(24 * 1024)}\nDIFF_TAIL\n${label}`;
-  const packet = { version: "review-packet.v1", manifest_hash: canonicalMaterialManifestHash("v2", [{ target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed: true }]), diff_sha256: sha(diff) }; packet.packet_hash = canonicalPacketHash(packet);
+  const embed = delivery === "always_embed"; const packet = { version: "review-packet.v1", manifest_hash: canonicalMaterialManifestHash("v2", [{ target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed }]), diff_sha256: sha(diff) }; packet.packet_hash = canonicalPacketHash(packet);
   const files = [["review-packet.v1.json", `${JSON.stringify(packet)}\n`], ["changes.diff", diff]];
   for (const [name, value] of files) {
     const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value);
   }
   const attachments = files.map(([destination, value]) => ({ destination, sha256: sha(value), size: Buffer.byteLength(value) }));
-  const outerFiles = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed: true })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed: true }];
+  const outerFiles = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed }];
   const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: packet.packet_hash, manifest_hash: packet.manifest_hash, diff_sha256: packet.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("v2", outerFiles, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest);
   fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`);
   const all = [...files, ["manifest.json", `${JSON.stringify(manifest)}\n`]];
   return {
     root,
     packet,
-    attachmentManifest: { version: 1, bundle_id: "v2", entries: all.map(([source, value]) => ({ source, destination: source, size: Buffer.byteLength(value), sha256: sha(value), embed: true })) },
+    attachmentManifest: { version: 1, bundle_id: "v2", entries: all.map(([source, value]) => ({ source, destination: source, size: Buffer.byteLength(value), sha256: sha(value), embed })) },
   };
 }
 
@@ -113,7 +113,7 @@ test("file_only rejects a paired packet and inner-manifest forgery even when the
 });
 
 test("file_only outer canonical binds delivery mode and embed semantics", () => {
-  const input = source(); input.attachmentManifest.entries.find((item) => item.destination === "changes.diff").embed = false;
+  const input = source(); input.attachmentManifest.entries.find((item) => item.destination === "changes.diff").embed = true;
   const checked = validateAttachments({ root: input.root, delivery: "file_only", manifest: input.attachmentManifest }, 2 * 1024 * 1024, [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]);
   assert.throws(() => validateFileOnlyTriad(checked), { code: "MATERIAL_INCOMPLETE" });
 });
@@ -123,6 +123,7 @@ test("always_embed requires the same complete hash-bound triad", () => {
   const incomplete = { ...input.attachmentManifest, entries: input.attachmentManifest.entries.filter((entry) => entry.destination !== "manifest.json") }; const checkedIncomplete = validateAttachments({ root: input.root, delivery: "always_embed", manifest: incomplete }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedIncomplete, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
   const forged = JSON.parse(fs.readFileSync(path.join(input.root, "review-packet.v1.json"), "utf8")); forged.packet_hash = "0".repeat(64); fs.writeFileSync(path.join(input.root, "review-packet.v1.json"), `${JSON.stringify(forged)}\n`); const entry = input.attachmentManifest.entries.find((item) => item.destination === "review-packet.v1.json"); const bytes = fs.readFileSync(path.join(input.root, "review-packet.v1.json")); entry.size = bytes.length; entry.sha256 = sha(bytes); const checkedForged = validateAttachments({ root: input.root, delivery: "always_embed", manifest: input.attachmentManifest }, 2 * 1024 * 1024, roots); assert.throws(() => planDelivery(worker, checkedForged, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
   const mismatched = source(); const mismatchRoots = [{ root: mismatched.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const checkedMismatch = validateAttachments({ root: mismatched.root, delivery: "always_embed", manifest: mismatched.attachmentManifest }, 2 * 1024 * 1024, mismatchRoots); assert.throws(() => planDelivery(worker, checkedMismatch, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
+  const nonEmbedded = source("", "always_embed"); nonEmbedded.attachmentManifest.entries.find((entry) => entry.destination === "changes.diff").embed = false; const checkedNonEmbedded = validateAttachments({ root: nonEmbedded.root, delivery: "always_embed", manifest: nonEmbedded.attachmentManifest }, 2 * 1024 * 1024, [{ root: nonEmbedded.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]); assert.throws(() => planDelivery(worker, checkedNonEmbedded, "review", 1024 * 1024), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("continuation delta triad binds the initial material hash and ordered predecessor", () => {
