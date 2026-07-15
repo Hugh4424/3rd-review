@@ -32,6 +32,20 @@ delivery receipt 记录相等的 `sealed_manifest_hash`、`provider_visible_mani
 `byte_identity: "verified"`。旧附件 runtime 只读，协议不匹配在 provider 启动前返回
 `MATERIAL_PROTOCOL_MISMATCH`。
 
+`doctor` 在顶层声明当前材料协议：
+
+```json
+{
+  "material_protocol": {
+    "version": 5,
+    "delivery_attestation": "sealed-exact-copy.v1"
+  }
+}
+```
+
+调用方必须在启动 provider 前核对该声明。字段缺失、版本不同或 attestation 不同都属于
+`MATERIAL_PROTOCOL_MISMATCH`，不能从 delivery 字段推测兼容。
+
 `file_only` 使用该 provider 私有 workspace 交付冻结文件，不要求 `/etc` policy 或
 `/usr/local` wrapper。broker 会拒绝 symlink、hard link、路径穿越、size/hash 不符，并在
 运行与续跑前复验冻结副本。这个边界保证材料完整性和稳定路径，不声称替代操作系统 sandbox；

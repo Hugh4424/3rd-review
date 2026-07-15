@@ -32,7 +32,7 @@ test("CLI doctor verifies the supplied attachment root against configuration", (
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-cli-doctor-")); const cli = path.resolve("scripts/3rd-review.mjs"); const config = path.join(root, "config.json");
   fs.writeFileSync(config, JSON.stringify({ version: 4, runtime: { root: path.join(root, "runtime") }, attachment_roots: [{ root, sources: ["packets"] }], tiers: [["kimi"]], providers: { kimi: { command: path.resolve("test/fake-cli.mjs"), auth: { type: "native" } } } }));
   const result = spawnSync(process.execPath, [cli, "doctor", `--config=${config}`, `--attachments-root=${root}`], { encoding: "utf8" });
-  assert.equal(result.status, 0); const output = JSON.parse(result.stdout); assert.deepEqual(output.capabilities, { attachments: true, cancel_source: true }); assert.deepEqual(output.attachment_root, { status: "ready" });
+  assert.equal(result.status, 0); const output = JSON.parse(result.stdout); assert.deepEqual(output.capabilities, { attachments: true, cancel_source: true }); assert.deepEqual(output.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" }); assert.deepEqual(output.attachment_root, { status: "ready" });
 });
 
 test("CLI maps completed semantic output, provider failure, and preflight to 0, 3, and 2", () => {

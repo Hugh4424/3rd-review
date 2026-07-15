@@ -40,6 +40,8 @@ test("broker copies sealed bytes unchanged and records one verified hash", async
   assert.equal(provider.delivery.byte_identity, "verified");
   assert.equal(Object.hasOwn(provider.delivery, "raw_material_manifest_hash"), false);
   assert.equal(Object.hasOwn(provider.delivery, "redaction"), false);
+  const privateState = JSON.parse(fs.readFileSync(path.join(runtimeRoot, result.runtime_id, "state.json"), "utf8"));
+  assert.deepEqual(privateState.providers.opencode.delivery, provider.delivery);
   const frozen = path.join(runtimeRoot, result.runtime_id, "workspace", "opencode");
   assert.deepEqual(fs.readFileSync(path.join(frozen, "changes.diff")), fs.readFileSync(path.join(attachmentRoot, "changes.diff")));
   assert.deepEqual(fs.readFileSync(path.join(frozen, "review-packet.v1.json")), fs.readFileSync(path.join(attachmentRoot, "review-packet.v1.json")));
@@ -190,6 +192,7 @@ test("doctor keeps broker and provider delivery capabilities", async () => {
   const attachmentRoot = source();
   const result = await new Broker(config(temp(), [["kimi", "opencode"]], attachmentRoot)).doctor();
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
+  assert.deepEqual(result.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
   assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
 });

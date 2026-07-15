@@ -27,10 +27,12 @@ function config(root, tiers, attachmentRoot = null) {
 
 test("doctor requires configured attachment roots and verifies the requested root", async () => {
   const unconfigured = await new Broker(config(temp(), [["kimi", "opencode"]])).doctor();
+  assert.deepEqual(unconfigured.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(unconfigured.capabilities, { attachments: false, cancel_source: true });
   assert.deepEqual(unconfigured.attachment_root, { status: "unavailable", error: { code: "ATTACHMENT_ROOT_UNCONFIGURED" } });
   const root = source(); const broker = new Broker(config(temp(), [["kimi", "opencode"]], root));
   const result = await broker.doctor({ attachmentRoot: root });
+  assert.deepEqual(result.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.attachment_root, { status: "ready" });
   assert.deepEqual(result.providers.map((item) => item.provider), ["kimi", "opencode"]);
