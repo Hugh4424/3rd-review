@@ -57,8 +57,8 @@ test("cancellation wins before probe, after probe, and immediately before publis
   for (const cancelAt of [1, 2, 3]) { let checks = 0; let calls = 0; const { clock, decisions } = setup({ intervalMs: 10, isCancelled: () => ++checks >= cancelAt, probeSession: async () => { calls += 1; return { status: "dead", session_id: "s", cursor: null, raw: null, error: null, evidence: "dead" }; } }); await clock.tick(10); assert.equal(decisions[0].error.code, "CANCELLED"); if (cancelAt === 1) assert.equal(calls, 0); }
 });
 
-test("adapters without a probe fail closed after two stream-fallback rounds", async () => {
-  const { clock, decisions, runner } = setup({ intervalMs: 10 }); await clock.tick(10); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "event-1" }); await clock.tick(10); assert.deepEqual(decisions, []); await clock.tick(10); assert.deepEqual(decisions, []); await clock.tick(10); assert.equal(decisions[0].error.code, "HEALTH_UNVERIFIABLE");
+test("adapters without a probe do not turn stream silence into an idle timeout", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 10 }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "event-1" }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.stop();
 });
 
 test("unchanged busy health becomes PROCESS_STALLED after five checks", async () => {

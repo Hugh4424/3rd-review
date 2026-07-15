@@ -12,6 +12,7 @@ const stream = path.resolve("test/stream-cli.mjs");
 const fail = path.resolve("test/fail-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const duplicate = path.resolve("test/duplicate-progress-cli.mjs");
+const ignoresSigterm = path.resolve("test/ignore-sigterm-cli.mjs");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function plan(command, env = {}) { return { command, argv: [], cwd: fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-process-test-")), input: null, env: { ...process.env, ...env }, redact: [] }; }
 
@@ -26,21 +27,43 @@ test("silent live process emits liveness without activity", async () => {
   assert.equal(liveness.length, settled);
 });
 
-test("deprecated timeout options have no runner semantics", async () => {
-  const active = await execute(plan(stream), { maxOutputBytes: 4096, idleTimeoutMs: 30, livenessIntervalMs: 5, livenessCheckpointMs: 15 });
-  assert.equal(active.ok, true);
-  const silentLive = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, idleTimeoutMs: 30, livenessIntervalMs: 5, livenessCheckpointMs: 15 });
-  assert.equal(silentLive.ok, true);
+test("no wall-clock budget is applied by default", async () => {
+  const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, livenessIntervalMs: 5 });
+  assert.equal(result.ok, true); assert.ok(result.duration_ms >= 60);
 });
 
-test("PID liveness is diagnostic and cannot clear unverifiable health", async () => {
+test("explicit wall-clock budget terminates the provider with BUDGET_EXHAUSTED", async () => {
+  let pid;
+  const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), { maxOutputBytes: 4096, maxWallClockMs: 20, onStart: (value) => { pid = value; } });
+  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.equal(Number.isInteger(pid), true);
+});
+
+test("budget escalation sends SIGKILL when the provider ignores SIGTERM", async () => {
+  const signals = [];
+  const result = await execute({ ...plan(process.execPath), argv: [ignoresSigterm] }, { maxOutputBytes: 4096, maxWallClockMs: 100, terminationGraceMs: 20, terminateProcess: (pid, signal) => { signals.push(signal); return terminateProcess(pid, signal); } });
+  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("the first terminal reason wins when a late health completion races the budget", async () => {
+  const raw = `${JSON.stringify({ type: "session.completed", session_id: "late", text: "late" })}\n`;
+  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => { await delay(30); return { status: "completed", raw: { stdout: raw, stderr: "" } }; } }, { maxOutputBytes: 4096, maxWallClockMs: 10, healthCheckIntervalMs: 1, probeDeadlineMs: 100, validateCompleted: () => true });
+  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.equal(result.health_harvested, undefined);
+});
+
+test("health completion wins when it claims the terminal state before the budget", async () => {
+  const raw = `${JSON.stringify({ type: "session.completed", session_id: "early", text: "done" })}\n`;
+  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => ({ status: "completed", raw: { stdout: raw, stderr: "" } }) }, { maxOutputBytes: 4096, maxWallClockMs: 100, healthCheckIntervalMs: 1, validateCompleted: () => true });
+  assert.equal(result.ok, true); assert.equal(result.health_harvested, true); assert.equal(result.stdout, raw);
+});
+
+test("PID liveness remains diagnostic for a stream-only provider", async () => {
   const liveness = []; const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, healthCheckIntervalMs: 10, livenessIntervalMs: 5, onLiveness: (value) => liveness.push(value) });
-  assert.ok(liveness.length > 0); assert.equal(result.ok, false); assert.equal(result.error.code, "HEALTH_UNVERIFIABLE");
+  assert.ok(liveness.length > 0); assert.equal(result.ok, true);
 });
 
 test("sequenced heartbeat events update liveness but never progress", async () => {
   const liveness = [];
-  const result = await execute({ ...plan(process.execPath), argv: [duplicate], observeLine: jsonProgress }, { maxOutputBytes: 4096, idleTimeoutMs: 100, livenessIntervalMs: 1_000, onLiveness: (value) => liveness.push(value) });
+  const result = await execute({ ...plan(process.execPath), argv: [duplicate], observeLine: jsonProgress }, { maxOutputBytes: 4096, livenessIntervalMs: 1_000, onLiveness: (value) => liveness.push(value) });
   assert.equal(result.ok, true); assert.equal(result.progress_events, 0); assert.equal(result.last_progress_at_ms, null); assert.ok(liveness.length >= 4);
 });
 
@@ -66,14 +89,14 @@ test("completed health raw is harvested and a hanging wrapper is internally term
   assert.equal(result.ok, true); assert.equal(result.stdout, raw); assert.equal(result.health_harvested, true); assert.equal(result.error, undefined);
 });
 
-test("stream fallback fails closed after two rounds without a valid event", async () => {
+test("stream-only provider silence is governed by process exit, not an implicit timeout", async () => {
   const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, healthCheckIntervalMs: 10 });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "HEALTH_UNVERIFIABLE");
+  assert.equal(result.ok, true); assert.ok(result.duration_ms >= 50);
 });
 
 test("stream output reports activity and monitors stop after close or error", async () => {
   const activity = []; const liveness = [];
-  const streamed = await execute(plan(stream), { maxOutputBytes: 4096, idleTimeoutMs: 1000, livenessIntervalMs: 5, onLiveness: () => liveness.push(Date.now()), onActivity: () => activity.push(Date.now()) });
+  const streamed = await execute(plan(stream), { maxOutputBytes: 4096, livenessIntervalMs: 5, onLiveness: () => liveness.push(Date.now()), onActivity: () => activity.push(Date.now()) });
   assert.equal(streamed.ok, true);
   assert.ok(activity.length >= 3);
   const afterClose = liveness.length;
@@ -90,7 +113,7 @@ test("stream output reports activity and monitors stop after close or error", as
 
 test("external termination stops liveness monitoring", async () => {
   let pid = null; const liveness = [];
-  const started = Date.now(); const running = execute(plan(slow), { maxOutputBytes: 4096, idleTimeoutMs: 1_000, livenessIntervalMs: 5, onStart: (value) => { pid = value; }, onLiveness: () => liveness.push(Date.now()) });
+  const started = Date.now(); const running = execute(plan(slow), { maxOutputBytes: 4096, livenessIntervalMs: 5, onStart: (value) => { pid = value; }, onLiveness: () => liveness.push(Date.now()) });
   while (pid === null || liveness.length < 2) await delay(5);
   assert.equal(terminateProcess(pid), true);
   const result = await running;

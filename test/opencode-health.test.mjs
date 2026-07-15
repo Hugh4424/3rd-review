@@ -9,6 +9,15 @@ import { execute } from "../lib/process.mjs";
 const provider = { id: "opencode", command: "opencode", model: null, effort: null, auth: { env: [] }, env: [] };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 const healthFixture = path.resolve("test/opencode-health-fixture.mjs");
+async function assertEventuallyUnavailable(url, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { await fetch(url, { signal: AbortSignal.timeout(50) }); }
+    catch { return; }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail(`OpenCode health server remained available: ${url}`);
+}
 
 test("OpenCode start and resume attach to one loopback server owned by the plan", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-provider-work-"));
@@ -76,8 +85,7 @@ test("OpenCode harvests a terminal session when its attached CLI hangs and clean
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-health-plan-")); const plan = opencode.start({ ...provider, command: healthFixture }, cwd, "review");
   const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 100, probeDeadlineMs: 1_000, validateCompleted: (raw) => opencode.parse(raw.stdout, raw.stderr).ok });
   assert.equal(result.ok, true); assert.equal(result.health_harvested, true); assert.equal(opencode.parse(result.stdout, result.stderr).text, "FIXTURE_APPROVED");
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  await assert.rejects(fetch(`${plan.healthServer.url}/global/health`, { signal: AbortSignal.timeout(200) }));
+  await assertEventuallyUnavailable(`${plan.healthServer.url}/global/health`);
 });
 
 test("OpenCode continuation harvests its known session when the attached client exits with no output", async () => {

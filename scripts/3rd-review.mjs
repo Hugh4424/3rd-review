@@ -44,7 +44,7 @@ async function main() {
   validateArgs(command);
   const broker = new Broker(loadConfig(value("config") ?? undefined)); activeBroker = broker;
   if (command === "doctor") console.log(JSON.stringify(await broker.doctor({ attachmentRoot: value("attachments-root") ? path.resolve(value("attachments-root")) : null }), null, 2));
-  else if (command === "run") console.log(JSON.stringify(await broker.run(runRequest()), null, 2));
+  else if (command === "run") { const result = await broker.run(runRequest()); console.log(JSON.stringify(result, null, 2)); if (result.outcome !== "completed") process.exitCode = 3; }
   else if (command === "status") console.log(JSON.stringify(broker.status(required("runtime-id")), null, 2));
   else if (command === "cancel") console.log(JSON.stringify(broker.cancel(required("runtime-id"), required("provider"), value("source") ?? "user"), null, 2));
 }

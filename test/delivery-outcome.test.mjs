@@ -26,7 +26,7 @@ function source(delivery = "file_only", diffValue = null) {
   return root;
 }
 
-test("broker delivers and records a derived triad while retaining the raw material hash", async () => {
+test("broker copies sealed bytes unchanged and records one verified hash", async () => {
   const absolute = "/Users/Hugh/private/deleted.mjs";
   const attachmentRoot = source("always_embed", `diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-${absolute}\n+clean\n`);
   const runtimeRoot = temp();
@@ -35,18 +35,14 @@ test("broker delivers and records a derived triad while retaining the raw materi
   const result = await new Broker(config(runtimeRoot, [["opencode"]], attachmentRoot)).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: inputAttachments });
   const provider = result.providers[0];
   assert.equal(provider.status, "completed");
-  assert.equal(provider.delivery.raw_material_manifest_hash, rawHash);
-  assert.notEqual(provider.delivery.material_manifest_hash, rawHash);
-  assert.equal(provider.delivery.material_representation, "sanitized");
-  assert.equal(provider.delivery.redaction.rule_version, "host-root-prefix.v1");
-  assert.equal(provider.delivery.redaction.replacement_count, 1);
-  assert.equal(provider.delivery.redaction.raw_material_manifest_hash, rawHash);
-  assert.equal(provider.delivery.redaction.derived_material_manifest_hash, provider.delivery.material_manifest_hash);
-  assert.equal(provider.delivery.redaction.residual_scan, "passed");
-  assert.equal(provider.delivery.redaction.roots.find((item) => item.root_id === "home").count, 1);
+  assert.equal(provider.delivery.sealed_manifest_hash, rawHash);
+  assert.equal(provider.delivery.provider_visible_manifest_hash, rawHash);
+  assert.equal(provider.delivery.byte_identity, "verified");
+  assert.equal(Object.hasOwn(provider.delivery, "raw_material_manifest_hash"), false);
+  assert.equal(Object.hasOwn(provider.delivery, "redaction"), false);
   const frozen = path.join(runtimeRoot, result.runtime_id, "workspace", "opencode");
-  assert.equal(fs.readFileSync(path.join(frozen, "changes.diff"), "utf8").includes(absolute), false);
-  assert.equal(fs.readFileSync(path.join(frozen, "review-packet.v1.json"), "utf8").includes(absolute), false);
+  assert.deepEqual(fs.readFileSync(path.join(frozen, "changes.diff")), fs.readFileSync(path.join(attachmentRoot, "changes.diff")));
+  assert.deepEqual(fs.readFileSync(path.join(frozen, "review-packet.v1.json")), fs.readFileSync(path.join(attachmentRoot, "review-packet.v1.json")));
 });
 
 function attachments(root, delivery, embed = delivery === "always_embed") {
@@ -72,8 +68,6 @@ function config(root, tiers, attachmentRoot) {
       max_output_bytes: 100_000,
       max_attachment_bytes: 10_000,
       liveness_interval_ms: 5,
-      idle_timeout_ms: 0,
-      max_duration_ms: 1_000,
       orphan_timeout_ms: 100,
     },
     attachment_roots: [{ root: attachmentRoot, sources: ["skills", "review-packet.v1.json", "changes.diff", "manifest.json"] }],
@@ -140,6 +134,7 @@ test("a file_only provider set runs without embedding fallback", async () => {
   const result = await broker.run({
     version: 4,
     host_provider: "codex",
+    provider_allowlist: ["kimi", "opencode"],
     prompt: "review",
     continuation: null,
     attachments: attachments(attachmentRoot, "file_only"),
@@ -158,6 +153,7 @@ test("file_only creates native continuable sessions", async () => {
   const first = await broker.run({
     version: 4,
     host_provider: "codex",
+    provider_allowlist: ["kimi", "opencode"],
     prompt: "first",
     continuation: null,
     attachments: attachments(attachmentRoot, "file_only"),

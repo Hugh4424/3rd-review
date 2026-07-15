@@ -16,36 +16,38 @@ const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
 const deadHealth = { healthCheckIntervalMs: 10, probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "test probe" }) };
 function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
-  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1_000 }, tiers, providers: Object.fromEntries(["claude-code", "kimi", "codex", "opencode"].map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
+  const ids = [...new Set(tiers.flat())];
+  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5 }, tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
 
-test("deprecated timeout fields remain accepted but have no lifecycle requirement", () => {
+test("wall-clock budget defaults to null, accepts positive integers, and rejects legacy fields", () => {
   const value = config(temp(), [["kimi"]]);
-  delete value.runtime.idle_timeout_ms; delete value.runtime.max_duration_ms;
-  const defaults = validateConfig(value);
-  assert.equal(defaults.runtime.idle_timeout_ms, 360_000);
-  assert.equal(defaults.runtime.max_duration_ms, 900_000);
-  value.runtime.idle_timeout_ms = 0;
-  value.runtime.max_duration_ms = 0;
-  assert.equal(validateConfig(value).runtime.idle_timeout_ms, 0);
-  value.runtime.max_duration_ms = 900_000;
-  assert.equal(validateConfig(value).runtime.max_duration_ms, 900_000);
-  value.runtime.max_duration_ms = -1;
-  assert.throws(() => validateConfig(value), /non-negative integer/);
+  assert.equal(value.runtime.max_wall_clock_ms, null);
+  value.runtime.max_wall_clock_ms = 900_000; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, 900_000);
+  for (const invalid of [0, -1, 1.5, "1000"]) { value.runtime.max_wall_clock_ms = invalid; assert.throws(() => validateConfig(value), /positive integer/); }
+  delete value.runtime.max_wall_clock_ms; value.runtime.idle_timeout_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
+  delete value.runtime.idle_timeout_ms; value.runtime.max_duration_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
 });
 
-test("runs all eligible providers in a tier and excludes the host", async () => {
+test("config requires every provider to appear exactly once in tiers", () => {
+  const value = config(temp(), [["kimi", "codex"]]);
+  value.providers.opencode = { ...value.providers.kimi, id: "opencode" };
+  assert.throws(() => validateConfig(value), /provider opencode must appear in tiers/);
+  value.tiers = [["kimi", "codex"], ["kimi", "opencode"]];
+  assert.throws(() => validateConfig(value), /provider kimi appears more than once/);
+});
+
+test("default route runs one heterologous provider", async () => {
   const broker = new Broker(config(temp())); const result = await broker.run({ version: 4, host_provider: "claude-code", prompt: "review", continuation: null });
-  assert.equal(result.providers.find((item) => item.provider === "claude-code").error.code, "SAME_SOURCE");
-  for (const id of ["kimi", "codex", "opencode"]) assert.equal(result.providers.find((item) => item.provider === id).status, "completed");
-  assert.equal(result.round, 1); assert.equal(result.selected_tier, 0);
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi"]); assert.equal(result.providers[0].status, "completed");
+  assert.equal(result.outcome, "completed"); assert.equal(result.round, 1); assert.equal(result.selected_tier, 0);
 });
 
 test("continuation uses only each provider's own native session", async () => {
   const broker = new Broker(config(temp(), [["kimi", "codex"]])); const first = await broker.run({ version: 4, host_provider: "claude-code", prompt: "one", continuation: null });
   const second = await broker.run({ version: 4, host_provider: "claude-code", prompt: "two", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(second.round, 2); assert.equal(second.selected_tier, null); assert.deepEqual(second.providers.map((item) => item.provider).sort(), ["codex", "kimi"]); assert.ok(second.providers.every((item) => item.status === "completed"));
+  assert.equal(second.round, 2); assert.equal(second.selected_tier, null); assert.deepEqual(second.providers.map((item) => item.provider), ["kimi"]); assert.ok(second.providers.every((item) => item.status === "completed"));
 });
 
 test("falls through only after an entire tier has no success", async () => {
@@ -57,15 +59,14 @@ test("falls through only after an entire tier has no success", async () => {
 test("reports missing environment authentication without running the provider", async () => {
   const value = config(temp(), [["kimi"]]); value.providers.kimi.auth = { type: "env", env: ["THIRD_REVIEW_TEST_MISSING_KEY"] };
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].error.code, "AUTH_ENV_MISSING");
+  assert.equal(result.providers[0].error.code, "AUTH_ENV_MISSING"); assert.equal(result.providers.length, 1); assert.equal(result.outcome, "invalid_output");
 });
 
-test("a changed config makes only that continuation provider fail", async () => {
+test("continuation keeps the single provider selected initially", async () => {
   const root = temp(); const first = await new Broker(config(root, [["kimi", "codex"]])).run({ version: 4, host_provider: "claude-code", prompt: "one", continuation: null });
   const changed = config(root, [["kimi"]]); delete changed.providers.codex;
   const result = await new Broker(changed).run({ version: 4, host_provider: "claude-code", prompt: "two", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
-  assert.equal(result.providers.find((item) => item.provider === "codex").error.code, "PROVIDER_NOT_CONFIGURED");
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi"]); assert.equal(result.providers[0].status, "completed");
 });
 
 test("cleanup removes expired inactive state", () => {
@@ -100,7 +101,7 @@ test("runtime keeps process liveness and output progress as separate timestamps"
 });
 
 test("providers receive isolated workspaces and independent review inputs", async () => {
-  const root = temp(); const value = config(root, [["kimi", "opencode"]]); value.runtime.max_duration_ms = 360_000;
+  const root = temp(); const value = config(root, [["kimi", "opencode"]]);
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "UNIQUE_REVIEW_PACKET", continuation: null });
   const runtime = path.join(root, result.runtime_id, "workspace");
   const kimiInput = fs.readFileSync(path.join(runtime, "kimi", "review-input.md"), "utf8"); assert.match(kimiInput, /^Review only the supplied instruction/); assert.match(kimiInput, /UNIQUE_REVIEW_PACKET$/);
@@ -120,19 +121,18 @@ test("cleanup reaps an orphaned broker process and records ORPHANED_BROKER", asy
   assert.equal(isAlive(orphan.pid), false);
 });
 
-test("deprecated timeout values do not terminate a live provider", async () => {
-  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slowSuccess; value.runtime.idle_timeout_ms = 30; value.runtime.max_duration_ms = 15;
+test("explicit wall-clock budget is persisted as a lifecycle failure, not cancellation or retry", async () => {
+  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slowSuccess; value.runtime.max_wall_clock_ms = 15;
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].status, "completed");
+  assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "BUDGET_EXHAUSTED");
+  assert.equal(result.providers[0].cancellation_source, undefined); assert.equal(result.providers[0].timeout_retry, undefined);
 });
 
 test("broker updates last progress for parsed stream output", async () => {
   const root = temp(); const value = config(root, [["opencode"]]); value.providers.opencode.command = stream;
-  const broker = new Broker(value); const running = broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  await new Promise((resolve) => setTimeout(resolve, 35));
-  const runtime_id = fs.readdirSync(root).find((name) => /^[0-9a-f-]{36}$/i.test(name)); const state = broker.status(runtime_id).providers.opencode;
-  assert.ok(state.last_progress_at_ms >= state.started_at_ms);
-  await running;
+  const broker = new Broker(value); const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  const state = broker.status(result.runtime_id).providers.opencode;
+  assert.ok(state.last_progress_at_ms >= state.started_at_ms); assert.ok(state.progress_events > 0);
 });
 
 test("Kimi records stream progress and APIEmptyResponseError retries", async () => {
@@ -147,7 +147,7 @@ test("Kimi records stream progress and APIEmptyResponseError retries", async () 
 });
 
 test("a confirmed-dead Kimi process is terminated without a semantic verdict", async () => {
-  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slow; value.runtime.idle_timeout_ms = 30;
+  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slow;
   const result = await new Broker(value, deadHealth).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   const item = result.providers[0]; const state = readRuntime(root, result.runtime_id).providers.kimi;
   assert.equal(item.status, "failed");

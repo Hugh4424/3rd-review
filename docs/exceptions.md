@@ -12,7 +12,7 @@
 | 附件不可信 | root/source allowlist、相对路径、regular-file、single-link、size、SHA-256 任一不符都明确失败 |
 | 附件投递 | 同一请求按 provider 协商 `file_only`/`always_embed`；无法安全转换时 `ATTACHMENT_DELIVERY_UNSUPPORTED`，不得跳过 |
 | 静默但存活 | `process_alive_at_ms` 仅表示 PID 存活；`last_progress_at_ms` 仅由已解析的 provider 流事件更新，二者不能互相替代 |
-| 长时间运行 | 通用 health runner 默认每 60 秒串行检查一次；连续两轮无法验证即 `HEALTH_UNVERIFIABLE`。`idle_timeout_ms`、`max_duration_ms` 仅兼容读取并被忽略；PID 只作诊断，不覆盖 health 结果 |
+| 长时间运行 | 通用 health runner 默认每 60 秒串行检查一次；连续两轮无法验证即 `HEALTH_UNVERIFIABLE`。默认 `max_wall_clock_ms=null`，持续有效进展的会话不按总时长终止；调用方可显式设置正整数预算，到期真实终止进程树并返回 `BUDGET_EXHAUSTED`。PID 只作诊断，不覆盖 health 结果 |
 | 用户取消 | `cancel --source` 终止 provider process tree；`status=cancelled`、错误码 `CANCELLED`，来源写入 `error.source`，并保留 `cancellation_source` 兼容字段 |
 | broker 退出 | CLI 信号会终止 provider process tree 并记录 `cancellation_source=broker_shutdown`；后续 status/cleanup 发现 owner 丢失或 liveness lease 过期时标记 `ORPHANED_BROKER` 并回收 |
 | 并发 provider | 每个 provider 使用私有 workspace；Kimi 的 cwd 可写但 bundle 视图只读，OpenCode 通过 stdin 接收完整 prompt，不走会截断的 `--file`/Read 链路；provider 不接触真实 repo |

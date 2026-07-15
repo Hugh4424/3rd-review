@@ -3,8 +3,7 @@ import test from "node:test";
 import { lastProviderMaterial, providerHasContinuationPredecessor, recordContinuationMaterial, releaseContinuationMaterial, reserveContinuationMaterial } from "../lib/continuation-materials.mjs";
 
 const initial = "i".repeat(64);
-const material = (sequence, previous = null, label = "a") => ({ sequence, bundle_id: `bundle-${label}`, manifest_hash: `${label}`.repeat(64), delivery_manifest_hash: `${String.fromCharCode(label.charCodeAt(0) + 1)}`.repeat(64), initial_material_manifest_hash: initial, previous_delivery_manifest_hash: previous,
-  provider_material_manifest_hash: `${String.fromCharCode(label.charCodeAt(0) + 2)}`.repeat(64), provider_delivery_manifest_hash: `${String.fromCharCode(label.charCodeAt(0) + 3)}`.repeat(64), provider_initial_material_manifest_hash: "p".repeat(64) });
+const material = (sequence, previous = null, label = "a") => ({ sequence, bundle_id: `bundle-${label}`, manifest_hash: `${label}`.repeat(64), delivery_manifest_hash: `${String.fromCharCode(label.charCodeAt(0) + 1)}`.repeat(64), initial_material_manifest_hash: initial, previous_delivery_manifest_hash: previous });
 
 test("R1 to R3 preserves the same provider native-session material chain", () => {
   const r2 = material(1); let state = { attachments: { manifest_hash: initial }, continuation_materials: [] };
@@ -26,9 +25,9 @@ test("provider session fork cannot inherit a prior delta material", () => {
   assert.equal(lastProviderMaterial(state, "opencode", "native-2"), null); assert.equal(lastProviderMaterial(state, "opencode", "native-1").delivery_manifest_hash, r2.delivery_manifest_hash);
 });
 
-test("reservation rejects a different derived material chain for the same raw delta", () => {
+test("reservation rejects a different sealed material chain", () => {
   const r2 = material(1); const state = reserveContinuationMaterial({ continuation_materials: [] }, r2, "opencode", "native-1");
-  assert.throws(() => reserveContinuationMaterial(state, { ...r2, provider_material_manifest_hash: "z".repeat(64) }, "kimi", "native-2"), { code: "MATERIAL_INCOMPLETE" });
+  assert.throws(() => reserveContinuationMaterial(state, { ...r2, manifest_hash: "z".repeat(64) }, "kimi", "native-2"), { code: "MATERIAL_INCOMPLETE" });
 });
 
 test("bundle id is part of the reserved continuation binding", () => {

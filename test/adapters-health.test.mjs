@@ -12,21 +12,45 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fakeAppServer = path.join(here, "fake-codex-app-server.mjs");
 const hangingClaude = path.join(here, "hanging-claude-stream.mjs");
 const lateClose = path.join(here, "terminal-then-close.mjs");
+const emptyThenResume = path.join(here, "claude-empty-then-resume.mjs");
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-adapter-health-"));
 const provider = (command) => ({ id: "provider", command, model: null, effort: null, auth: { type: "native", env: [] }, env: [] });
 
 test("Claude uses official stream-json events and harvests result without waiting for CLI exit", async () => {
   fs.chmodSync(hangingClaude, 0o755);
   const plan = claude.start(provider(hangingClaude), temp(), "review");
-  assert.ok(plan.argv.includes("stream-json"));
-  assert.ok(plan.argv.includes("--include-partial-messages"));
-  assert.ok(plan.argv.includes("--verbose"));
+  assert.ok(plan.clientArgv.includes("stream-json"));
+  assert.ok(plan.clientArgv.includes("--include-partial-messages"));
+  assert.ok(plan.clientArgv.includes("--verbose"));
+  assert.ok(plan.clientArgv.includes("--bare"));
+  assert.equal(plan.clientArgv[plan.clientArgv.indexOf("--tools") + 1], "Read");
+  assert.equal(plan.clientArgv[plan.clientArgv.indexOf("--allowedTools") + 1], "Read(bundle/**)");
+  assert.deepEqual(claude.capabilities.attachment_delivery, ["file_only", "always_embed"]);
+  assert.equal(Object.hasOwn(JSON.parse(Buffer.from(plan.argv[1], "base64url").toString("utf8")), "env"), false);
   const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
   assert.equal(result.health_harvested, true);
   assert.match(result.stdout, /CLAUDE_FINAL/);
   const parsed = claude.parse(result.stdout);
   assert.deepEqual({ ok: parsed.ok, text: parsed.text, session_id: parsed.session_id }, { ok: true, text: "CLAUDE_FINAL", session_id: "claude-session" });
+});
+
+test("Claude rejects a changed session identity during supervised continuation", async () => {
+  process.env.CLAUDE_TEST_MISMATCH = "1";
+  try {
+    const plan = claude.start({ ...provider(emptyThenResume), env: ["CLAUDE_TEST_MISMATCH"] }, temp(), "review");
+    const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+    assert.equal(result.ok, false); assert.match(result.stderr, /changed session identity/);
+  } finally { delete process.env.CLAUDE_TEST_MISMATCH; }
+});
+
+test("Claude continues an empty successful turn in the same native session", async () => {
+  fs.chmodSync(emptyThenResume, 0o755);
+  const plan = claude.start(provider(emptyThenResume), temp(), "review");
+  const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+  assert.equal(result.ok, true);
+  const parsed = claude.parse(result.stdout);
+  assert.deepEqual({ text: parsed.text, session_id: parsed.session_id }, { text: "CLAUDE_RESUMED_FINAL", session_id: "claude-empty-session" });
 });
 
 test("Claude result errors are terminal but remain semantic provider failures", () => {

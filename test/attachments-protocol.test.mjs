@@ -22,7 +22,7 @@ function packet(root, delivery = "file_only", embed = delivery === "always_embed
 function source(delivery = "file_only") { const root = temp(); const diff = "DIFF_HEAD\nDIFF_TAIL\n"; const embed = delivery === "always_embed"; const materialHash = canonicalMaterialManifestHash("bundle-1", [{ target: "skills/review/SKILL.md", sha256: sha("lens"), size: 4, embed }, { target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed }]); const review = { version: "review-packet.v1", manifest_hash: materialHash, diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review); const packet = `${JSON.stringify(review)}\n`; const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), contents); } const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("bundle-1", outer, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`); return root; }
 function config(root, tiers, attachmentRoot = null) {
   const ids = [...new Set(tiers.flat())];
-  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, idle_timeout_ms: 0, max_duration_ms: 1000, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
+  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 
 test("doctor requires configured attachment roots and verifies the requested root", async () => {
@@ -33,6 +33,7 @@ test("doctor requires configured attachment roots and verifies the requested roo
   const result = await broker.doctor({ attachmentRoot: root });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.attachment_root, { status: "ready" });
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi", "opencode"]);
   assert.equal(result.verification, "workspace_copy_only");
   const forbidden = await broker.doctor({ attachmentRoot: temp() });
   assert.deepEqual(forbidden.capabilities, { attachments: false, cancel_source: true });
@@ -40,6 +41,13 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
   assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
+});
+
+test("doctor and default run follow configured tier order", async () => {
+  const root = source(); const value = config(temp(), [["opencode"], ["kimi"]], root); const broker = new Broker(value);
+  const doctor = await broker.doctor({ attachmentRoot: root }); assert.deepEqual(doctor.providers.map((item) => item.provider), ["opencode", "kimi"]);
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(root, "file_only", false) });
+  assert.deepEqual(result.providers.map((item) => item.provider), ["opencode"]);
 });
 
 test("doctor attachment probe copies and locks a private bundle without touching the packet root", () => {
@@ -80,7 +88,7 @@ test("attachment validation does not render always_embed material before deliver
 
 test("file_only runs Kimi and OpenCode from frozen provider-private workspaces", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot));
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "file_only", false) });
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, provider_allowlist: ["kimi", "opencode"], attachments: packet(attachmentsRoot, "file_only", false) });
   assert.equal(result.providers.find((item) => item.provider === "kimi").status, "completed");
   const openCode = result.providers.find((item) => item.provider === "opencode"); assert.equal(openCode.status, "completed"); assert.equal(openCode.delivery_used, "file_only");
   assert.equal(fs.existsSync(path.join(runtime, result.runtime_id, "workspace/kimi/skills/review/SKILL.md")), true);

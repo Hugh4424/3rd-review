@@ -20,10 +20,17 @@
 --attachment-delivery=<file_only|always_embed>
 ```
 
-三项必须一起出现。它们只允许首轮 request；包含 `continuation` 的 request 不得传附件。
+三项必须一起出现。首轮可携带初始三元组；附件 runtime 的 continuation 按下文携带
+独立 delta 三元组，或显式复用已冻结材料。
 `--attachments-root` 必须是 config `attachment_roots` allowlist 中的真实目录，manifest
 的 source 必须是该 root 下的安全相对路径和允许 prefix。broker 校验 regular file、size
 和 SHA-256 后复制到 provider 私有 workspace；provider 不接触调用方真实仓库。
+
+附件使用 `material protocol v5`。producer 密封后的 packet、diff、manifest 是唯一 authority；
+broker 只允许校验、逐字节复制、复验，禁止脱敏、重写或重算 provider-visible 材料。
+delivery receipt 记录相等的 `sealed_manifest_hash`、`provider_visible_manifest_hash` 和
+`byte_identity: "verified"`。旧附件 runtime 只读，协议不匹配在 provider 启动前返回
+`MATERIAL_PROTOCOL_MISMATCH`。
 
 `file_only` 使用该 provider 私有 workspace 交付冻结文件，不要求 `/etc` policy 或
 `/usr/local` wrapper。broker 会拒绝 symlink、hard link、路径穿越、size/hash 不符，并在
@@ -44,8 +51,13 @@ request 是 JSON，至少包含以下 V4 字段：
 ```
 
 `host_provider` 是受支持的宿主 provider，broker 不让同源 provider 审查。调用方可选
-`provider_allowlist`，但其中只能有唯一、受支持且异源的 provider id。首轮的
+`provider_allowlist`，但其中只能包含不重复、受支持且异源的 provider id。首轮的
 `continuation` 为 `null` 或省略；续跑唯一使用：
+
+默认不传 `provider_allowlist`，broker 每个首轮只启动一个异源 provider。显式
+`provider_allowlist` 可以列出多个唯一 provider，代表调用方明确请求并行多审；默认路径不得
+把 capability discovery 的全部候选自动转换为多 provider allowlist。fallback 只响应稳定的
+transport unavailable code；配置、材料、取消、语义结果和无效输出均不得 fallback。
 
 ```json
 {
@@ -56,9 +68,17 @@ request 是 JSON，至少包含以下 V4 字段：
 }
 ```
 
-续跑不接收 provider session id。broker 读取该 runtime 的私有状态，只续跑已完成且拥有
-原生 session 的 provider，并对冻结附件做完整性验证。runtime 过期、找不到、锁争用、
+续跑不接收 provider session id。broker 从 runtime 私有状态取得原生 session，只允许两种附件行为：
+
+- delta：request 携带完整、独立密封的 delta 三元组；其 continuation manifest 绑定首轮
+  `initial_material_manifest_hash`、递增 `sequence` 和前一轮 `previous_delivery_manifest_hash`。
+- reuse：request 不携带附件，并显式设置 `reuse_frozen_material: true`；只复用该 provider/session
+  最近一次已验证的冻结材料，不发布新 delta。
+
+普通 continuation 既不携带 delta、也未请求 reuse 时 fail-closed。runtime 过期、找不到、锁争用、
 附件变化或没有可续跑 session 都是显式错误/诊断，不能隐式创建新 runtime 或 fresh session。
+continuation 只保存 `manifest_hash` / `delivery_manifest_hash` 单链；不存在 raw/derived 双材料、
+provider-material 派生 hash，也不迁移旧 timeout/redaction schema。
 
 ## stdout、exit code 与错误码
 
