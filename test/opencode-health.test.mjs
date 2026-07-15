@@ -44,8 +44,25 @@ test("OpenCode probe binds status and message-part cursor to the requested sessi
   const result = await probe({ session_id: "ses_target", cursor: null, signal: new AbortController().signal });
   assert.equal(result.status, "busy");
   assert.equal(result.session_id, "ses_target");
-  assert.match(result.cursor, /msg_1.*prt_2/);
+  assert.match(result.cursor, /^[a-f0-9]{64}$/);
   assert.deepEqual(calls, ["http://127.0.0.1:43210/session/status", "http://127.0.0.1:43210/session/ses_target/message"]);
+});
+
+test("OpenCode cursor observes progress outside the last message and retry metadata", async () => {
+  let reasoning = "working"; let attempt = 1;
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/session/status")) return response({ ses_target: { type: "retry", attempt } });
+    return response([
+      { info: { id: "msg_1", sessionID: "ses_target", role: "assistant" }, parts: [{ id: "reasoning", type: "reasoning", text: reasoning }] },
+      { info: { id: "msg_2", sessionID: "ses_target", role: "user" }, parts: [{ id: "prompt", type: "text", text: "review" }] },
+    ]);
+  };
+  const probe = createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl });
+  const first = await probe({ session_id: "ses_target" });
+  reasoning = "working more"; const second = await probe({ session_id: "ses_target", cursor: first.cursor });
+  assert.notEqual(second.cursor, first.cursor);
+  attempt = 2; const third = await probe({ session_id: "ses_target", cursor: second.cursor });
+  assert.notEqual(third.cursor, second.cursor);
 });
 
 test("OpenCode probe harvests a terminal assistant message as parser-valid canonical raw", async () => {

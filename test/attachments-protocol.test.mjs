@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, canonicalWorkflowHubMaterialId, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cancellationRequested, cancellationSource, createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
@@ -19,11 +19,31 @@ function packet(root, delivery = "file_only", embed = delivery === "always_embed
   const names = ["skills/review/SKILL.md", "review-packet.v1.json", "changes.diff", "manifest.json"];
   return { root, delivery, manifest: { version: 1, bundle_id: "bundle-1", entries: names.map((source) => { const value = fs.readFileSync(path.join(root, source)); return { source, destination: source, size: value.length, sha256: sha(value), embed }; }) } };
 }
-function source(delivery = "file_only") { const root = temp(); const diff = "DIFF_HEAD\nDIFF_TAIL\n"; const embed = delivery === "always_embed"; const materialHash = canonicalMaterialManifestHash("bundle-1", [{ target: "skills/review/SKILL.md", sha256: sha("lens"), size: 4, embed }, { target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed }]); const review = { version: "review-packet.v1", manifest_hash: materialHash, diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review); const packet = `${JSON.stringify(review)}\n`; const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), contents); } const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("bundle-1", outer, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`); return root; }
+function simplePacket(root) {
+  const entries = ["review-instructions.md", "requirements/raw_requirement.md", "manifest.json"].map((source) => { const value = fs.readFileSync(path.join(root, source)); return { source, destination: source, size: value.length, sha256: sha(value), embed: false }; });
+  return { root, delivery: "file_only", manifest: { version: 1, bundle_id: "simple-direction", entries } };
+}
+function simpleSource() {
+  const root = temp(); fs.mkdirSync(path.join(root, "requirements")); fs.writeFileSync(path.join(root, "review-instructions.md"), "one"); fs.writeFileSync(path.join(root, "requirements/raw_requirement.md"), "need"); fs.writeFileSync(path.join(root, "manifest.json"), "[]"); return root;
+}
+function source(delivery = "file_only", diff = "DIFF_HEAD\nDIFF_TAIL\n") { const root = temp(); const embed = delivery === "always_embed"; const materialHash = canonicalMaterialManifestHash("bundle-1", [{ target: "skills/review/SKILL.md", sha256: sha("lens"), size: 4, embed }, { target: "changes.diff", sha256: sha(diff), size: Buffer.byteLength(diff), embed }]); const review = { version: "review-packet.v1", manifest_hash: materialHash, diff_sha256: sha(diff) }; review.packet_hash = canonicalPacketHash(review); const packet = `${JSON.stringify(review)}\n`; const files = [["skills/review/SKILL.md", "lens"], ["review-packet.v1.json", packet], ["changes.diff", diff]]; for (const [name, contents] of files) { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), contents); } const attachments = files.map(([destination, contents]) => ({ destination, sha256: sha(contents), size: Buffer.byteLength(contents) })); const outer = [...attachments.map(({ destination: target, sha256, size }) => ({ target, sha256, size, embed })), { target: "manifest.json", sha256: "0".repeat(64), size: 0, embed }]; const manifest = { version: "review-attachment-manifest.v1", delivery_mode: delivery, packet_hash: review.packet_hash, manifest_hash: review.manifest_hash, diff_sha256: review.diff_sha256, attachments, delivery_manifest_hash: canonicalDeliveryManifestHash("bundle-1", outer, delivery) }; manifest.inner_manifest_hash = canonicalInnerManifestHash(manifest); fs.writeFileSync(path.join(root, "manifest.json"), `${JSON.stringify(manifest)}\n`); return root; }
 function config(root, tiers, attachmentRoot = null) {
   const ids = [...new Set(tiers.flat())];
-  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
+  return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, max_attachment_bytes: 10000, liveness_interval_ms: 5, orphan_timeout_ms: 100 }, attachment_roots: attachmentRoot ? [{ root: attachmentRoot, sources: ["skills", "contracts", "requirements", "review-instructions.md", "review-packet.v1.json", "changes.diff", "manifest.json"] }] : [], tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
+
+test("workflowhub material id binds semantic files and ignores transport wrappers", () => {
+  const files = [
+    { target: "review-instructions.md", size: 3, sha256: sha("one"), embed: false },
+    { target: "manifest.json", size: 3, sha256: sha("two"), embed: false },
+  ];
+  const expected = canonicalWorkflowHubMaterialId(files);
+  assert.equal(expected, "2459e73e3f3a754519fc84a9e9e616010c0e43e80d3e218a10316665d84922bf");
+  assert.equal(canonicalWorkflowHubMaterialId([...files].reverse().map((item) => ({ ...item, embed: true }))), expected);
+  assert.equal(canonicalWorkflowHubMaterialId(files.map((item, index) => index === 1 ? { ...item, sha256: sha("changed") } : item)), expected);
+  assert.notEqual(canonicalWorkflowHubMaterialId(files.map((item, index) => index === 0 ? { ...item, sha256: sha("changed") } : item)), expected);
+  assert.notEqual(canonicalWorkflowHubMaterialId([...files, { target: "review-packet.v1.json", size: 5, sha256: sha("three"), embed: false }]), expected);
+});
 
 test("doctor requires configured attachment roots and verifies the requested root", async () => {
   const unconfigured = await new Broker(config(temp(), [["kimi", "opencode"]])).doctor();
@@ -32,6 +52,7 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.deepEqual(unconfigured.attachment_root, { status: "unavailable", error: { code: "ATTACHMENT_ROOT_UNCONFIGURED" } });
   const root = source(); const broker = new Broker(config(temp(), [["kimi", "opencode"]], root));
   const result = await broker.doctor({ attachmentRoot: root });
+  assert.deepEqual(result.result_protocols, ["workflowhub-result.v1"]);
   assert.deepEqual(result.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.attachment_root, { status: "ready" });
@@ -43,6 +64,53 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
   assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
+});
+
+test("workflowhub result is an additive public projection bound to broker-verified material", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
+  const request = { version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) };
+  const result = await broker.run(request); const provider = result.providers[0];
+  const checked = validateAttachments(request.attachments, 10_000, [{ root: attachmentsRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }]);
+  assert.equal(provider.result_protocol, "workflowhub-result.v1"); assert.equal(provider.material_id, checked.material_id);
+  assert.equal(provider.status, "completed"); assert.equal(provider.output, "kimi opinion"); assert.equal(typeof provider.session_id, "string"); assert.equal(provider.error, null);
+  assert.deepEqual(Object.keys(provider).sort(), ["error", "material_id", "output", "provider", "result_protocol", "session_id", "status"]);
+  assert.equal(JSON.stringify(provider).includes("delivery"), false);
+  assert.equal(JSON.stringify(provider).includes("raw_"), false);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(runtime.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("workflowhub result accepts a complete direction bundle without the legacy triad", async () => {
+  const attachmentsRoot = simpleSource(); const broker = new Broker(config(temp(), [["kimi"]], attachmentsRoot)); const attachments = simplePacket(attachmentsRoot);
+  const result = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "review", continuation: null, attachments });
+  assert.equal(result.providers[0].status, "completed"); assert.equal(result.providers[0].material_id, canonicalWorkflowHubMaterialId(attachments.manifest.entries.map(({ destination: target, size, sha256, embed }) => ({ target, size, sha256, embed }))));
+});
+
+test("workflowhub failed result keeps material identity without inventing semantic output", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi"]], attachmentsRoot); value.providers.kimi.command = path.join(runtime, "missing-provider");
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  const provider = result.providers[0]; assert.equal(provider.result_protocol, "workflowhub-result.v1"); assert.match(provider.material_id, /^[a-f0-9]{64}$/);
+  assert.equal(provider.status, "failed"); assert.equal(provider.session_id, null); assert.equal(provider.output, null); assert.equal(provider.error.code, "PROCESS_START_FAILED");
+});
+
+test("unknown workflowhub result protocol fails before runtime or provider creation", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) }), { code: "PROTOCOL_INCOMPATIBLE" });
+  assert.deepEqual(fs.readdirSync(runtime), []);
+});
+
+test("workflowhub continuation sends a complete new bundle through the same native session", async () => {
+  const firstRoot = source("file_only", "FIRST\n"); const secondRoot = source("file_only", "SECOND\n"); const runtime = temp();
+  const value = config(runtime, [["kimi"]], firstRoot); value.attachment_roots.push({ root: secondRoot, sources: ["skills", "contracts", "review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value);
+  const first = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "R1", continuation: null, attachments: packet(firstRoot) });
+  const second = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: packet(secondRoot) });
+  assert.equal(second.providers[0].status, "completed"); assert.equal(second.providers[0].session_id, first.providers[0].session_id); assert.notEqual(second.providers[0].material_id, first.providers[0].material_id);
+});
+
+test("workflowhub continuation without a session names the requested provider", async () => {
+  const attachmentsRoot = simpleSource(); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.providers.opencode.command = path.join(runtime, "missing-provider"); const broker = new Broker(value); const attachments = simplePacket(attachmentsRoot);
+  const first = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", provider_allowlist: ["opencode"], prompt: "R1", continuation: null, attachments });
+  const second = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", provider_allowlist: ["opencode"], prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments });
+  assert.equal(second.providers[0].provider, "opencode"); assert.equal(second.providers[0].error.code, "NO_CONTINUABLE_SESSION");
 });
 
 test("doctor and default run follow configured tier order", async () => {
