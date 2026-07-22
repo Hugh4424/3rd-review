@@ -49,6 +49,8 @@ node {skill-root}/scripts/3rd-review.mjs run \
 - delivery receipt 使用明确字节语义：`material_total_bytes` 是 provider-visible 附件总字节（两种 delivery 都记录）；`rendered_prompt_bytes` 只在 `always_embed` 记录，表示 adapter model instruction、调用方审查指令和完整渲染附件组成的最终模型文本字节，并用于单次 512KB gate。禁止使用含糊的 `total_bytes`。
 - `file_only` 不依赖系统级 wrapper 或 root policy。broker 校验来源路径、普通单链接文件、size 与 SHA-256，把材料复制到 provider-private workspace，锁定副本，并在首次运行和续跑前重新验证冻结材料。
 - 私有 workspace 是材料投递边界，不宣称是操作系统安全边界。adapter 自带的只读模式仍会启用；如部署环境额外提供 sandbox，可在 broker 外叠加，但缺少 sandbox 不会移除 `file_only` capability。
+- `pi` 使用受控 JSONL wrapper：prompt 经 stdin 传递，支持 `file_only`、`always_embed` 与 native session 续跑；wrapper 丢弃重复 thinking delta，只保留 session、progress、最终 assistant 文本和 settled 证据，避免原生 JSONL 撞 output cap。默认示例模型是 `deepseek/deepseek-v4-flash`。
+- `antigravity` 调用 `agy` 的 plan/sandbox print 模式，首版只支持单轮 `file_only`，不支持 `always_embed` 或续跑。它为 headless 文件读取使用 `--dangerously-skip-permissions`；这不是 OS sandbox，且 AGY 会写本机 native profile，所以启用前必须显式配置 `allow_host_state: true` 并只处理可信材料。模型必须使用显示名 `Gemini 3.5 Flash (Low)`，不能使用会在本机 1.1.5 映射到 Medium 的 slug。
 - `always_embed` 只在 provider 明确支持时使用：broker 渲染完整最终 prompt 后一次计算 UTF-8 总量；超过 512KB 返回 `MATERIAL_TOO_LARGE`，不产生 session 或可续跑结果。不得用 diff chunk 绕过该上限。
 - 续跑不重传附件；broker 会重新验证首轮冻结副本的 size/hash/身份。
 - `status` 是公开投影，不返回 session、review output、raw output ref 或绝对路径。

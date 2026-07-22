@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import antigravity from "../lib/adapters/antigravity.mjs";
+import { execute } from "../lib/process.mjs";
+
+const fake = path.resolve("test/fake-antigravity-cli.mjs");
+const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-agy-test-"));
+const provider = (overrides = {}) => ({ id: "antigravity", command: fake, model: "Gemini 3.5 Flash (Low)", effort: null, thinking: null, allow_host_state: true, auth: { type: "native", env: [] }, env: [], ...overrides });
+
+test("Antigravity uses the supported noninteractive plan-mode contract", async () => {
+  fs.chmodSync(fake, 0o755);
+  const execution = antigravity.start(provider(), temp(), "review");
+  assert.deepEqual(antigravity.capabilities, { continuation: false, attachment_delivery: ["file_only"] });
+  assert.equal(execution.input, null);
+  assert.equal(execution.argv[execution.argv.indexOf("--model") + 1], "Gemini 3.5 Flash (Low)");
+  assert.ok(execution.argv.includes("--new-project"));
+  assert.ok(execution.argv.includes("--sandbox"));
+  assert.ok(execution.argv.includes("--dangerously-skip-permissions"));
+  assert.equal(execution.argv[execution.argv.indexOf("-p") + 1], "review");
+  const result = await execute(execution, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(antigravity.parse(result.stdout), { ok: true, text: "AGY_FINAL:review", session_id: null, usage: null });
+});
+
+test("Antigravity rejects unsupported generic effort and unsafe argv prompts", () => {
+  assert.throws(() => antigravity.start(provider({ allow_host_state: false }), temp(), "review"), { code: "PROVIDER_HOST_STATE_UNACKNOWLEDGED" });
+  assert.throws(() => antigravity.start(provider({ effort: "high" }), temp(), "review"), { code: "PROVIDER_OPTION_UNSUPPORTED" });
+  assert.throws(() => antigravity.start(provider(), temp(), "x".repeat(64 * 1024 + 1)), { code: "PROMPT_TOO_LARGE" });
+});
+
+test("Antigravity only accepts non-empty plain-text results and never resumes", () => {
+  assert.equal(antigravity.parse("\n").ok, false);
+  assert.deepEqual(antigravity.observeLine("stdout", "final"), { liveness: true, progress: true, event: "text" });
+  assert.deepEqual(antigravity.observeLine("stderr", "warning"), { liveness: true, progress: false, event: "stderr" });
+  assert.equal(antigravity.observeLine("stdout", "  ").progress, false);
+  assert.throws(() => antigravity.resume(provider(), temp(), "session", "continue"), { code: "PROVIDER_OPTION_UNSUPPORTED" });
+});

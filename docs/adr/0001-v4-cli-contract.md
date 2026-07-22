@@ -136,6 +136,20 @@ source 只能是 `user`、`workflow_shutdown`、`broker_idle_timeout` 或
 
 ## 兼容性边界
 
+当前 provider id 的单一真源是 `lib/provider-ids.mjs`：`claude-code`、`codex`、`kimi`、
+`opencode`、`pi`、`antigravity`。config、request 和 adapter registry 必须共同使用该真源，新增
+id 不得只修改其中一处。
+
+`pi` 通过受控 CLI wrapper 消费原生 JSONL。wrapper 只向 broker 发布 session、精简 progress、
+最终 assistant text、`agent_end` 和 `agent_settled`；原生 `message_update` 可重复携带完整 thinking
+内容，不能直接计入 broker raw output。Pi 支持两种 delivery 和同一 native session continuation。
+
+`antigravity` 使用独立 `agy` CLI 的 plain-text print 输出。V4 首版只声明单轮 `file_only`：没有
+`always_embed`、session、usage 或 continuation。AGY 会把 conversation、brain 和日志写入 native profile；
+因此必须在 provider 配置里显式确认 `allow_host_state: true`，否则 adapter 启动前失败。
+headless 文件读取需要 `--dangerously-skip-permissions`，所以它同样不构成 OS sandbox；其 prompt
+进入 argv，adapter 对其施加 64KiB 上限。测试模型用显示名 `Gemini 3.5 Flash (Low)`。
+
 `run-heterologous-review.mjs` 不是 V4 接口。任何旧 runner、旧 flag 或未列入
 `scripts/3rd-review.mjs` command allowlist 的参数都会被拒绝为 `REQUEST_INVALID`；调用方
 只能用本文固定的 `run --request` 合同执行审查。实现依据：
