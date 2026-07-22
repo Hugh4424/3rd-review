@@ -13,13 +13,15 @@
   "attachment_roots": [
     { "root": "/absolute/path/to/approved-packets", "sources": ["skills", "review"] }
   ],
-  "tiers": [["claude-code", "kimi", "codex", "opencode"], ["pi"], ["antigravity"]],
+  "tiers": [["claude-code", "kimi", "codex", "opencode"], ["pi/deepseek", "pi/k3", "pi/coding"], ["antigravity/flash"]],
   "providers": {
     "claude-code": { "enabled": true, "command": "/absolute/path/to/claude", "model": null, "effort": "medium", "thinking": null, "auth": { "type": "native" }, "env": [] },
     "kimi": { "enabled": true, "command": "/absolute/path/to/kimi", "model": null, "effort": null, "thinking": true, "auth": { "type": "native" }, "env": [] },
     "codex": { "enabled": true, "command": "/absolute/path/to/codex", "model": null, "effort": "medium", "thinking": null, "auth": { "type": "native" }, "env": [] },
     "opencode": { "enabled": true, "command": "/absolute/path/to/opencode", "model": null, "effort": null, "thinking": null, "auth": { "type": "native" }, "env": [] },
-    "pi": { "enabled": true, "command": "/absolute/path/to/pi", "model": "deepseek/deepseek-v4-flash", "effort": "low", "thinking": null, "auth": { "type": "native" }, "env": [] },
-    "antigravity": { "enabled": false, "allow_host_state": false, "command": "/absolute/path/to/agy", "model": "Gemini 3.5 Flash (Low)", "effort": null, "thinking": null, "auth": { "type": "native" }, "env": [] }
+    "pi/deepseek": { "enabled": true, "command": "/absolute/path/to/pi", "model": "deepseek/deepseek-v4-pro", "effort": "high", "thinking": null, "auth": { "type": "native" }, "env": [] },
+    "pi/k3": { "enabled": true, "command": "/absolute/path/to/pi", "model": "kimi-coding/k3", "effort": null, "thinking": true, "auth": { "type": "native" }, "env": [] },
+    "pi/coding": { "enabled": true, "command": "/absolute/path/to/pi", "model": "kimi-coding/kimi-for-coding", "effort": null, "thinking": true, "auth": { "type": "native" }, "env": [] },
+    "antigravity/flash": { "enabled": true, "allow_host_state": true, "command": "/absolute/path/to/agy", "model": "Gemini 3.6 Flash (High)", "effort": null, "thinking": null, "auth": { "type": "native" }, "env": [] }
   }
 }

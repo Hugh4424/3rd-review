@@ -43,6 +43,7 @@ node {skill-root}/scripts/3rd-review.mjs run \
 
 - `tiers` 内并发；只有该层没有一个真实执行成功才进入下一层。
 - 自动排除 request 中的 `host_provider`；这是调用方受信任地声明的宿主身份，broker 不自动探测 host。成功和失败都返回，调用方自行合并成功意见。
+- 配置 key 可用裸 CLI id（如 `pi`）或 `CLI/model` 实例名（如 `pi/deepseek`、`pi/k3`）。实例名独立路由、session 和 runtime workspace；`provider_allowlist` 必须填写配置中的完整实例名。同一 CLI 的不同实例仍视为同源，不能互相审查。
 - 订阅 CLI 使用 `auth.type:"native"`；API-key provider 使用 `auth.type:"env"` 并只填写 `auth.env` 的变量名，绝不写入值。
 - 不自动重试、不 fresh fallback、不伪造成功。每个 provider 独立续跑自己的 session。
 - `file_only` 先生成 delivery plan，再把完整、hash/size 校验的 `review-packet.v1.json`、`changes.diff`、`manifest.json` 复制到 provider 专用只读 bundle。Kimi/OpenCode 的 profile、运行配置和 legacy `review-input.md` 不放入该 bundle。prompt 不嵌入 diff，也不泄露宿主路径、worktree 或 git。

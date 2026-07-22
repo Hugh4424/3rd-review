@@ -64,8 +64,8 @@ request 是 JSON，至少包含以下 V4 字段：
 }
 ```
 
-`host_provider` 是受支持的宿主 provider，broker 不让同源 provider 审查。调用方可选
-`provider_allowlist`，但其中只能包含不重复、受支持且异源的 provider id。首轮的
+`host_provider` 是受支持的宿主 provider 或 `CLI/model` 实例名，broker 不让同源 CLI 审查。调用方可选
+`provider_allowlist`，但其中只能包含配置中不重复、异源的完整 provider 实例名。首轮的
 `continuation` 为 `null` 或省略；续跑唯一使用：
 
 默认不传 `provider_allowlist`，broker 每个首轮只启动一个异源 provider。显式
@@ -136,9 +136,10 @@ source 只能是 `user`、`workflow_shutdown`、`broker_idle_timeout` 或
 
 ## 兼容性边界
 
-当前 provider id 的单一真源是 `lib/provider-ids.mjs`：`claude-code`、`codex`、`kimi`、
-`opencode`、`pi`、`antigravity`。config、request 和 adapter registry 必须共同使用该真源，新增
-id 不得只修改其中一处。
+当前 adapter id 的单一真源是 `lib/provider-ids.mjs`：`claude-code`、`codex`、`kimi`、
+`opencode`、`pi`、`antigravity`。配置可用裸 adapter id，或 `CLI/model` 实例名，例如
+`pi/deepseek`；实例保留完整 public id，并映射到同名 CLI adapter 和安全 runtime key。config、
+request 和 adapter registry 必须共同使用该真源，新增 adapter 不得只修改其中一处。
 
 `pi` 通过受控 CLI wrapper 消费原生 JSONL。wrapper 只向 broker 发布 session、精简 progress、
 最终 assistant text、`agent_end` 和 `agent_settled`；原生 `message_update` 可重复携带完整 thinking

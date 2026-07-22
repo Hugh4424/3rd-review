@@ -46,6 +46,28 @@ test("supported provider IDs have one config and request contract", () => {
   assert.deepEqual(Object.keys(value.providers).sort(), [...SUPPORTED_PROVIDER_IDS].sort());
 });
 
+test("CLI/model provider instances use one adapter and isolated runtime keys", async () => {
+  fs.chmodSync(pi, 0o755);
+  const root = source("file_only"); const runtime = temp(); const providers = {
+    "pi/deepseek": provider("pi", pi, { model: "deepseek/deepseek-v4-pro", effort: "high" }),
+    "pi/k3": provider("pi", pi, { model: "kimi-coding/k3", effort: null, thinking: true }),
+    "pi/coding": provider("pi", pi, { model: "kimi-coding/kimi-for-coding", effort: null, thinking: true }),
+    "antigravity/flash": provider("antigravity", agy, { model: "Gemini 3.6 Flash (High)", allow_host_state: true }),
+  };
+  const value = config(runtime, root, providers, [["pi/deepseek", "pi/k3", "pi/coding"], ["antigravity/flash"]]);
+  assert.deepEqual(Object.fromEntries(Object.entries(value.providers).map(([id, item]) => [id, [item.adapter, item.runtime_key]])), {
+    "pi/deepseek": ["pi", "pi%2Fdeepseek"], "pi/k3": ["pi", "pi%2Fk3"], "pi/coding": ["pi", "pi%2Fcoding"], "antigravity/flash": ["antigravity", "antigravity%2Fflash"],
+  });
+  const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", provider_allowlist: ["pi/deepseek"], prompt: "R1", continuation: null, attachments: packet(root, "file_only") });
+  assert.equal(first.providers[0].provider, "pi/deepseek"); assert.equal(first.providers[0].status, "completed");
+  assert.equal(fs.existsSync(path.join(runtime, first.runtime_id, "work", "pi%2Fdeepseek", "bundle", "changes.diff")), true);
+  assert.equal(fs.existsSync(path.join(runtime, first.runtime_id, "work", "pi", "deepseek")), false);
+  const second = await broker.run({ version: 4, host_provider: "codex", provider_allowlist: ["pi/deepseek"], prompt: "R2", continuation: { runtime_id: first.runtime_id, reuse_frozen_material: true } });
+  assert.equal(second.providers[0].provider, "pi/deepseek"); assert.equal(second.providers[0].session_id, first.providers[0].session_id);
+  await assert.rejects(broker.run({ version: 4, host_provider: "pi/k3", provider_allowlist: ["pi/deepseek"], prompt: "review", continuation: null }), { code: "REQUEST_INVALID" });
+  for (const invalid of ["pi/", "pi//k3", "pi/../k3", "unknown/model"]) assert.throws(() => config(temp(), root, { [invalid]: provider("pi", pi) }, [[invalid]]), { code: "CONFIG_INVALID" });
+});
+
 test("Pi completes file_only, always_embed, and native continuation through its supervised stream", async () => {
   fs.chmodSync(pi, 0o755);
   const fileRoot = source("file_only"); const runtime = temp(); const value = config(runtime, fileRoot, { pi: provider("pi", pi) }); const broker = new Broker(value);
