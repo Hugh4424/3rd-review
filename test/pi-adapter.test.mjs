@@ -35,6 +35,10 @@ test("Pi supervises JSONL, keeps prompts on stdin, and persists a private native
   assert.match(execution.clientArgv[execution.clientArgv.indexOf("--system-prompt") + 1], /host-path fixture/);
   assert.match(pi.modelInstruction, /never quote, reproduce, construct, suggest, or create/i);
   assert.match(pi.modelInstruction, /host-path fixture/);
+  assert.match(pi.publicOutputRewritePrompt, /^Your prior final response cannot be published/);
+  assert.match(pi.publicOutputRewritePrompt, /complete replacement JSON review/);
+  assert.match(pi.publicOutputRewritePrompt, /host-path fixture/);
+  assert.doesNotMatch(pi.publicOutputRewritePrompt, /\/(?:Users|home|private|tmp|var|etc|opt|mnt|Volumes|root|usr|bin|sbin|dev|proc|sys|Library)\//);
   assert.match(execution.clientArgv[execution.clientArgv.indexOf("--extension") + 1], /pi-workspace-guard\.mjs$/);
   const result = await execute(execution, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);

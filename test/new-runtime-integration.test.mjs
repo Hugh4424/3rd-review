@@ -8,6 +8,7 @@ import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMat
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { SUPPORTED_PROVIDER_IDS } from "../lib/provider-ids.mjs";
+import { cancellationRequested, createRuntime, readRuntime, updateRuntime } from "../lib/runtime.mjs";
 import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
 const agy = nodeFixtureCommand(path.resolve("test/fake-antigravity-cli.mjs"));
@@ -78,6 +79,60 @@ test("Pi completes file_only, always_embed, and native continuation through its 
   const embedRoot = source("always_embed"); const embedRuntime = temp(); const embedBroker = new Broker(config(embedRuntime, embedRoot, { pi: provider("pi", pi) }));
   const embedded = await embedBroker.run({ version: 4, host_provider: "antigravity", provider_allowlist: ["pi"], prompt: "EMBED", continuation: null, attachments: packet(embedRoot, "always_embed") });
   assert.equal(embedded.providers[0].status, "completed"); assert.equal(embedded.providers[0].delivery_used, "always_embed"); assert.match(embedded.providers[0].output, /<attachments mode="always_embed">/);
+});
+
+test("Pi rewrites one private-path final in the same session before public projection", async () => {
+  const root = source("file_only"); const runtime = temp(); const promptLog = path.join(runtime, "pi-prompts.jsonl");
+  const value = config(runtime, root, { "pi/coding": provider("pi", pi, { model: "kimi-coding/kimi-for-coding", thinking: true, env: ["PI_FAKE_OUTPUT_CASE", "PI_FAKE_PROMPT_LOG"] }) }, [["pi/coding"]]);
+  const forbidden = `finding=${String.fromCharCode(47, 112, 114, 105, 118, 97, 116, 101, 47, 102, 105, 120, 116, 117, 114, 101)}`;
+  const safeOutput = '{"verdict":"pass","summary":"safe","findings":[]}';
+  process.env.PI_FAKE_OUTPUT_CASE = "private-then-safe"; process.env.PI_FAKE_PROMPT_LOG = promptLog;
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["pi/coding"], prompt: "review", continuation: null, attachments: packet(root, "file_only") });
+    const providerResult = result.providers[0];
+    assert.equal(providerResult.status, "completed"); assert.equal(providerResult.output, safeOutput);
+    assert.deepEqual(providerResult.usage, { totalTokens: 14 }); assert.equal(providerResult.retry.count, 0); assert.ok(providerResult.retry.progress_events >= 2);
+    const prompts = fs.readFileSync(promptLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(prompts.length, 2); assert.equal(prompts[0].session, prompts[1].session);
+    assert.equal(prompts[1].prompt.includes(forbidden), false); assert.match(prompts[1].prompt, /host-path fixture/);
+    const state = readRuntime(runtime, result.runtime_id).providers["pi/coding"];
+    assert.equal(state.public_output_rewrite_count, 1); assert.ok(state.initial_raw_output_refs?.raw_stdout_ref);
+    const rawDirectory = path.join(runtime, result.runtime_id, "raw", "pi%2Fcoding"); assert.equal(fs.readdirSync(rawDirectory).filter((name) => name.endsWith(".stdout")).length, 2);
+    assert.equal(JSON.stringify(result).includes(forbidden), false); assert.equal(JSON.stringify(result).includes(runtime), false);
+  } finally { delete process.env.PI_FAKE_OUTPUT_CASE; delete process.env.PI_FAKE_PROMPT_LOG; }
+});
+
+test("Pi keeps a twice-private final unavailable after one rewrite", async () => {
+  const root = source("file_only"); const runtime = temp();
+  const value = config(runtime, root, { "pi/coding": provider("pi", pi, { model: "kimi-coding/kimi-for-coding", thinking: true, env: ["PI_FAKE_OUTPUT_CASE"] }) }, [["pi/coding"]]);
+  const forbidden = `finding=${String.fromCharCode(47, 112, 114, 105, 118, 97, 116, 101, 47, 102, 105, 120, 116, 117, 114, 101)}`;
+  process.env.PI_FAKE_OUTPUT_CASE = "private-twice";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["pi/coding"], prompt: "review", continuation: null, attachments: packet(root, "file_only") });
+    const providerResult = result.providers[0];
+    assert.equal(providerResult.status, "failed"); assert.equal(providerResult.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(providerResult.output, null);
+    assert.equal(JSON.stringify(result).includes(forbidden), false);
+    const rawDirectory = path.join(runtime, result.runtime_id, "raw", "pi%2Fcoding"); assert.equal(fs.readdirSync(rawDirectory).filter((name) => name.endsWith(".stdout")).length, 2);
+  } finally { delete process.env.PI_FAKE_OUTPUT_CASE; }
+});
+
+test("Pi preserves a rewrite transport failure instead of projecting a semantic result", async () => {
+  const root = source("file_only"); const runtime = temp();
+  const value = config(runtime, root, { "pi/coding": provider("pi", pi, { model: "kimi-coding/kimi-for-coding", thinking: true, env: ["PI_FAKE_OUTPUT_CASE", "PI_FAKE_REWRITE_NO_SETTLED"] }) }, [["pi/coding"]]);
+  process.env.PI_FAKE_OUTPUT_CASE = "private-then-safe"; process.env.PI_FAKE_REWRITE_NO_SETTLED = "1";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["pi/coding"], prompt: "review", continuation: null, attachments: packet(root, "file_only") });
+    const providerResult = result.providers[0];
+    assert.equal(providerResult.status, "failed"); assert.equal(providerResult.error.code, "PROVIDER_OUTPUT_INVALID"); assert.equal(providerResult.output, null);
+  } finally { delete process.env.PI_FAKE_OUTPUT_CASE; delete process.env.PI_FAKE_REWRITE_NO_SETTLED; }
+});
+
+test("cancel preserves intent while a same-session Pi rewrite is pending", () => {
+  const runtime = temp(); const state = createRuntime(runtime, 24, "codex");
+  updateRuntime(runtime, state.runtime_id, (current) => ({ ...current, providers: { "pi/coding": { provider: "pi/coding", status: "running", pid: 999999, worker: { pid: 999999, started: "stale" } } } }));
+  const broker = new Broker(config(runtime, source("file_only"), { "pi/coding": provider("pi", pi) }, [["pi/coding"]]));
+  assert.deepEqual(broker.cancel(state.runtime_id, "pi/coding"), { cancelled: true });
+  assert.equal(cancellationRequested(runtime, state.runtime_id, "pi/coding"), true);
 });
 
 test("Pi fails closed when the CLI returns a session other than the planned native session", async () => {
