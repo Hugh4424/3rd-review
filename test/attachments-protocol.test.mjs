@@ -173,6 +173,16 @@ test("workflowhub result v2 isolates a private-path provider failure without lea
   }
 });
 
+test("workflowhub result v2 allows ordinary slash-separated review terminology", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3"]], attachmentsRoot);
+  value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "材料矩阵/map/AC 已逐项覆盖";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi/k3"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    assert.equal(result.providers[0].status, "completed"); assert.equal(result.providers[0].output, "材料矩阵/map/AC 已逐项覆盖");
+  } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
 test("workflowhub result v2 isolates projection-field path violations without rejecting the candidate group", async () => {
   const cases = [
     { name: "profile model", configure: (value) => { value.providers["kimi/k3"].model = "model=/private/profile"; }, polluted: "kimi/k3", normal: "claude-code/opus", marker: "/private/profile" },
