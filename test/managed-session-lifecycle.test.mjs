@@ -23,6 +23,11 @@ function source(root, name = "review-instructions.md", contents = "review packet
   fs.writeFileSync(path.join(directory, name), contents); const sha256 = hash(contents);
   return { root: directory, attachment: { root: directory, delivery: "file_only", manifest: { version: 1, bundle_id: `managed-${sha256.slice(0, 12)}`, entries: [{ source: name, destination: name, size: Buffer.byteLength(contents), sha256, embed: false }] } } };
 }
+function rematerializedSource(root, prefix, contents = "review packet") {
+  const directory = path.join(root, `source-${prefix}`); const sourcePath = `${prefix}/review-instructions.md`;
+  fs.mkdirSync(path.join(directory, prefix), { recursive: true }); fs.writeFileSync(path.join(directory, sourcePath), contents); const sha256 = hash(contents);
+  return { root: directory, attachment: { root: directory, delivery: "file_only", manifest: { version: 1, bundle_id: `managed-${sha256.slice(0, 12)}`, entries: [{ source: sourcePath, destination: "review-instructions.md", size: Buffer.byteLength(contents), sha256, embed: false }] } } };
+}
 function config(root, sources, providers, tiers = [Object.keys(providers)]) {
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10_000, max_output_bytes: 100_000, liveness_interval_ms: 5, orphan_timeout_ms: 100 }, attachment_roots: sources.map((item) => ({ root: item.root, sources: item.attachment.manifest.entries.map((entry) => entry.source) })), tiers, providers });
 }
@@ -87,6 +92,18 @@ test("managed start is request-id idempotent and rejects a changed immutable bin
   assert.equal(first.runtime_id, duplicate.runtime_id); await terminal(broker, first.runtime_id);
   const raw = path.join(root, first.runtime_id, "raw", "kimi"); assert.equal(fs.readdirSync(raw).filter((name) => name.endsWith(".stdout")).length, 1);
   assert.throws(() => broker.startManaged(request(material.attachment, "different"), "same-request"), { code: "REQUEST_ID_CONFLICT" });
+});
+
+test("managed start reconnects when an equivalent sealed packet has a new staging source", async () => {
+  const root = temp(); const firstMaterial = rematerializedSource(root, "first"); const rebuiltMaterial = rematerializedSource(root, "rebuilt"); const changedMaterial = rematerializedSource(root, "changed");
+  changedMaterial.attachment.manifest.entries[0].destination = "changed-review-instructions.md";
+  const value = config(root, [firstMaterial, rebuiltMaterial, changedMaterial], { kimi: provider(slowSuccess) }); const broker = new Broker(value);
+  const first = broker.startManaged(request(firstMaterial.attachment, "one"), "same-rematerialized-request");
+  const reconnected = broker.startManaged(request(rebuiltMaterial.attachment, "one"), "same-rematerialized-request");
+  assert.equal(reconnected.runtime_id, first.runtime_id);
+  assert.throws(() => broker.startManaged(request(changedMaterial.attachment, "one"), "same-rematerialized-request"), { code: "REQUEST_ID_CONFLICT" });
+  await terminal(broker, first.runtime_id);
+  const raw = path.join(root, first.runtime_id, "raw", "kimi"); assert.equal(fs.readdirSync(raw).filter((name) => name.endsWith(".stdout")).length, 1);
 });
 
 test("expired managed runtime removes its request-id binding with the runtime", async () => {
