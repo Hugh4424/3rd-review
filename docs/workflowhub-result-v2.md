@@ -70,3 +70,37 @@ protocols so a route cannot treat a skipped review as a successful result.
 projection. `doctor.result_protocols` advertises both versions. Consumers must
 select a version explicitly and must not read broker-private runtime state to
 fill absent fields.
+
+## Managed group lifecycle
+
+`3rd-review start` owns an asynchronous `workflowhub-result.v2` group.  It
+requires the normal V4 request, its sealed attachment triple, and a caller
+supplied `--request-id`.  It validates and copies the material into broker
+private storage before it starts a detached manager.  The public start result
+is exactly:
+
+```json
+{
+  "version": "workflowhub-run.v1",
+  "request_id": "opaque-id",
+  "runtime_id": "opaque-id",
+  "state": "starting|running|terminal",
+  "material_id": "sha256"
+}
+```
+
+The same request ID and immutable request/material/route binding reconnect to
+the same runtime. A changed binding fails with `REQUEST_ID_CONFLICT`.
+`status --runtime-id` returns the same public shape while running and has no
+provider output. At terminal state it adds one `group`, which is the validated
+`workflowhub-result.v2` group. Its provider `raw_output_ref` is always `null`;
+it never exposes a runtime path, raw-output reference, attachment path, or
+native session-file path.
+
+`cancel --runtime-id` is the managed cancellation operation. Legacy
+provider-specific cancel with `--provider` remains available only for
+non-managed runtimes.
+Caller SIGTERM is not cancellation. If the detached manager identity is
+confirmed lost, status publishes `SESSION_MANAGER_LOST` without signalling a
+healthy provider; an explicit managed cancel can still terminate that
+provider and replace the terminal group with `CANCELLED`.
