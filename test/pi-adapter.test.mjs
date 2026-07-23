@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import pi from "../lib/adapters/pi.mjs";
 import { execute } from "../lib/process.mjs";
+import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
-const fake = path.resolve("test/fake-pi-cli.mjs");
+const fake = nodeFixtureCommand(path.resolve("test/fake-pi-cli.mjs"));
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-pi-test-"));
 const provider = (overrides = {}) => ({ id: "pi", command: fake, model: "deepseek/deepseek-v4-flash", effort: "low", thinking: null, auth: { type: "native", env: [] }, env: [], ...overrides });
 const transcript = (events) => `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
@@ -19,7 +20,6 @@ const complete = (session = "pi-session", options = {}) => transcript([
 ]);
 
 test("Pi supervises JSONL, keeps prompts on stdin, and persists a private native session", async () => {
-  fs.chmodSync(fake, 0o755);
   const runtime = temp(); const cwd = path.join(runtime, "work", "pi"); fs.mkdirSync(cwd, { recursive: true });
   const execution = pi.start(provider(), cwd, "review", runtime);
   assert.deepEqual(pi.capabilities.attachment_delivery, ["file_only", "always_embed"]);

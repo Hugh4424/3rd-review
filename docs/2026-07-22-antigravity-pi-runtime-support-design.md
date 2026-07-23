@@ -49,14 +49,14 @@ Pi 的 session 目录位于 broker runtime，cwd 通过 stable writable view 保
 
 ```text
 agy --new-project --mode plan --sandbox --dangerously-skip-permissions
-  --print-timeout 24h [--model <display-name>] -p <prompt>
+  [--model <display-name>] -p <prompt>
 ```
 
 - `agy` 没有 `run`、`--format stream-json`、`--tools` 或 stdout session/usage。
 - 无 `--dangerously-skip-permissions` 时，headless plan mode 会拒绝读取 file-only marker，却可能以 exit 0 结束；所以此 flag 是当前 CLI 的必要条件。
 - `--dangerously-skip-permissions` 不等于 OS sandbox。adapter 从 readonly frozen bundle cwd 启动，prompt 明确禁止越界/写入，但严格隔离仍由外部负责。
 - AGY 1.1.5 把 conversation、brain、log 写到 `~/.gemini/antigravity-cli`，且切换隔离 `HOME` 会要求重新登录。因此 adapter 不伪造“runtime-private raw output”：默认 sample 禁用它；启用时必须同时显式设置 `allow_host_state: true`，仅用于可信、可写入本机 native profile 的材料。
-- prompt 必须出现在 argv，adapter 将其限制为 64KiB，并明确拒绝 `always_embed`。它不应处理不适合暴露给本机同用户进程的秘密。
+- prompt 必须出现在 argv，并明确拒绝 `always_embed`。它不应处理不适合暴露给本机同用户进程的秘密；Broker 不用字节上限中止已启动的审查。
 - generic `provider.effort` 不映射；配置非空时启动前返回 `PROVIDER_OPTION_UNSUPPORTED`。
 - session_id 始终为 `null`，broker 的既有 continuation 选择自然返回 `NO_CONTINUABLE_SESSION`，不会 fresh fallback。
 

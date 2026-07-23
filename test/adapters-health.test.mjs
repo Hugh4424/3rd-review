@@ -7,17 +7,17 @@ import { fileURLToPath } from "node:url";
 import claude from "../lib/adapters/claude-code.mjs";
 import codex from "../lib/adapters/codex.mjs";
 import { execute } from "../lib/process.mjs";
+import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fakeAppServer = path.join(here, "fake-codex-app-server.mjs");
-const hangingClaude = path.join(here, "hanging-claude-stream.mjs");
-const lateClose = path.join(here, "terminal-then-close.mjs");
-const emptyThenResume = path.join(here, "claude-empty-then-resume.mjs");
+const fakeAppServer = nodeFixtureCommand(path.join(here, "fake-codex-app-server.mjs"));
+const hangingClaude = nodeFixtureCommand(path.join(here, "hanging-claude-stream.mjs"));
+const lateClose = nodeFixtureCommand(path.join(here, "terminal-then-close.mjs"));
+const emptyThenResume = nodeFixtureCommand(path.join(here, "claude-empty-then-resume.mjs"));
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-adapter-health-"));
 const provider = (command) => ({ id: "provider", command, model: null, effort: null, auth: { type: "native", env: [] }, env: [] });
 
 test("Claude uses official stream-json events and harvests result without waiting for CLI exit", async () => {
-  fs.chmodSync(hangingClaude, 0o755);
   const plan = claude.start(provider(hangingClaude), temp(), "review");
   assert.ok(plan.clientArgv.includes("stream-json"));
   assert.ok(plan.clientArgv.includes("--include-partial-messages"));
@@ -45,7 +45,6 @@ test("Claude rejects a changed session identity during supervised continuation",
 });
 
 test("Claude continues an empty successful turn in the same native session", async () => {
-  fs.chmodSync(emptyThenResume, 0o755);
   const plan = claude.start(provider(emptyThenResume), temp(), "review");
   const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
@@ -61,7 +60,6 @@ test("Claude result errors are terminal but remain semantic provider failures", 
 
 test("Codex uses stable stdio app-server thread and turn protocol", async () => {
   const cwd = temp();
-  fs.chmodSync(fakeAppServer, 0o755);
   const plan = codex.start(provider(fakeAppServer), cwd, "review");
   assert.equal(plan.command, process.execPath);
   const request = JSON.parse(plan.input);
@@ -79,13 +77,11 @@ test("Codex continuation sends thread/resume for the same session", () => {
 });
 
 test("Codex app-server request errors remain process failures", async () => {
-  fs.chmodSync(fakeAppServer, 0o755);
   const result = await execute(codex.start(provider(fakeAppServer), temp(), "FAIL_PROTOCOL"), { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, false);
 });
 
 test("terminal wait_for_close keeps stdin open until the provider publishes late raw evidence", async () => {
-  fs.chmodSync(lateClose, 0o755);
   const result = await execute({ command: lateClose, argv: [], cwd: temp(), input: "go\n", env: process.env, redact: [], keepStdinOpen: true, observeLine: (_stream, line) => line === "TERMINAL" ? { terminal: { state: "completed", wait_for_close: true } } : {} }, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
   assert.match(result.stderr, /LATE_SESSION/);

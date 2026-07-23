@@ -12,7 +12,6 @@ const stream = path.resolve("test/stream-cli.mjs");
 const fail = path.resolve("test/fail-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const duplicate = path.resolve("test/duplicate-progress-cli.mjs");
-const ignoresSigterm = path.resolve("test/ignore-sigterm-cli.mjs");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function plan(command, env = {}) { return { command, argv: [], cwd: fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-process-test-")), input: null, env: { ...process.env, ...env }, redact: [] }; }
 
@@ -27,32 +26,13 @@ test("silent live process emits liveness without activity", async () => {
   assert.equal(liveness.length, settled);
 });
 
-test("no wall-clock budget is applied by default", async () => {
+test("a healthy provider continues past a legacy time threshold", async () => {
   const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, livenessIntervalMs: 5 });
   assert.equal(result.ok, true); assert.ok(result.duration_ms >= 60);
 });
-
-test("explicit wall-clock budget terminates the provider with BUDGET_EXHAUSTED", async () => {
-  let pid;
-  const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), { maxOutputBytes: 4096, maxWallClockMs: 20, onStart: (value) => { pid = value; } });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.equal(Number.isInteger(pid), true);
-});
-
-test("budget escalation sends SIGKILL when the provider ignores SIGTERM", async () => {
-  const signals = [];
-  const result = await execute({ ...plan(process.execPath), argv: [ignoresSigterm] }, { maxOutputBytes: 4096, maxWallClockMs: 100, terminationGraceMs: 20, terminateProcess: (pid, signal) => { signals.push(signal); return terminateProcess(pid, signal); } });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
-});
-
-test("the first terminal reason wins when a late health completion races the budget", async () => {
-  const raw = `${JSON.stringify({ type: "session.completed", session_id: "late", text: "late" })}\n`;
-  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => { await delay(30); return { status: "completed", raw: { stdout: raw, stderr: "" } }; } }, { maxOutputBytes: 4096, maxWallClockMs: 10, healthCheckIntervalMs: 1, probeDeadlineMs: 100, validateCompleted: () => true });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "BUDGET_EXHAUSTED"); assert.equal(result.health_harvested, undefined);
-});
-
-test("health completion wins when it claims the terminal state before the budget", async () => {
+test("health completion terminates a hanging wrapper without a wall-clock race", async () => {
   const raw = `${JSON.stringify({ type: "session.completed", session_id: "early", text: "done" })}\n`;
-  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => ({ status: "completed", raw: { stdout: raw, stderr: "" } }) }, { maxOutputBytes: 4096, maxWallClockMs: 100, healthCheckIntervalMs: 1, validateCompleted: () => true });
+  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => ({ status: "completed", raw: { stdout: raw, stderr: "" } }) }, { maxOutputBytes: 4096, healthCheckIntervalMs: 1, validateCompleted: () => true });
   assert.equal(result.ok, true); assert.equal(result.health_harvested, true); assert.equal(result.stdout, raw);
 });
 
@@ -67,20 +47,20 @@ test("sequenced heartbeat events update liveness but never progress", async () =
   assert.equal(result.ok, true); assert.equal(result.progress_events, 0); assert.equal(result.last_progress_at_ms, null); assert.ok(liveness.length >= 4);
 });
 
-test("dead health terminates immediately without waiting for PID exit", async () => {
+test("dead health is diagnostic and does not terminate a live process", async () => {
   const started = Date.now(); const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "dead" }) }, { maxOutputBytes: 4096, healthCheckIntervalMs: 10 });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "PROCESS_DEAD"); assert.ok(Date.now() - started < 250);
+  assert.equal(result.ok, true); assert.ok(Date.now() - started >= 50);
 });
 
-test("an injected health probe explicitly overrides the adapter plan probe", async () => {
+test("an injected diagnostic health probe does not override process completion", async () => {
   let planCalls = 0; let injectedCalls = 0;
   const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), probeSession: async () => { planCalls += 1; return { status: "busy", session_id: null, cursor: null, raw: null, error: null, evidence: "adapter" }; } }, { maxOutputBytes: 4096, healthCheckIntervalMs: 10, probeSession: async () => { injectedCalls += 1; return { status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "injected" }; } });
-  assert.equal(result.ok, false); assert.equal(result.error.code, "PROCESS_DEAD"); assert.equal(injectedCalls, 1); assert.equal(planCalls, 0);
+  assert.equal(result.ok, true); assert.ok(injectedCalls > 0); assert.equal(planCalls, 0);
 });
 
-test("PID liveness cannot keep an unchanged busy health session alive", async () => {
+test("PID liveness with unchanged health remains non-terminal", async () => {
   const liveness = []; const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "200" }), probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "unchanged" }) }, { maxOutputBytes: 4096, healthCheckIntervalMs: 10, livenessIntervalMs: 2, onLiveness: (value) => liveness.push(value) });
-  assert.ok(liveness.length > 5); assert.equal(result.ok, false); assert.equal(result.error.code, "PROCESS_STALLED");
+  assert.ok(liveness.length > 5); assert.equal(result.ok, true);
 });
 
 test("completed health raw is harvested and a hanging wrapper is internally terminated", async () => {
@@ -118,6 +98,7 @@ test("external termination stops liveness monitoring", async () => {
   assert.equal(terminateProcess(pid), true);
   const result = await running;
   assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_DEAD");
   assert.ok(Date.now() - started < 500);
   const settled = liveness.length;
   await delay(25);
@@ -135,4 +116,25 @@ test("large stdin write to an immediately exiting provider is a structured failu
   }, { maxOutputBytes: 4096 });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "PROCESS_STDIN_FAILED");
+});
+
+test("large output is streamed without terminating the provider", async () => {
+  const raw = [];
+  const result = await execute({ ...plan(process.execPath), argv: ["-e", "process.stdout.write('x'.repeat(20000))"] }, { maxOutputBytes: 128, onOutput: ({ chunk }) => raw.push(chunk) });
+  assert.equal(result.ok, true);
+  assert.equal(raw.join("").length, 20_000);
+  assert.equal(result.stdout_truncated, true);
+  assert.match(result.stdout, /retained privately/);
+});
+
+test("an adapter can write follow-up stdin after observing provider output", async () => {
+  const source = "process.stdout.write('ready\\n'); process.stdin.once('data', (chunk) => { if (chunk.toString() === 'prompt\\n') process.stdout.write('done\\n'); else process.exit(1); }); process.stdin.once('end', () => process.exit(0));";
+  const result = await execute({
+    ...plan(process.execPath),
+    argv: ["-e", source],
+    keepStdinOpen: true,
+    observeLine: (_stream, line) => line === "ready" ? { stdin_write: "prompt\n" } : line === "done" ? { terminal: { state: "completed", wait_for_close: true } } : {},
+  }, { maxOutputBytes: 4096 });
+  assert.equal(result.ok, true);
+  assert.match(result.stdout, /done/);
 });

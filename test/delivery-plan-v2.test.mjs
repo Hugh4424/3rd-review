@@ -4,9 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { EMBED_BUDGET, canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, planDelivery, validateAttachments, validateContinuationTriad, validateFileOnlyTriad } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { loadConfig, validateConfig } from "../lib/config.mjs";
+import { terminateProcessTree } from "../lib/runtime.mjs";
 import opencode from "../lib/adapters/opencode.mjs";
 
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -14,7 +15,9 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-delivery-pl
 const opencodeCli = path.resolve("test/fake-opencode-run-cli.mjs");
 const codexAppServer = path.resolve("test/fake-codex-app-server.mjs");
 const silent = path.resolve("test/silent-cli.mjs");
-const deadHealth = { healthCheckIntervalMs: 10, probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "test probe" }) };
+// A health probe is advisory. These continuation tests model an actual
+// provider death, which is the only source of PROCESS_DEAD.
+const deadHealth = { onStart: (pid) => setTimeout(() => { terminateProcessTree(pid, "SIGTERM"); }, 20) };
 
 function source(label = "", delivery = "file_only", bundleId = "v2") {
   const root = temp();
@@ -124,7 +127,7 @@ test("OpenCode R2 keeps its R1 execution cwd while atomically refreshing bundle 
   const initial = source("R1_ONLY", "file_only", "stable-r1"); const runtime = temp(); const value = config(runtime, initial.root, "opencode"); const initialChecked = validateAttachments({ root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots); const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_CURRENT", "file_only", "stable-r2"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }); const broker = new Broker(value);
   const first = await broker.run({ version: 4, host_provider: "codex", prompt: "R1", continuation: null, attachments: { root: initial.root, delivery: "file_only", manifest: initial.attachmentManifest } }); const firstOutput = JSON.parse(first.providers[0].output);
   const second = await broker.run({ version: 4, host_provider: "codex", prompt: "R2", continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "file_only", manifest: delta.attachmentManifest } }); const secondOutput = JSON.parse(second.providers[0].output);
-  assert.equal(second.providers[0].status, "completed"); assert.equal(secondOutput.cwd, firstOutput.cwd); assert.equal(firstOutput.cwd, fs.realpathSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle"))); assert.equal(firstOutput.has_triage_files, true); assert.equal(secondOutput.has_triage_files, true); assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle", "changes.diff"), "utf8"), /R2_CURRENT/);
+  assert.equal(second.providers[0].status, "completed"); assert.equal(secondOutput.cwd_sha256, firstOutput.cwd_sha256); assert.equal(firstOutput.cwd_sha256, sha(fs.realpathSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle")))); assert.equal(firstOutput.has_triage_files, true); assert.equal(secondOutput.has_triage_files, true); assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "work", "opencode", "bundle", "changes.diff"), "utf8"), /R2_CURRENT/);
   assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "workspace", "opencode", "changes.diff"), "utf8"), /R1_ONLY/); assert.match(fs.readFileSync(path.join(runtime, first.runtime_id, "workspace", "opencode-delta-2", "changes.diff"), "utf8"), /R2_CURRENT/);
 });
 
@@ -160,7 +163,7 @@ test("reuse_frozen_material corrects format in the original provider session wit
   assert.equal(first.providers[0].status, "completed");
   const corrected = await broker.run({ version: 4, host_provider: "codex", prompt: "return only corrected JSON", continuation: { runtime_id: first.runtime_id, reuse_frozen_material: true }, provider_allowlist: ["opencode"] });
   assert.equal(corrected.providers[0].status, "completed"); assert.equal(corrected.providers[0].session_id, first.providers[0].session_id);
-  const providerOutput = JSON.parse(corrected.providers[0].output); const sessionIndex = providerOutput.args.indexOf("--session"); assert.equal(providerOutput.args[sessionIndex + 1], first.providers[0].session_id);
+  const providerOutput = JSON.parse(corrected.providers[0].output); assert.equal(providerOutput.resumed_session_id, first.providers[0].session_id);
   const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8"));
   assert.deepEqual(state.continuation_materials ?? [], []); assert.equal(state.round, 2);
   assert.equal(fs.readdirSync(path.join(runtime, first.runtime_id, "raw", "opencode")).filter((name) => name.endsWith(".stdout")).length, 2);
@@ -212,7 +215,7 @@ test("explicit continuation retries a confirmed-dead provider in its original se
   value.providers.opencode.command = silent; const terminated = await new Broker(value, deadHealth).run(request); assert.equal(terminated.providers[0].error.code, "PROCESS_DEAD");
   value.providers.opencode.command = opencodeCli; const retried = await broker.run(request);
   assert.equal(retried.providers[0].status, "completed", JSON.stringify(retried.providers)); assert.equal(retried.providers[0].session_id, session);
-  const providerOutput = JSON.parse(retried.providers[0].output); const sessionIndex = providerOutput.args.indexOf("--session"); assert.equal(providerOutput.args[sessionIndex + 1], session);
+  const providerOutput = JSON.parse(retried.providers[0].output); assert.equal(providerOutput.resumed_session_id, session);
   const after = JSON.parse(fs.readFileSync(statePath, "utf8")); assert.equal(after.continuation_materials.length, 1); assert.equal(after.continuation_materials[0].bundle_id, "timeout-r2");
 });
 
@@ -394,14 +397,13 @@ test("R2 rejects a delivery-mode mismatch before provider execution", async () =
   const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")); assert.deepEqual(state.continuation_materials ?? [], []);
 });
 
-test("oversized always_embed R2 is MATERIAL_TOO_LARGE without a provider result or continuation verdict", async () => {
+test("large always_embed R2 remains reviewable", async () => {
   const initial = source("", "always_embed"); const runtime = temp(); const value = config(runtime, initial.root, "opencode", 2 * 1024 * 1024);
   const initialChecked = validateAttachments({ root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest }, 2 * 1024 * 1024, value.attachment_roots);
   const delta = continuationDelta(initialChecked.manifest_hash, 1, null, "R2_LARGE", "always_embed"); value.attachment_roots.push({ root: delta.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] });
   const broker = new Broker(value); const first = await broker.run({ version: 4, host_provider: "codex", prompt: "initial", continuation: null, attachments: { root: initial.root, delivery: "always_embed", manifest: initial.attachmentManifest } });
-  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "x".repeat(EMBED_BUDGET), continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest } });
-  assert.equal(second.providers[0].status, "failed"); assert.equal(second.providers[0].error.code, "MATERIAL_TOO_LARGE"); assert.equal(Object.hasOwn(second.providers[0], "session_id"), false);
-  const state = JSON.parse(fs.readFileSync(path.join(runtime, first.runtime_id, "state.json"), "utf8")); assert.equal(state.providers.opencode.status, "completed"); assert.equal(state.providers.opencode.session_id, first.providers[0].session_id); assert.deepEqual(state.continuation_materials ?? [], []); assert.equal(state.continuation_reservation ?? null, null);
+  const second = await broker.run({ version: 4, host_provider: "codex", prompt: "x".repeat(512 * 1024), continuation: { runtime_id: first.runtime_id }, attachments: { root: delta.root, delivery: "always_embed", manifest: delta.attachmentManifest } });
+  assert.notEqual(second.providers[0].error?.code, "MATERIAL_TOO_LARGE");
 });
 
 test("file_only fails closed when triad filename, outer hash, or packet hash binding is wrong", async (t) => {
@@ -418,27 +420,19 @@ test("file_only fails closed when triad filename, outer hash, or packet hash bin
   }
 });
 
-test("always_embed measures the complete rendered prompt once and fails before a provider session", async () => {
+test("always_embed preserves a complete rendered prompt without a broker size gate", async () => {
   const input = source("", "always_embed"); const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 511 * 1024)).run({ version: 4, host_provider: "codex", prompt: "p".repeat(520 * 1024), continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "MATERIAL_TOO_LARGE");
-  assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
-  const state = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8"));
-  assert.equal(state.providers.opencode.session_id, undefined);
-  const resumed = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: result.runtime_id } });
-  assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+  assert.notEqual(result.providers[0].error?.code, "MATERIAL_TOO_LARGE");
 });
 
-test("always_embed counts adapter model instruction before its single 512KB gate", async () => {
+test("always_embed includes adapter model instruction without a size gate", async () => {
   const input = source("", "always_embed"); const roots = [{ root: input.root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }]; const checked = validateAttachments({ root: input.root, delivery: "always_embed", manifest: input.attachmentManifest }, 2 * 1024 * 1024, roots);
   const plain = planDelivery({ capabilities: { attachment_delivery: ["always_embed"] } }, checked, "review", 2 * 1024 * 1024);
-  const original = opencode.modelInstruction; opencode.modelInstruction = "i".repeat(EMBED_BUDGET - Buffer.byteLength(plain.provider_prompt, "utf8") + 1);
+  const original = opencode.modelInstruction; opencode.modelInstruction = "i".repeat(512 * 1024);
   try {
-    assert.throws(() => planDelivery(opencode, checked, "review", 2 * 1024 * 1024), { code: "MATERIAL_TOO_LARGE" });
+    assert.ok(planDelivery(opencode, checked, "review", 2 * 1024 * 1024).provider_prompt.length > plain.provider_prompt.length);
     const runtime = temp(); const result = await new Broker(config(runtime, input.root, "opencode", 2 * 1024 * 1024)).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: { root: input.root, delivery: "always_embed", manifest: input.attachmentManifest } });
-    assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "MATERIAL_TOO_LARGE"); assert.equal(Object.hasOwn(result.providers[0], "session_id"), false);
-    const state = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(state.providers.opencode.session_id, undefined);
-    const resumed = await new Broker(config(runtime, input.root, "opencode")).run({ version: 4, host_provider: "codex", prompt: "delta", continuation: { runtime_id: result.runtime_id } }); assert.equal(resumed.providers[0].error.code, "NO_CONTINUABLE_SESSION");
+    assert.notEqual(result.providers[0].error?.code, "MATERIAL_TOO_LARGE");
   } finally { opencode.modelInstruction = original; }
 });
 

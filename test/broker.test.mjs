@@ -6,26 +6,25 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
-import { cleanup, createRuntime, isAlive, readRuntime, updateRuntime } from "../lib/runtime.mjs";
+import { cleanup, createRuntime, currentOwnerIdentity, ensureRuntimeGuardian, isAlive, processIdentity, readRuntime, terminateProcess, updateRuntime } from "../lib/runtime.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const silent = path.resolve("test/silent-cli.mjs");
-const slowSuccess = path.resolve("test/slow-success-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
-const deadHealth = { healthCheckIntervalMs: 10, probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "test probe" }) };
 function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
   const ids = [...new Set(tiers.flat())];
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5 }, tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
+async function eventually(check, timeoutMs = 3_000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 20)); } assert.fail("condition did not become true"); }
 
-test("wall-clock budget defaults to null, accepts positive integers, and rejects legacy fields", () => {
+test("legacy wall-clock budgets are ignored and legacy timer fields are rejected", () => {
   const value = config(temp(), [["kimi"]]);
   assert.equal(value.runtime.max_wall_clock_ms, null);
-  value.runtime.max_wall_clock_ms = 900_000; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, 900_000);
-  for (const invalid of [0, -1, 1.5, "1000"]) { value.runtime.max_wall_clock_ms = invalid; assert.throws(() => validateConfig(value), /positive integer/); }
+  value.runtime.max_wall_clock_ms = null; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, null);
+  for (const legacy of [900_000, 0, -1, 1.5, "1000"]) { value.runtime.max_wall_clock_ms = legacy; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, null); }
   delete value.runtime.max_wall_clock_ms; value.runtime.idle_timeout_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
   delete value.runtime.idle_timeout_ms; value.runtime.max_duration_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
 });
@@ -112,7 +111,7 @@ test("providers receive isolated workspaces and independent review inputs", asyn
 test("cleanup reaps an orphaned broker process and records ORPHANED_BROKER", async () => {
   const root = temp(); const runtime = createRuntime(root, 24, "codex");
   const orphan = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); orphan.unref();
-  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { pid: 999_999_999, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: orphan.pid, started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), pid: 999_999_999, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: orphan.pid, worker: processIdentity(orphan.pid), started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
   cleanup(root, 24);
   const state = readRuntime(root, runtime.runtime_id);
   assert.equal(state.providers.kimi.status, "failed");
@@ -121,11 +120,69 @@ test("cleanup reaps an orphaned broker process and records ORPHANED_BROKER", asy
   assert.equal(isAlive(orphan.pid), false);
 });
 
-test("explicit wall-clock budget is persisted as a lifecycle failure, not cancellation or retry", async () => {
-  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slowSuccess; value.runtime.max_wall_clock_ms = 15;
-  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "BUDGET_EXHAUSTED");
-  assert.equal(result.providers[0].cancellation_source, undefined); assert.equal(result.providers[0].timeout_retry, undefined);
+test("cleanup does not reap an active provider only because its heartbeat is stale", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { pid: process.pid, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  cleanup(root, 24);
+  assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.status, "running");
+  assert.equal(isAlive(active.pid), true);
+  terminateProcess(active.pid);
+});
+
+test("detached guardian reaps only after its owner identity is confirmed dead", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), pid: 999_999_999, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, worker: processIdentity(active.pid), started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  assert.equal(ensureRuntimeGuardian(root, runtime.runtime_id), true);
+  await eventually(() => readRuntime(root, runtime.runtime_id).providers.kimi.status === "failed");
+  assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.error.code, "ORPHANED_BROKER");
+  await eventually(() => !isAlive(active.pid));
+});
+
+test("detached guardian stays active until a later owner death", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, worker: processIdentity(active.pid), started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  assert.equal(ensureRuntimeGuardian(root, runtime.runtime_id), true);
+  await new Promise((resolve) => setTimeout(resolve, 50)); assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.status, "running");
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), pid: 999_999_999, started_at_ms: 1 } }));
+  await eventually(() => readRuntime(root, runtime.runtime_id).providers.kimi.status === "failed");
+  await eventually(() => !isAlive(active.pid));
+});
+
+test("guardian records a reused worker identity as orphaned without signalling that PID", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), pid: 999_999_999, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, worker: { ...processIdentity(active.pid), started: "forged-worker-start" }, started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  assert.equal(ensureRuntimeGuardian(root, runtime.runtime_id), true);
+  await eventually(() => readRuntime(root, runtime.runtime_id).providers.kimi.status === "failed");
+  assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.error.code, "ORPHANED_BROKER");
+  assert.equal(isAlive(active.pid), true);
+  terminateProcess(active.pid);
+});
+
+test("a reused worker PID is never signalled by cleanup or cancel", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: { ...currentOwnerIdentity(), pid: 999_999_999, started_at_ms: 1 }, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, worker: { ...processIdentity(active.pid), started: "forged-worker-start" }, started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  cleanup(root, 24); assert.equal(isAlive(active.pid), true);
+  const broker = new Broker(config(root, [["kimi"]]));
+  assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.error.code, "ORPHANED_BROKER");
+  assert.deepEqual(broker.cancel(runtime.runtime_id, "kimi"), { cancelled: false, reason: "NOT_ACTIVE" });
+  const continuation = await broker.run({ version: 4, host_provider: "codex", prompt: "follow up", continuation: { runtime_id: runtime.runtime_id } });
+  assert.notEqual(continuation.providers[0].error.code, "PROVIDER_BUSY");
+  terminateProcess(active.pid);
+});
+
+test("owner PID reuse is distinguished by its recorded process start identity", async () => {
+  const root = temp(); const runtime = createRuntime(root, 24, "codex");
+  const active = spawn(process.execPath, [slow], { detached: true, stdio: "ignore" }); active.unref();
+  const reused = { ...currentOwnerIdentity(), started: "forged-process-start", started_at_ms: 1 };
+  updateRuntime(root, runtime.runtime_id, (state) => ({ ...state, owner: reused, providers: { kimi: { provider: "kimi", status: "running", pid: active.pid, worker: processIdentity(active.pid), started_at_ms: 1, process_alive_at_ms: 1, last_progress_at_ms: 1 } } }));
+  cleanup(root, 24);
+  assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.error.code, "ORPHANED_BROKER");
+  await eventually(() => !isAlive(active.pid));
 });
 
 test("broker updates last progress for parsed stream output", async () => {
@@ -146,13 +203,13 @@ test("Kimi records stream progress and APIEmptyResponseError retries", async () 
   assert.equal(typeof item.last_progress_at_ms, "number");
 });
 
-test("a confirmed-dead Kimi process is terminated without a semantic verdict", async () => {
+test("a dead health probe does not terminate an otherwise live Kimi process", async () => {
   const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = slow;
-  const result = await new Broker(value, deadHealth).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  const item = result.providers[0]; const state = readRuntime(root, result.runtime_id).providers.kimi;
-  assert.equal(item.status, "failed");
-  assert.equal(item.error.code, "PROCESS_DEAD");
-  assert.equal(item.last_progress_at_ms, null);
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(isAlive(state.pid), false);
+  const broker = new Broker(value, { healthCheckIntervalMs: 10, probeSession: async () => ({ status: "dead", session_id: null, cursor: null, raw: null, error: { code: "PROCESS_DEAD" }, evidence: "test probe" }) });
+  const running = broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const runtimeId = fs.readdirSync(root).find((id) => /^[0-9a-f-]{36}$/i.test(id)); const state = readRuntime(root, runtimeId).providers.kimi;
+  assert.equal(state.status, "running"); assert.equal(isAlive(state.pid), true);
+  broker.cancel(runtimeId, "kimi"); const result = await running;
+  assert.equal(result.providers[0].status, "cancelled");
 });

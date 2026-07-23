@@ -8,9 +8,10 @@ import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMat
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { SUPPORTED_PROVIDER_IDS } from "../lib/provider-ids.mjs";
+import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
-const agy = path.resolve("test/fake-antigravity-cli.mjs");
-const pi = path.resolve("test/fake-pi-cli.mjs");
+const agy = nodeFixtureCommand(path.resolve("test/fake-antigravity-cli.mjs"));
+const pi = nodeFixtureCommand(path.resolve("test/fake-pi-cli.mjs"));
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-new-runtime-"));
 const sha = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -47,7 +48,6 @@ test("supported provider IDs have one config and request contract", () => {
 });
 
 test("CLI/model provider instances use one adapter and isolated runtime keys", async () => {
-  fs.chmodSync(pi, 0o755);
   const root = source("file_only"); const runtime = temp(); const providers = {
     "pi/deepseek": provider("pi", pi, { model: "deepseek/deepseek-v4-pro", effort: "high" }),
     "pi/k3": provider("pi", pi, { model: "kimi-coding/k3", effort: null, thinking: true }),
@@ -69,7 +69,6 @@ test("CLI/model provider instances use one adapter and isolated runtime keys", a
 });
 
 test("Pi completes file_only, always_embed, and native continuation through its supervised stream", async () => {
-  fs.chmodSync(pi, 0o755);
   const fileRoot = source("file_only"); const runtime = temp(); const value = config(runtime, fileRoot, { pi: provider("pi", pi) }); const broker = new Broker(value);
   const first = await broker.run({ version: 4, host_provider: "antigravity", provider_allowlist: ["pi"], prompt: "R1", continuation: null, attachments: packet(fileRoot, "file_only") });
   assert.equal(first.providers[0].status, "completed"); assert.equal(first.providers[0].delivery_used, "file_only"); assert.match(first.providers[0].output, /R1/); assert.match(first.providers[0].session_id, /^[0-9a-f-]{36}$/i);
@@ -82,7 +81,6 @@ test("Pi completes file_only, always_embed, and native continuation through its 
 });
 
 test("Pi fails closed when the CLI returns a session other than the planned native session", async () => {
-  fs.chmodSync(pi, 0o755);
   const runtime = temp(); const root = source("file_only"); const value = config(runtime, root, { pi: provider("pi", pi, { env: ["PI_FAKE_SESSION_ID"] }) });
   process.env.PI_FAKE_SESSION_ID = "wrong-pi-session";
   try {
@@ -92,7 +90,6 @@ test("Pi fails closed when the CLI returns a session other than the planned nati
 });
 
 test("Pi surfaces wrapper protocol violations as invalid provider output", async () => {
-  fs.chmodSync(pi, 0o755);
   const runtime = temp(); const root = source("file_only"); const value = config(runtime, root, { pi: provider("pi", pi, { env: ["PI_FAKE_MISSING_WILL_RETRY"] }) });
   process.env.PI_FAKE_MISSING_WILL_RETRY = "1";
   try {
@@ -102,7 +99,6 @@ test("Pi surfaces wrapper protocol violations as invalid provider output", async
 });
 
 test("Antigravity runs only file_only and is explicitly not continuable", async () => {
-  fs.chmodSync(agy, 0o755);
   const root = source("file_only"); const runtime = temp(); const value = config(runtime, root, { antigravity: provider("antigravity", agy, { env: ["AGY_FAKE_CWD_MODE"] }) }); const broker = new Broker(value);
   process.env.AGY_FAKE_CWD_MODE = "true";
   try {
@@ -116,7 +112,6 @@ test("Antigravity runs only file_only and is explicitly not continuable", async 
 });
 
 test("Antigravity requires an explicit native-profile acknowledgement", async () => {
-  fs.chmodSync(agy, 0o755);
   const root = source("file_only"); const value = config(temp(), root, { antigravity: provider("antigravity", agy, { allow_host_state: false }) });
   const result = await new Broker(value).run({ version: 4, host_provider: "pi", provider_allowlist: ["antigravity"], prompt: "review", continuation: null });
   assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "PROVIDER_HOST_STATE_UNACKNOWLEDGED");

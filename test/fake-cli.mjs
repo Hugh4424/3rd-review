@@ -23,13 +23,18 @@ else if (args.includes("--wire")) {
     const message = JSON.parse(line);
     if (message.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocol_version: "1.10" } }));
     if (message.method === "prompt") {
-      console.log(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "TextPart", payload: { text: "kimi opinion" } } }));
+      console.log(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "TextPart", payload: { text: process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT ?? "kimi opinion" } } }));
       console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { status: "finished" } }));
       console.error(`To resume this session: kimi -r ${session}`);
     }
   });
 }
-else if (args.includes("-p")) console.log(`${JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" })}\n${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "claude opinion", session_id: "claude-session" })}`);
+else if (args.includes("-p")) {
+  const model = args[args.indexOf("--model") + 1] ?? null;
+  const session_id = model === "emit-private-session" ? "session:/private/session" : "claude-session";
+  const usage = model === "emit-private-usage" ? "file:///private/usage" : undefined;
+  console.log(`${JSON.stringify({ type: "system", subtype: "init", session_id })}\n${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "claude opinion", session_id, ...(usage === undefined ? {} : { usage }) })}`);
+}
 else if (args.includes("exec")) console.log(`${JSON.stringify({ type: "thread.started", thread_id: "codex-session" })}\n${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "codex opinion" } })}\n${JSON.stringify({ type: "turn.completed" })}`);
 else if (args.includes("--output-format")) console.log(JSON.stringify({ type: "final", session_id: "kimi-session", text: "kimi opinion" }));
 else if (args.includes("run")) console.log(JSON.stringify({ type: "session.completed", session_id: "opencode-session", text: "opencode opinion" }));

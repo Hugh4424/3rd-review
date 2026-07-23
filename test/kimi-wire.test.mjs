@@ -12,18 +12,49 @@ const session = "12345678-1234-1234-1234-123456789abc";
 function feed(plan, value) { return plan.observeLine("stdout", JSON.stringify(value)); }
 function hint(plan) { return plan.observeLine("stderr", `To resume this session: kimi -r ${session}`); }
 
-test("Kimi uses Wire initialize and prompt requests and official session resume", () => {
+function attachmentWorkspace() {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-wire-attachments-")); const bundle = path.join(cwd, "bundle");
+  fs.mkdirSync(path.join(bundle, "skills", "review"), { recursive: true });
+  fs.writeFileSync(path.join(bundle, "review-packet.v1.json"), "packet");
+  fs.writeFileSync(path.join(bundle, "changes.diff"), "diff");
+  fs.writeFileSync(path.join(bundle, "skills", "review", "SKILL.md"), "skill");
+  fs.writeFileSync(path.join(bundle, "attachments-manifest.json"), JSON.stringify({ files: [
+    { target: "review-packet.v1.json" }, { target: "changes.diff" }, { target: "skills/review/SKILL.md" },
+  ] }));
+  return { cwd, bundle: fs.realpathSync(bundle) };
+}
+
+test("Kimi sends the Wire prompt only after initialize responds and uses official session resume", () => {
   const first = kimi.start(provider, "/tmp/work", "review", "/tmp/runtime");
   assert.deepEqual(first.argv.slice(0, 1), ["--wire"]);
   assert.equal(first.argv.includes("--afk"), true);
   assert.equal(first.keepStdinOpen, true);
   const requests = first.input.trim().split("\n").map(JSON.parse);
+  assert.equal(requests.length, 1);
   assert.equal(requests[0].method, "initialize");
   assert.equal(requests[0].params.protocol_version, "1.10");
-  assert.equal(requests[1].method, "prompt");
-  assert.equal(requests[1].params.user_input, "review");
+  const initialize = feed(first, { jsonrpc: "2.0", id: "initialize", result: { protocol_version: "1.10" } });
+  const prompt = JSON.parse(initialize.stdin_write);
+  assert.equal(prompt.method, "prompt");
+  assert.equal(prompt.params.user_input, "review");
   const resumed = kimi.resume(provider, "/tmp/work", session, "delta", "/tmp/runtime");
   assert.deepEqual(resumed.argv.slice(-2), ["--session", session]);
+});
+
+test("Kimi Wire gives its first ReadFile a logical packet-relative path", () => {
+  const workspace = attachmentWorkspace();
+  try {
+    const plan = kimi.start(provider, workspace.cwd, "review", "/tmp/runtime");
+    const initialized = feed(plan, { jsonrpc: "2.0", id: "initialize", result: { protocol_version: "1.10" } });
+    const prompt = JSON.parse(initialized.stdin_write).params.user_input;
+    const firstRead = "bundle/review-packet.v1.json";
+    assert.equal(prompt.includes(`First ReadFile target: ${JSON.stringify(firstRead)}`), true);
+    assert.equal(prompt.includes(JSON.stringify(workspace.bundle)), false);
+    assert.match(prompt, /"bundle\/changes\.diff"/);
+    assert.match(prompt, /never use or disclose an absolute host path/);
+    assert.match(prompt, /Do not recompute or validate hashes/);
+    assert.equal(fs.existsSync(path.join(workspace.bundle, "review-packet.v1.json")), true);
+  } finally { fs.rmSync(workspace.cwd, { recursive: true, force: true }); }
 });
 
 test("Kimi Wire events expose progress and a finished turn exposes completed raw", async () => {
@@ -121,7 +152,8 @@ test("Kimi Wire reports an explicit retry event as retry health", async () => {
 
 test("Kimi Wire initialize method-not-found is compatible but other protocol uncertainty is unverifiable", async () => {
   const compatible = kimi.start(provider, "/tmp/work", "review", "/tmp/runtime");
-  feed(compatible, { jsonrpc: "2.0", id: "initialize", error: { code: -32601, message: "method not found" } });
+  const compatibleResponse = feed(compatible, { jsonrpc: "2.0", id: "initialize", error: { code: -32601, message: "method not found" } });
+  assert.equal(JSON.parse(compatibleResponse.stdin_write).method, "prompt");
   assert.equal((await compatible.probeSession()).status, "progressing");
   const uncertain = kimi.start(provider, "/tmp/work", "review", "/tmp/runtime");
   feed(uncertain, { jsonrpc: "2.0", id: "initialize", error: { code: -32600, message: "bad initialize" } });

@@ -52,7 +52,7 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.deepEqual(unconfigured.attachment_root, { status: "unavailable", error: { code: "ATTACHMENT_ROOT_UNCONFIGURED" } });
   const root = source(); const broker = new Broker(config(temp(), [["kimi", "opencode"]], root));
   const result = await broker.doctor({ attachmentRoot: root });
-  assert.deepEqual(result.result_protocols, ["workflowhub-result.v1"]);
+  assert.deepEqual(result.result_protocols, ["workflowhub-result.v1", "workflowhub-result.v2"]);
   assert.deepEqual(result.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.attachment_root, { status: "ready" });
@@ -79,6 +79,148 @@ test("workflowhub result is an additive public projection bound to broker-verifi
   assert.doesNotMatch(JSON.stringify(result), new RegExp(runtime.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
+test("workflowhub result v2 exposes public effective profile and telemetry without runtime paths", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi"]], attachmentsRoot);
+  Object.assign(value.providers.kimi, { model: "kimi-code/k3", effort: "high", thinking: true });
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  const provider = result.providers[0];
+  assert.equal(provider.result_protocol, "workflowhub-result.v2");
+  assert.equal(provider.provider, "kimi"); assert.equal(provider.adapter, "kimi");
+  assert.equal(provider.model, "kimi-code/k3"); assert.equal(provider.effort, "high"); assert.equal(provider.thinking, true);
+  assert.equal(provider.status, "completed"); assert.equal(provider.output, "kimi opinion");
+  assert.equal(provider.session_file_path, null); assert.equal(provider.continuable, true);
+  assert.equal(Number.isSafeInteger(provider.timing.started_at_ms), true);
+  assert.equal(Number.isSafeInteger(provider.timing.completed_at_ms), true);
+  assert.equal(Number.isSafeInteger(provider.timing.duration_ms), true);
+  assert.deepEqual(provider.usage, null); assert.deepEqual(provider.retry, { count: 0, progress_events: 1 });
+  assert.equal(provider.unavailable_diagnostics, null);
+  assert.deepEqual(provider.raw_output_ref.version, "broker-output-ref.v1");
+  assert.match(provider.raw_output_ref.stdout_sha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(provider).sort(), ["adapter", "continuable", "effort", "error", "material_id", "model", "output", "provider", "raw_output_ref", "result_protocol", "retry", "runtime_id", "session_file_path", "session_id", "status", "thinking", "timing", "unavailable_diagnostics", "usage"]);
+  assert.equal(JSON.stringify(result).includes(runtime), false);
+  assert.equal(JSON.stringify(result).includes("raw_stdout_ref"), false);
+});
+
+test("workflowhub result v2 gives public unavailable diagnostics without fabricated telemetry", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi"]], attachmentsRoot);
+  value.providers.kimi.command = path.join(runtime, "missing-provider");
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  const provider = result.providers[0];
+  assert.equal(provider.status, "failed"); assert.equal(provider.error.code, "PROCESS_START_FAILED");
+  assert.equal(provider.error.message, "provider error message omitted because it contained a private absolute path");
+  assert.equal(JSON.stringify(result).includes(runtime), false);
+  assert.deepEqual(provider.unavailable_diagnostics, { code: "PROCESS_START_FAILED", message: provider.error.message });
+  assert.deepEqual(provider.usage, null); assert.deepEqual(provider.retry, { count: 0, progress_events: 0 });
+  assert.equal(provider.session_id, null); assert.equal(provider.session_file_path, null); assert.equal(provider.continuable, false);
+  for (const value of Object.values(provider.timing)) assert.equal(value === null || Number.isSafeInteger(value), true);
+});
+
+test("workflowhub result v2 requires a candidate group and executes every configured member", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi", "opencode"]], attachmentsRoot)); const input = { version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) };
+  await assert.rejects(() => broker.run(input), { code: "REQUEST_INVALID" });
+  const result = await broker.run({ ...input, provider_allowlist: ["opencode", "kimi"] });
+  assert.deepEqual(result.providers.map((provider) => provider.provider), ["opencode", "kimi"]);
+  assert.ok(result.providers.every((provider) => provider.result_protocol === "workflowhub-result.v2" && provider.status === "completed"));
+  assert.ok(result.providers.every((provider) => Number.isSafeInteger(provider.timing.started_at_ms) && Number.isSafeInteger(provider.timing.completed_at_ms)));
+});
+
+test("Kimi attachment access paths stay provider-private in workflowhub result v2", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  assert.equal(result.providers[0].status, "completed");
+  const publicResult = JSON.stringify(result);
+  assert.equal(publicResult.includes(runtime), false);
+  assert.equal(publicResult.includes(attachmentsRoot), false);
+  assert.equal(publicResult.includes(path.join(runtime, result.runtime_id, "work", "kimi", "bundle")), false);
+});
+
+test("workflowhub result v2 keeps same-adapter exclusions beside heterologous results", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["codex/terra", "kimi"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["codex/terra", "kimi"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  assert.deepEqual(result.providers.map((provider) => provider.provider), ["codex/terra", "kimi"]);
+  const skipped = result.providers[0]; assert.equal(skipped.status, "failed"); assert.equal(skipped.error.code, "SAME_SOURCE"); assert.deepEqual(skipped.unavailable_diagnostics, { code: "SAME_SOURCE", message: "host provider cannot review itself" }); assert.equal(skipped.timing.started_at_ms, null); assert.equal(skipped.timing.completed_at_ms, null);
+  assert.equal(result.providers[1].status, "completed"); assert.equal(result.outcome, "completed");
+});
+
+test("workflowhub result v2 isolates a private-path provider failure without leaking or aborting its group", async () => {
+  for (const output of ["finding=/private/provider-secret", "finding:/private/provider-secret", "finding file:///private/provider-secret"]) {
+    const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["codex/terra", "kimi/k3", "claude-code/opus"]], attachmentsRoot);
+    value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+    process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = output;
+    try {
+      const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["codex/terra", "kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+      assert.doesNotThrow(() => JSON.parse(JSON.stringify(result)));
+      assert.deepEqual(result.providers.map((provider) => provider.provider), ["codex/terra", "kimi/k3", "claude-code/opus"]);
+      const [sameSource, polluted, normal] = result.providers;
+      assert.equal(sameSource.status, "failed"); assert.equal(sameSource.error.code, "SAME_SOURCE");
+      assert.equal(polluted.status, "failed"); assert.equal(polluted.output, null); assert.equal(polluted.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(polluted.continuable, false);
+      assert.equal(normal.status, "completed"); assert.equal(normal.output, "claude opinion"); assert.equal(result.outcome, "completed");
+      const publicResult = JSON.stringify(result); assert.equal(publicResult.includes("/private/provider-secret"), false); assert.equal(publicResult.includes(runtime), false);
+      const rawDirectory = path.join(runtime, result.runtime_id, "raw", "kimi%2Fk3"); const raw = fs.readdirSync(rawDirectory).find((name) => name.endsWith(".stdout"));
+      assert.match(fs.readFileSync(path.join(rawDirectory, raw), "utf8"), /\/private\/provider-secret/);
+    } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+  }
+});
+
+test("workflowhub result v2 isolates projection-field path violations without rejecting the candidate group", async () => {
+  const cases = [
+    { name: "profile model", configure: (value) => { value.providers["kimi/k3"].model = "model=/private/profile"; }, polluted: "kimi/k3", normal: "claude-code/opus", marker: "/private/profile" },
+    { name: "session", configure: (value) => { value.providers["claude-code/opus"].model = "emit-private-session"; }, polluted: "claude-code/opus", normal: "kimi/k3", marker: "/private/session" },
+    { name: "usage", configure: (value) => { value.providers["claude-code/opus"].model = "emit-private-usage"; }, polluted: "claude-code/opus", normal: "kimi/k3", marker: "/private/usage" },
+  ];
+  for (const scenario of cases) {
+    const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["codex/terra", "kimi/k3", "claude-code/opus"]], attachmentsRoot); scenario.configure(value);
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["codex/terra", "kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    assert.doesNotThrow(() => JSON.parse(JSON.stringify(result)), scenario.name);
+    const providers = Object.fromEntries(result.providers.map((provider) => [provider.provider, provider]));
+    assert.equal(providers["codex/terra"].error.code, "SAME_SOURCE");
+    assert.equal(providers[scenario.polluted].status, "failed", scenario.name); assert.equal(providers[scenario.polluted].error.code, "PUBLIC_RESULT_INVALID", scenario.name); assert.equal(providers[scenario.polluted].output, null, scenario.name); assert.equal(providers[scenario.polluted].continuable, false, scenario.name);
+    assert.equal(providers[scenario.normal].status, "completed", scenario.name); assert.equal(result.outcome, "completed", scenario.name); assert.equal(JSON.stringify(result).includes(scenario.marker), false, scenario.name);
+  }
+});
+
+test("workflowhub result v1 turns a private provider output into a safe provider failure", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3"]], attachmentsRoot); value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "finding file:///private/v1-output";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", provider_allowlist: ["kimi/k3"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) }); const provider = result.providers[0];
+    assert.doesNotThrow(() => JSON.parse(JSON.stringify(result)));
+    assert.equal(provider.status, "failed"); assert.equal(provider.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(provider.output, null); assert.equal(JSON.stringify(result).includes("/private/v1-output"), false);
+  } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
+test("workflowhub result v2 runs only the first profile for each adapter in initial and continuation groups", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi/k3", "kimi/coding", "opencode/glm"]], attachmentsRoot));
+  const request = { version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi/k3", "kimi/coding", "opencode/glm"], prompt: "review", attachments: packet(attachmentsRoot) };
+  const initial = await broker.run({ ...request, continuation: null });
+  assert.deepEqual(initial.providers.map((provider) => provider.provider), request.provider_allowlist);
+  assert.equal(initial.providers[0].status, "completed");
+  assert.equal(initial.providers[1].status, "failed"); assert.equal(initial.providers[1].error.code, "SAME_SOURCE");
+  assert.deepEqual(initial.providers[1].unavailable_diagnostics, { code: "SAME_SOURCE", message: "an earlier candidate already uses this adapter" });
+  assert.equal(initial.providers[1].timing.started_at_ms, null); assert.equal(initial.providers[1].timing.completed_at_ms, null);
+  assert.equal(initial.providers[2].status, "completed");
+  let state = JSON.parse(fs.readFileSync(path.join(runtime, initial.runtime_id, "state.json"), "utf8"));
+  assert.equal(state.providers["kimi/coding"], undefined);
+  assert.equal(fs.existsSync(path.join(runtime, initial.runtime_id, "workspace", "kimi%2Fcoding")), false);
+
+  const continuation = await broker.run({ ...request, prompt: "follow up", continuation: { runtime_id: initial.runtime_id }, attachments: packet(attachmentsRoot) });
+  assert.deepEqual(continuation.providers.map((provider) => provider.provider), request.provider_allowlist);
+  assert.equal(continuation.providers[0].status, "completed");
+  assert.equal(continuation.providers[1].status, "failed"); assert.equal(continuation.providers[1].error.code, "SAME_SOURCE");
+  assert.equal(continuation.providers[1].timing.started_at_ms, null); assert.equal(continuation.providers[1].timing.completed_at_ms, null);
+  assert.equal(continuation.providers[2].status, "completed");
+  state = JSON.parse(fs.readFileSync(path.join(runtime, initial.runtime_id, "state.json"), "utf8"));
+  assert.equal(state.providers["kimi/coding"], undefined);
+  assert.equal(fs.existsSync(path.join(runtime, initial.runtime_id, "workspace", "kimi%2Fcoding")), false);
+});
+
+test("workflowhub result v1 keeps its existing same-adapter profile routing", async () => {
+  const attachmentsRoot = source(); const broker = new Broker(config(temp(), [["kimi/k3", "kimi/coding"]], attachmentsRoot));
+  const result = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", provider_allowlist: ["kimi/k3", "kimi/coding"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+  assert.deepEqual(result.providers.map((provider) => provider.provider), ["kimi/k3", "kimi/coding"]);
+  assert.ok(result.providers.every((provider) => provider.status === "completed"));
+});
+
 test("workflowhub result accepts a complete direction bundle without the legacy triad", async () => {
   const attachmentsRoot = simpleSource(); const broker = new Broker(config(temp(), [["kimi"]], attachmentsRoot)); const attachments = simplePacket(attachmentsRoot);
   const result = await broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "review", continuation: null, attachments });
@@ -89,12 +231,12 @@ test("workflowhub failed result keeps material identity without inventing semant
   const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi"]], attachmentsRoot); value.providers.kimi.command = path.join(runtime, "missing-provider");
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v1", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
   const provider = result.providers[0]; assert.equal(provider.result_protocol, "workflowhub-result.v1"); assert.match(provider.material_id, /^[a-f0-9]{64}$/);
-  assert.equal(provider.status, "failed"); assert.equal(provider.session_id, null); assert.equal(provider.output, null); assert.equal(provider.error.code, "PROCESS_START_FAILED");
+  assert.equal(provider.status, "failed"); assert.equal(provider.session_id, null); assert.equal(provider.output, null); assert.equal(provider.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(JSON.stringify(result).includes(runtime), false);
 });
 
 test("unknown workflowhub result protocol fails before runtime or provider creation", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const broker = new Broker(config(runtime, [["kimi"]], attachmentsRoot));
-  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) }), { code: "PROTOCOL_INCOMPATIBLE" });
+  await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v3", prompt: "review", continuation: null, attachments: packet(attachmentsRoot) }), { code: "PROTOCOL_INCOMPATIBLE" });
   assert.deepEqual(fs.readdirSync(runtime), []);
 });
 
@@ -129,7 +271,7 @@ test("doctor attachment probe copies and locks a private bundle without touching
   assert.throws(() => probeAttachmentWorkspace(file, "kimi", 1), { code: "ATTACHMENT_PROBE_FAILED" });
 });
 
-test("attachment validation rejects root, source, traversal, links, hashes and size overflow", () => {
+test("attachment validation rejects unsafe roots, sources, traversal, links, and hashes without a size gate", () => {
   const root = source(); const runtime = temp(); const allow = [{ root, sources: ["skills", "review-packet.v1.json", "changes.diff", "manifest.json"] }]; const input = packet(root);
   const prepared = prepareAttachments(input, runtime, "kimi", 10_000, allow);
   assert.equal(fs.readFileSync(path.join(prepared.cwd, "skills/review/SKILL.md"), "utf8"), "lens");
@@ -138,7 +280,7 @@ test("attachment validation rejects root, source, traversal, links, hashes and s
   assert.throws(() => prepareAttachments({ ...input, manifest: { ...input.manifest, entries: [{ ...input.manifest.entries[0], source: "README.md" }] } }, temp(), "kimi", 10_000, allow), { code: "ATTACHMENT_SOURCE_FORBIDDEN" });
   assert.throws(() => prepareAttachments({ ...input, manifest: { ...input.manifest, entries: [{ ...input.manifest.entries[0], destination: "../escape" }] } }, temp(), "kimi", 10_000, allow), { code: "ATTACHMENT_INVALID" });
   assert.throws(() => prepareAttachments({ ...input, manifest: { ...input.manifest, entries: [{ ...input.manifest.entries[0], sha256: sha("bad!") }] } }, temp(), "kimi", 10_000, allow), { code: "ATTACHMENT_HASH_MISMATCH" });
-  assert.throws(() => prepareAttachments(input, temp(), "kimi", 3, allow), { code: "ATTACHMENT_TOO_LARGE" });
+  assert.doesNotThrow(() => prepareAttachments(input, temp(), "kimi", 3, allow));
   fs.symlinkSync("SKILL.md", path.join(root, "skills/review/link"));
   const linked = { ...input, manifest: { ...input.manifest, entries: [{ ...input.manifest.entries[0], source: "skills/review/link" }] } };
   assert.throws(() => prepareAttachments(linked, temp(), "kimi", 10_000, allow), { code: "ATTACHMENT_INVALID" });
@@ -196,9 +338,9 @@ test("always_embed rejects a single-file pseudo packet", async () => {
   await assert.rejects(() => broker.run({ version: 4, host_provider: "codex", prompt: "PROMPT_HEAD review the complete packet", continuation: null, attachments: input }), { code: "MATERIAL_INCOMPLETE" });
 });
 
-test("OpenCode stdin delivery still obeys max_prompt_bytes", async () => {
+test("OpenCode stdin delivery ignores legacy max_prompt_bytes", async () => {
   const attachmentsRoot = source("always_embed"); const runtime = temp(); const value = config(runtime, [["opencode"]], attachmentsRoot); value.runtime.max_prompt_bytes = 20; const broker = new Broker(value);
-  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) }); assert.equal(result.providers[0].error.code, "PROMPT_TOO_LARGE"); assert.equal(result.providers[0].delivery_used, "always_embed");
+  const result = await broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null, attachments: packet(attachmentsRoot, "always_embed", true) }); assert.equal(result.providers[0].status, "completed"); assert.equal(result.providers[0].delivery_used, "always_embed");
   const privateState = JSON.parse(fs.readFileSync(path.join(runtime, result.runtime_id, "state.json"), "utf8")); assert.equal(privateState.providers.opencode.delivery_used, "always_embed");
 });
 

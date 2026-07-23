@@ -8,15 +8,15 @@
 | 未登录、API key 缺失 | 失败，`AUTHENTICATION_FAILED` 或 `AUTH_ENV_MISSING` |
 | 网络、TLS、限流 | 保留该 provider 的失败诊断；同层零成功才尝试下一层 |
 | CLI 输出格式变化 | `PROVIDER_OUTPUT_INVALID`，不把半截输出当成功 |
-| prompt/output 超限 | 明确失败；调用方应缩小材料 |
+| 大型 prompt、附件、输出 | broker 不因字节数拒绝或中断审查；附件完整性仍逐项校验，stdout/stderr 流式写入 runtime 私有只读文件并记录 SHA-256，内存只保留解析所需摘要 |
 | 附件不可信 | root/source allowlist、相对路径、regular-file、single-link、size、SHA-256 任一不符都明确失败 |
 | 附件投递 | 同一请求按 provider 协商 `file_only`/`always_embed`；无法安全转换时 `ATTACHMENT_DELIVERY_UNSUPPORTED`，不得跳过 |
-| Antigravity | 只支持单轮 `file_only`；generic `effort`、续跑、`always_embed` 均明确拒绝。AGY 会写原生 profile，默认须设置 `allow_host_state:true` 才能启动；prompt 超过 64KiB 返回 `PROMPT_TOO_LARGE`，不尝试 argv 截断或文件兜底 |
+| Antigravity | 只支持单轮 `file_only`；generic `effort`、续跑、`always_embed` 均明确拒绝。AGY 会写原生 profile，默认须设置 `allow_host_state:true` 才能启动；broker 不在本地截断 prompt |
 | Pi JSONL | 只接受 wrapper 输出的 session、最终 assistant text、非 retry `agent_end` 和 `agent_settled`；任何缺失、异常 stop reason 或 malformed stream 都是 `PROVIDER_OUTPUT_INVALID` |
 | 静默但存活 | `process_alive_at_ms` 仅表示 PID 存活；`last_progress_at_ms` 仅由已解析的 provider 流事件更新，二者不能互相替代 |
-| 长时间运行 | 通用 health runner 默认每 60 秒串行检查一次；连续两轮无法验证即 `HEALTH_UNVERIFIABLE`。默认 `max_wall_clock_ms=null`，持续有效进展的会话不按总时长终止；调用方可显式设置正整数预算，到期真实终止进程树并返回 `BUDGET_EXHAUSTED`。PID 只作诊断，不覆盖 health 结果 |
+| 长时间运行 | health runner 持续观测 provider 流和可选 session probe。probe 不可验证、cursor 静止、dead 状态或 probe 自身异常只写健康诊断，绝不终止活子进程；只有 provider 明确终态、进程实际退出或显式取消才结束审查 |
 | 用户取消 | `cancel --source` 终止 provider process tree；`status=cancelled`、错误码 `CANCELLED`，来源写入 `error.source`，并保留 `cancellation_source` 兼容字段 |
-| broker 退出 | CLI 信号会终止 provider process tree 并记录 `cancellation_source=broker_shutdown`；后续 status/cleanup 发现 owner 丢失或 liveness lease 过期时标记 `ORPHANED_BROKER` 并回收 |
+| broker 退出 | CLI 信号会终止 provider process tree 并记录 `cancellation_source=broker_shutdown`；每个活跃 runtime 有 detached guardian，以 owner 的 pid、uid、启动标识确认原 broker 已死后才标记 `ORPHANED_BROKER` 并回收。PID、心跳或轮询时间本身不构成回收条件 |
 | 并发 provider | 每个 provider 使用私有 workspace；Kimi 的 cwd 可写但 bundle 视图只读，OpenCode/Pi 通过 stdin 接收完整 prompt，不走会截断的 `--file`/Read 链路；provider 不接触真实 repo |
 | 下一轮 | 仅续跑上一轮成功且有 session 的 provider；没有 session 明确失败 |
 | 原始输出 | stdout/stderr 分别写入 runtime 私有只读文件；ref、session、output、diagnostic、绝对路径不进入 `status` |

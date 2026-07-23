@@ -65,11 +65,13 @@ request 是 JSON，至少包含以下 V4 字段：
 ```
 
 `host_provider` 是受支持的宿主 provider 或 `CLI/model` 实例名，broker 不让同源 CLI 审查。调用方可选
-`provider_allowlist`，但其中只能包含配置中不重复、异源的完整 provider 实例名。首轮的
+`provider_allowlist`，其中只能包含配置中不重复的完整 provider 实例名。首轮的
 `continuation` 为 `null` 或省略；续跑唯一使用：
 
 默认不传 `provider_allowlist`，broker 每个首轮只启动一个异源 provider。显式
-`provider_allowlist` 可以列出多个唯一 provider，代表调用方明确请求并行多审；默认路径不得
+`provider_allowlist` 可以列出多个唯一 provider，代表调用方明确请求并行多审；`workflowhub-result.v2`
+把该列表视为 caller-ordered candidate group，并由 broker 统一并行派发、隔离 workspace、绑定材料和
+维护 native session。候选中的同源 adapter 以 `SAME_SOURCE` 公共结果返回，不使整个组无效；默认路径不得
 把 capability discovery 的全部候选自动转换为多 provider allowlist。fallback 只响应稳定的
 transport unavailable code；配置、材料、取消、语义结果和无效输出均不得 fallback。
 
@@ -110,7 +112,7 @@ provider-material 派生 hash，也不迁移旧 timeout/redaction schema。
 并以 exit code `2` 结束。error code 是稳定机器可读的失败分类，例如
 `REQUEST_INVALID`、`CONFIG_INVALID`、`ATTACHMENT_ROOT_FORBIDDEN`、
 `ATTACHMENT_HASH_MISMATCH`、`ATTACHMENT_IMMUTABLE`、`RUNTIME_EXPIRED`、
-`RUNTIME_BUSY`、`NO_CONTINUABLE_SESSION`、`PROVIDER_BUSY`、`PROMPT_TOO_LARGE` 和
+`RUNTIME_BUSY`、`NO_CONTINUABLE_SESSION`、`PROVIDER_BUSY` 和
 `ATTACHMENT_DELIVERY_UNSUPPORTED`。调用方必须保留 code 和诊断，不得把它们映射为 pass。
 
 收到 `SIGINT` 或 `SIGTERM` 时 broker 终止其 provider process tree 并写入

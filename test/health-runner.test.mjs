@@ -10,7 +10,7 @@ class FakeClock {
   async tick(ms) { const target = this.nowMs + ms; while (true) { const next = [...this.timers.entries()].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0]; if (!next) break; this.timers.delete(next[0]); this.nowMs = next[1].at; next[1].fn(); await Promise.resolve(); await Promise.resolve(); } this.nowMs = target; await Promise.resolve(); await Promise.resolve(); }
 }
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-function setup(options = {}) { const clock = new FakeClock(); const decisions = []; const runner = createHealthRunner({ clock, onDecision: (value) => decisions.push(value), ...options }); runner.start(); return { clock, decisions, runner }; }
+function setup(options = {}) { const clock = new FakeClock(); const decisions = []; const diagnostics = []; const runner = createHealthRunner({ clock, onDecision: (value) => decisions.push(value), onDiagnostic: (value) => diagnostics.push(value), ...options }); runner.start(); return { clock, decisions, diagnostics, runner }; }
 
 test("health probes start at the default 60 second interval and never overlap", async () => {
   const pending = deferred(); let calls = 0; const { clock, runner } = setup({ probeSession: () => { calls += 1; return pending.promise; }, probeDeadlineMs: 120_000 });
@@ -22,19 +22,19 @@ test("completed health harvest requires parseable raw", async () => {
   const valid = setup({ intervalMs: 10, probeSession: async () => ({ status: "completed", session_id: "s", cursor: "done", raw: { stdout: "FINAL", stderr: "" }, error: null, evidence: "terminal" }), validateCompleted: (raw) => raw.stdout === "FINAL" });
   await valid.clock.tick(10); assert.equal(valid.decisions[0].status, "completed"); assert.deepEqual(valid.decisions[0].raw, { stdout: "FINAL", stderr: "" });
   const invalid = setup({ intervalMs: 10, probeSession: async () => ({ status: "completed", session_id: "s", cursor: null, raw: { stdout: "PARTIAL", stderr: "" }, error: null, evidence: "terminal" }), validateCompleted: () => false });
-  await invalid.clock.tick(10); assert.equal(invalid.decisions[0].error.code, "HEALTH_INVALID");
+  await invalid.clock.tick(10); assert.deepEqual(invalid.decisions, []); assert.equal(invalid.diagnostics[0].code, "HEALTH_INVALID"); invalid.runner.stop();
 });
 
 test("abort-aware probe deadlines settle before a later probe may start", async () => {
   let active = 0; let maxActive = 0; let calls = 0; const probeSession = ({ signal }) => new Promise((resolve, reject) => { assert.ok(signal instanceof AbortSignal); active += 1; maxActive = Math.max(maxActive, active); calls += 1; signal.addEventListener("abort", () => { active -= 1; reject(new Error("aborted")); }, { once: true }); });
-  const { clock, decisions } = setup({ intervalMs: 10, probeDeadlineMs: 3, probeSession });
+  const { clock, decisions, diagnostics } = setup({ intervalMs: 10, probeDeadlineMs: 3, probeSession });
   await clock.tick(10); assert.equal(active, 1); await clock.tick(3); assert.equal(active, 0); assert.equal(calls, 1); assert.deepEqual(decisions, []);
-  await clock.tick(10); assert.equal(active, 1); await clock.tick(3); assert.equal(active, 0); assert.equal(decisions[0].error.code, "HEALTH_UNVERIFIABLE"); assert.equal(maxActive, 1);
+  await clock.tick(10); assert.equal(active, 1); await clock.tick(3); assert.equal(active, 0); assert.deepEqual(decisions, []); assert.ok(diagnostics.some((item) => item.code === "HEALTH_UNVERIFIABLE")); assert.equal(maxActive, 1);
 });
 
 test("a probe that ignores abort is PROBE_ABORT_FAILED after grace without a second probe", async () => {
-  let calls = 0; const { clock, decisions, runner } = setup({ intervalMs: 10, probeDeadlineMs: 3, probeAbortGraceMs: 2, probeSession: () => { calls += 1; return new Promise(() => {}); } });
-  await clock.tick(13); assert.deepEqual(decisions, []); await clock.tick(2); assert.equal(decisions[0].error.code, "PROBE_ABORT_FAILED"); assert.equal(runner.snapshot().unverifiable, 0); await clock.tick(100); assert.equal(calls, 1);
+  let calls = 0; const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeDeadlineMs: 3, probeAbortGraceMs: 2, probeSession: () => { calls += 1; return new Promise(() => {}); } });
+  await clock.tick(13); assert.deepEqual(decisions, []); await clock.tick(2); assert.equal(diagnostics[0].code, "PROBE_ABORT_FAILED"); assert.equal(runner.snapshot().unverifiable, 0); await clock.tick(100); assert.ok(calls > 1); runner.stop();
 });
 
 test("runner stop aborts an active probe and leaves no closure timer", async () => {
@@ -53,24 +53,25 @@ test("new structured progress wins a stale dead probe and updates cursor", async
   assert.deepEqual(decisions, []); assert.equal(runner.snapshot().cursor, "stream-2"); runner.stop();
 });
 
-test("cancellation wins before probe, after probe, and immediately before publish", async () => {
-  for (const cancelAt of [1, 2, 3]) { let checks = 0; let calls = 0; const { clock, decisions } = setup({ intervalMs: 10, isCancelled: () => ++checks >= cancelAt, probeSession: async () => { calls += 1; return { status: "dead", session_id: "s", cursor: null, raw: null, error: null, evidence: "dead" }; } }); await clock.tick(10); assert.equal(decisions[0].error.code, "CANCELLED"); if (cancelAt === 1) assert.equal(calls, 0); }
+test("explicit cancellation remains terminal even when probe is advisory", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status: "dead", session_id: "s", cursor: null, raw: null, error: null, evidence: "dead" }) });
+  runner.cancel(); await clock.tick(10); assert.equal(decisions[0].error.code, "CANCELLED");
 });
 
 test("adapters without a probe do not turn stream silence into an idle timeout", async () => {
   const { clock, decisions, runner } = setup({ intervalMs: 10 }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "event-1" }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.stop();
 });
 
-test("unchanged busy health becomes PROCESS_STALLED after five checks", async () => {
-  const { clock, decisions } = setup({ intervalMs: 10, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
+test("unchanged busy health is diagnosed but never terminated", async () => {
+  const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
   await clock.tick(50); assert.deepEqual(decisions, []);
-  await clock.tick(10); assert.equal(decisions[0].error.code, "PROCESS_STALLED");
+  await clock.tick(10); assert.deepEqual(decisions, []); assert.equal(diagnostics[0].code, "PROCESS_STALLED"); runner.stop();
 });
 
-test("unchanged progressing and retry statuses cannot renew health forever", async () => {
+test("unchanged progressing and retry statuses remain diagnostic", async () => {
   for (const status of ["progressing", "retry"]) {
-    const { clock, decisions } = setup({ intervalMs: 10, probeSession: async () => ({ status, session_id: "s", cursor: "same", raw: null, error: null, evidence: status }) });
-    await clock.tick(60); assert.equal(decisions[0].error.code, "PROCESS_STALLED", status);
+    const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status, session_id: "s", cursor: "same", raw: null, error: null, evidence: status }) });
+    await clock.tick(60); assert.deepEqual(decisions, [], status); assert.equal(diagnostics[0].code, "PROCESS_STALLED", status); runner.stop();
   }
 });
 
@@ -80,7 +81,7 @@ test("changing probe cursor keeps a long-running provider healthy", async () => 
 });
 
 test("stream progress resets an almost-stalled busy provider", async () => {
-  const { clock, decisions, runner } = setup({ intervalMs: 10, probeSession: async ({ cursor }) => ({ status: "busy", session_id: "s", cursor: cursor ?? "same", raw: null, error: null, evidence: "busy" }) });
+  const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async ({ cursor }) => ({ status: "busy", session_id: "s", cursor: cursor ?? "same", raw: null, error: null, evidence: "busy" }) });
   await clock.tick(50); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "stream-new" });
-  await clock.tick(40); assert.deepEqual(decisions, []); await clock.tick(10); assert.equal(decisions[0].error.code, "PROCESS_STALLED");
+  await clock.tick(40); assert.deepEqual(decisions, []); await clock.tick(10); assert.equal(diagnostics[0].code, "PROCESS_STALLED"); runner.stop();
 });
