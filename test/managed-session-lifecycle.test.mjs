@@ -50,6 +50,28 @@ test("managed start survives a SIGTERM caller and reconnects through public stat
   assert.equal(JSON.stringify(finished).includes(root), false);
 });
 
+test("managed public status follows the current operation from starting through running to terminal", async () => {
+  const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(slow) }); const broker = new Broker(value);
+  const start = broker.startManaged(request(material.attachment), "status-transition");
+  assert.equal(start.state, "starting"); assert.equal(Object.hasOwn(start, "group"), false);
+
+  let operation;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    operation = readRuntime(root, start.runtime_id).managed.operations[0];
+    if (operation.state === "running") break;
+    await delay(10);
+  }
+  assert.equal(operation.state, "running");
+  const running = broker.managedStatus(start.runtime_id);
+  assert.equal(running.state, "running"); assert.equal(Object.hasOwn(running, "group"), false);
+
+  const cancelled = broker.cancelManaged(start.runtime_id);
+  assert.equal(cancelled.state === "running" || cancelled.state === "terminal", true);
+  const finished = await terminal(broker, start.runtime_id);
+  assert.equal(finished.state, "terminal"); assert.equal(Object.hasOwn(finished, "group"), true);
+  assert.equal(finished.group.providers[0].error.code, "CANCELLED");
+});
+
 test("CLI exposes public managed start, status, and provider-free cancel", async () => {
   const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(slow) }); const configPath = path.join(root, "config.json"); const requestPath = path.join(root, "request.json"); fs.writeFileSync(configPath, JSON.stringify(value)); fs.writeFileSync(requestPath, JSON.stringify(request(material.attachment)));
   const startCall = await callCli(["start", `--config=${configPath}`, `--request=${requestPath}`, "--request-id=cli-managed"]); assert.equal(startCall.code, 0, startCall.stderr); const start = JSON.parse(startCall.stdout);
@@ -114,6 +136,21 @@ test("managed public terminal group keeps a polluted provider isolated and priva
     assert.equal(finished.group.providers[0].error?.code, "PUBLIC_RESULT_INVALID", JSON.stringify(finished)); assert.equal(finished.group.providers[1].status, "completed");
     assert.equal(JSON.stringify(finished).includes("/private/managed-secret"), false);
   } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
+test("managed terminal status rejects an unbound or expanded public group", async () => {
+  const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(fake) }); const broker = new Broker(value);
+  const cases = [
+    (group) => { group.extra = true; },
+    (group) => { group.runtime_id = "other-runtime"; },
+    (group) => { group.providers[0].runtime_id = "other-runtime"; },
+    (group) => { group.providers[0].material_id = "other-material"; },
+  ];
+  for (const [index, mutate] of cases.entries()) {
+    const start = broker.startManaged(request(material.attachment, `invalid-${index}`), `invalid-${index}`); await terminal(broker, start.runtime_id);
+    updateRuntime(root, start.runtime_id, (state) => ({ ...state, managed: { ...state.managed, operations: state.managed.operations.map((operation) => operation.operation_id === state.managed.operations.at(-1).operation_id ? { ...operation, group: (() => { const group = structuredClone(operation.group); mutate(group); return group; })() } : operation) } }));
+    assert.throws(() => broker.managedStatus(start.runtime_id), { code: "PUBLIC_RESULT_INVALID" });
+  }
 });
 
 test("managed continuation creates one distinct non-overlapping operation", async () => {
