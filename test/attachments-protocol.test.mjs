@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Broker } from "../lib/broker.mjs";
+import { Broker, publicV2Error } from "../lib/broker.mjs";
 import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, canonicalWorkflowHubMaterialId, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cancellationRequested, cancellationSource, createRuntime, requestCancellation } from "../lib/runtime.mjs";
@@ -113,6 +113,17 @@ test("workflowhub result v2 gives public unavailable diagnostics without fabrica
   assert.deepEqual(provider.usage, null); assert.deepEqual(provider.retry, { count: 0, progress_events: 0 });
   assert.equal(provider.session_id, null); assert.equal(provider.session_file_path, null); assert.equal(provider.continuable, false);
   for (const value of Object.values(provider.timing)) assert.equal(value === null || Number.isSafeInteger(value), true);
+});
+
+test("workflowhub result v2 gives missing provider error messages a non-empty safe public replacement", () => {
+  assert.deepEqual(publicV2Error({ code: "PROBE_FAILED" }), { code: "PROBE_FAILED", message: "provider error message is unavailable" });
+  assert.deepEqual(publicV2Error({ code: "PROBE_FAILED", message: "   " }), { code: "PROBE_FAILED", message: "provider error message is unavailable" });
+  assert.deepEqual(publicV2Error(null), { code: "RESULT_UNAVAILABLE", message: "provider error message is unavailable" });
+  for (const message of ["failure=/private/provider", "failure:/private/provider", "failure file:///private/provider"]) {
+    const projected = publicV2Error({ code: "PROBE_FAILED", message });
+    assert.equal(projected.message, "provider error message omitted because it contained a private absolute path");
+    assert.equal(projected.message.includes("/private/provider"), false);
+  }
 });
 
 test("workflowhub result v2 requires a candidate group and executes every configured member", async () => {

@@ -145,6 +145,8 @@ test("managed terminal status rejects an unbound or expanded public group", asyn
     (group) => { group.runtime_id = "other-runtime"; },
     (group) => { group.providers[0].runtime_id = "other-runtime"; },
     (group) => { group.providers[0].material_id = "other-material"; },
+    (group) => { group.providers[0].status = "failed"; group.providers[0].error = { code: "PROBE_FAILED", message: "" }; group.providers[0].unavailable_diagnostics = { code: "PROBE_FAILED", message: "" }; },
+    (group) => { group.providers[0].status = "failed"; group.providers[0].error = { code: "PROBE_FAILED", message: "public error" }; group.providers[0].unavailable_diagnostics = { code: "OTHER", message: "different diagnostic" }; },
   ];
   for (const [index, mutate] of cases.entries()) {
     const start = broker.startManaged(request(material.attachment, `invalid-${index}`), `invalid-${index}`); await terminal(broker, start.runtime_id);

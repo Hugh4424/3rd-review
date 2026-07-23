@@ -54,12 +54,17 @@ Every returned provider result has these fields:
   contains only the public error code and message, including `SAME_SOURCE` for
   a candidate excluded by host-adapter isolation or a later same-adapter group
   candidate.
+- Every non-completed provider result has a non-empty `error.code` and
+  `error.message`; `unavailable_diagnostics` carries the same public code and
+  message. A missing provider message becomes the fixed safe text `provider
+  error message is unavailable`.
 
 The broker validates this exact provider projection before publishing it. An
 undocumented field, a non-null `session_file_path`, invalid timing/retry shape,
 or an absolute host path is rejected. A provider error that includes an
 absolute host path retains its stable error code but replaces the message with
-the fixed public redaction text.
+the fixed public redaction text. Empty error messages are rejected at public
+group validation, so they cannot reappear through a managed status response.
 
 `status: "skipped"` is normalized to `"failed"` in both WorkflowHub public
 protocols so a route cannot treat a skipped review as a successful result.
