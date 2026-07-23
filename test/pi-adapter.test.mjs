@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import pi from "../lib/adapters/pi.mjs";
+import workspaceGuard, { isLogicalBundleRead, logicalWorkspaceSystemPrompt, reviewToolGate } from "../lib/adapters/pi-workspace-guard.mjs";
 import { execute } from "../lib/process.mjs";
 import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
@@ -29,10 +30,30 @@ test("Pi supervises JSONL, keeps prompts on stdin, and persists a private native
   assert.equal(execution.clientArgv[execution.clientArgv.indexOf("--thinking") + 1], "low");
   assert.equal(execution.clientArgv[execution.clientArgv.indexOf("--session-id") + 1], execution.expectedSession);
   assert.equal(execution.clientArgv[execution.clientArgv.indexOf("--session-dir") + 1], path.join(runtime, "pi", "sessions"));
+  assert.equal(execution.clientArgv[execution.clientArgv.indexOf("--tools") + 1], "read");
+  assert.match(execution.clientArgv[execution.clientArgv.indexOf("--system-prompt") + 1], /read-only review analyst/);
+  assert.match(execution.clientArgv[execution.clientArgv.indexOf("--extension") + 1], /pi-workspace-guard\.mjs$/);
   const result = await execute(execution, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
   assert.equal(Buffer.byteLength(result.stdout) < 2_000, true);
   assert.deepEqual(pi.parse(result.stdout, result.stderr, execution.expectedSession), { ok: true, text: "PI_FINAL:review", session_id: execution.expectedSession, usage: { totalTokens: 7 } });
+});
+
+test("Pi workspace guard removes host cwd disclosure and permits only logical packet reads", () => {
+  const guarded = logicalWorkspaceSystemPrompt("Review.\nCurrent working directory: /private/host/runtime");
+  assert.equal(guarded, "Review.\nCurrent working directory: workspace");
+  assert.equal(logicalWorkspaceSystemPrompt("Current working directory: /private/host\r\nReview.\r\nCurrent working directory: /private/host/runtime"), "Current working directory: workspace\r\nReview.\r\nCurrent working directory: workspace");
+  for (const input of [{ path: "bundle/review-packet.v1.json" }, { path: "bundle/sections/changes.diff" }, { path: "bundle/changes.diff", offset: 101, limit: 100 }]) assert.equal(isLogicalBundleRead(input), true);
+  for (const input of [{ path: "/private/host/runtime/bundle/review-packet.v1.json" }, { path: "bundle/../private.txt" }, { path: "bundle/attachments-manifest.json" }, { path: "file:///private/host" }, { path: "bundle\\review-packet.v1.json" }]) assert.equal(isLogicalBundleRead(input), false);
+  assert.equal(reviewToolGate("read", { path: "bundle/review-packet.v1.json" }), null);
+  const blocked = reviewToolGate("grep", { path: "/private/host" });
+  assert.equal(blocked.block, true);
+  assert.doesNotMatch(blocked.reason, /private|host|path:/i);
+  const handlers = new Map();
+  workspaceGuard({ on: (name, handler) => handlers.set(name, handler) });
+  assert.equal(handlers.get("before_agent_start")({ systemPrompt: "x\nCurrent working directory: /private/host" }).systemPrompt.includes("/private/host"), false);
+  assert.equal(handlers.get("tool_call")({ toolName: "read", input: { path: "bundle/review-packet.v1.json", offset: 101, limit: 100 } }), null);
+  assert.equal(handlers.get("tool_call")({ toolName: "ls", input: {} }).block, true);
 });
 
 test("Pi resume binds the same session and thinking falls back from compatibility booleans", () => {
