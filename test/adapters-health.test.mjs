@@ -13,6 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fakeAppServer = nodeFixtureCommand(path.join(here, "fake-codex-app-server.mjs"));
 const hangingClaude = nodeFixtureCommand(path.join(here, "hanging-claude-stream.mjs"));
 const lateClose = nodeFixtureCommand(path.join(here, "terminal-then-close.mjs"));
+const terminalBeforeClose = nodeFixtureCommand(path.join(here, "terminal-before-close.mjs"));
 const emptyThenResume = nodeFixtureCommand(path.join(here, "claude-empty-then-resume.mjs"));
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-adapter-health-"));
 const provider = (command) => ({ id: "provider", command, model: null, effort: null, auth: { type: "native", env: [] }, env: [] });
@@ -85,4 +86,11 @@ test("terminal wait_for_close keeps stdin open until the provider publishes late
   const result = await execute({ command: lateClose, argv: [], cwd: temp(), input: "go\n", env: process.env, redact: [], keepStdinOpen: true, observeLine: (_stream, line) => line === "TERMINAL" ? { terminal: { state: "completed", wait_for_close: true } } : {} }, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
   assert.match(result.stderr, /LATE_SESSION/);
+});
+
+test("a semantic terminal result completes without waiting for a wrapper close", async () => {
+  const result = await execute({ command: terminalBeforeClose, argv: [], cwd: temp(), input: "go\n", env: process.env, redact: [], keepStdinOpen: true, observeLine: (_stream, line) => line === "TERMINAL" ? { terminal: { state: "completed" } } : {} }, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+  assert.equal(result.ok, true);
+  assert.match(result.stdout, /TERMINAL/);
+  assert.doesNotMatch(result.stdout, /LATE_AFTER_TERMINAL/);
 });
