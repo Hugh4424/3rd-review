@@ -68,12 +68,11 @@ request 是 JSON，至少包含以下 V4 字段：
 `provider_allowlist`，其中只能包含配置中不重复的完整 provider 实例名。首轮的
 `continuation` 为 `null` 或省略；续跑唯一使用：
 
-默认不传 `provider_allowlist`，broker 每个首轮只启动一个异源 provider。显式
-`provider_allowlist` 可以列出多个唯一 provider，代表调用方明确请求并行多审；`workflowhub-result.v2`
-把该列表视为 caller-ordered candidate group，并由 broker 统一并行派发、隔离 workspace、绑定材料和
-维护 native session。候选中的同源 adapter 以 `SAME_SOURCE` 公共结果返回，不使整个组无效；默认路径不得
-把 capability discovery 的全部候选自动转换为多 provider allowlist。fallback 只响应稳定的
-transport unavailable code；配置、材料、取消、语义结果和无效输出均不得 fallback。
+默认不传 `provider_allowlist`，broker 会并行启动当前 tier 的全部异源 provider；只要其中一项
+`completed`，该 tier 即被选中；没有一项 `completed` 且没有 `cancelled` 才进入下一 tier。显式 `provider_allowlist`
+只会收窄可路由的配置实例；`workflowhub-result.v2` 把该列表视为 caller-ordered candidate group，并由
+broker 统一并行派发、隔离 workspace、绑定材料和维护 native session。候选中的同源 adapter 以
+`SAME_SOURCE` 公共结果返回，不使整个组无效。取消会终止当前路由，不进入下一 tier。
 
 ```json
 {

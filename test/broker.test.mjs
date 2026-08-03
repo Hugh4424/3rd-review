@@ -10,6 +10,7 @@ import { cleanup, createRuntime, currentOwnerIdentity, ensureRuntimeGuardian, is
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
+const slowSuccess = path.resolve("test/slow-success-cli.mjs");
 const silent = path.resolve("test/silent-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
@@ -37,16 +38,25 @@ test("config requires every provider to appear exactly once in tiers", () => {
   assert.throws(() => validateConfig(value), /provider kimi appears more than once/);
 });
 
-test("default route runs one heterologous provider", async () => {
+test("default route runs every heterologous provider in its first tier", async () => {
   const broker = new Broker(config(temp())); const result = await broker.run({ version: 4, host_provider: "claude-code", prompt: "review", continuation: null });
-  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi"]); assert.equal(result.providers[0].status, "completed");
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi", "codex", "opencode"]); assert.ok(result.providers.every((item) => item.status === "completed"));
   assert.equal(result.outcome, "completed"); assert.equal(result.round, 1); assert.equal(result.selected_tier, 0);
+});
+
+test("default route dispatches every provider in a tier concurrently", async () => {
+  const value = config(temp(), [["kimi/one", "kimi/two"]]);
+  value.providers["kimi/one"].command = slowSuccess; value.providers["kimi/two"].command = slowSuccess;
+  const starts = [];
+  const result = await new Broker(value, { onStart: () => starts.push(Date.now()) }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.deepEqual(result.providers.map((item) => item.provider), ["kimi/one", "kimi/two"]); assert.ok(result.providers.every((item) => item.status === "completed"));
+  assert.equal(starts.length, 2); assert.ok(Math.max(...starts) - Math.min(...starts) < 120, `provider starts were not concurrent: ${starts.join(", ")}`);
 });
 
 test("continuation uses only each provider's own native session", async () => {
   const broker = new Broker(config(temp(), [["kimi", "codex"]])); const first = await broker.run({ version: 4, host_provider: "claude-code", prompt: "one", continuation: null });
   const second = await broker.run({ version: 4, host_provider: "claude-code", prompt: "two", continuation: { runtime_id: first.runtime_id } });
-  assert.equal(second.round, 2); assert.equal(second.selected_tier, null); assert.deepEqual(second.providers.map((item) => item.provider), ["kimi"]); assert.ok(second.providers.every((item) => item.status === "completed"));
+  assert.equal(second.round, 2); assert.equal(second.selected_tier, null); assert.deepEqual(second.providers.map((item) => item.provider), ["kimi", "codex"]); assert.ok(second.providers.every((item) => item.status === "completed"));
 });
 
 test("falls through only after an entire tier has no success", async () => {
@@ -55,13 +65,22 @@ test("falls through only after an entire tier has no success", async () => {
   assert.equal(result.selected_tier, 1); assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[1].provider, "kimi"); assert.equal(result.providers[1].status, "completed");
 });
 
+test("falls through after every provider in a tier fails", async () => {
+  const root = temp(); const value = config(root, [["claude-code", "opencode"], ["kimi"]]);
+  value.providers["claude-code"].command = "/does/not/exist"; value.providers.opencode.auth = { type: "env", env: ["THIRD_REVIEW_TEST_MISSING_KEY"] };
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.deepEqual(result.providers.map((item) => item.provider), ["claude-code", "opencode", "kimi"]);
+  assert.equal(result.providers[0].error.code, "PROCESS_START_FAILED"); assert.equal(result.providers[1].error.code, "AUTH_ENV_MISSING"); assert.equal(result.providers[2].status, "completed");
+  assert.equal(result.selected_tier, 1);
+});
+
 test("reports missing environment authentication without running the provider", async () => {
   const value = config(temp(), [["kimi"]]); value.providers.kimi.auth = { type: "env", env: ["THIRD_REVIEW_TEST_MISSING_KEY"] };
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   assert.equal(result.providers[0].error.code, "AUTH_ENV_MISSING"); assert.equal(result.providers.length, 1); assert.equal(result.outcome, "invalid_output");
 });
 
-test("continuation keeps the single provider selected initially", async () => {
+test("continuation excludes providers removed from the current config", async () => {
   const root = temp(); const first = await new Broker(config(root, [["kimi", "codex"]])).run({ version: 4, host_provider: "claude-code", prompt: "one", continuation: null });
   const changed = config(root, [["kimi"]]); delete changed.providers.codex;
   const result = await new Broker(changed).run({ version: 4, host_provider: "claude-code", prompt: "two", continuation: { runtime_id: first.runtime_id } });
@@ -85,6 +104,17 @@ test("cancel persists an independent cancellation marker", async () => {
   assert.equal(typeof settled, "number");
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(broker.status(runtime_id).providers.kimi.process_alive_at_ms, settled);
+});
+
+test("cancelling a tier does not fall through to the next tier", async () => {
+  const root = temp(); const value = config(root, [["kimi"], ["opencode"]]); value.providers.kimi.command = slow;
+  const broker = new Broker(value); const running = broker.run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const runtime_id = fs.readdirSync(root).find((name) => /^[0-9a-f-]{36}$/i.test(name));
+  assert.deepEqual(broker.cancel(runtime_id, "kimi"), { cancelled: true });
+  const result = await running;
+  assert.equal(result.outcome, "cancelled"); assert.deepEqual(result.providers.map((item) => item.provider), ["kimi"]); assert.equal(result.providers[0].status, "cancelled");
+  assert.equal(broker.status(runtime_id).providers.opencode, undefined);
 });
 
 test("runtime keeps process liveness and output progress as separate timestamps", async () => {

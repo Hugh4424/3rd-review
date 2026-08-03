@@ -39,7 +39,7 @@ function config(runtime, root, providers, tiers = [Object.keys(providers)]) {
   return validateConfig({ version: 4, runtime: { root: runtime, ttl_hours: 24, max_prompt_bytes: 100_000, max_output_bytes: 100_000, max_attachment_bytes: 100_000, liveness_interval_ms: 5 }, attachment_roots: [{ root, sources: ["review-packet.v1.json", "changes.diff", "manifest.json"] }], tiers, providers });
 }
 
-function provider(id, command, extra = {}) { return { enabled: true, command, model: id === "antigravity" ? "Gemini 3.5 Flash (Low)" : "deepseek/deepseek-v4-flash", effort: id === "pi" ? "low" : null, thinking: null, allow_host_state: id === "antigravity", auth: { type: "native" }, env: [], ...extra }; }
+function provider(id, command, extra = {}) { return { enabled: true, command, model: id === "antigravity" ? "Gemini 3.5 Flash (Low)" : "deepseek/deepseek-v4-flash", effort: id === "pi" ? "low" : null, thinking: null, allow_host_state: id === "antigravity" || id === "cursor", auth: { type: "native" }, env: [], ...extra }; }
 
 test("supported provider IDs have one config and request contract", () => {
   const runtime = temp(); const root = source("file_only");

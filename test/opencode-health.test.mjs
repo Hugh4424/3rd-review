@@ -33,6 +33,13 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
   assert.deepEqual(resumed.healthServer.bind, { hostname: "127.0.0.1", port: Number(new URL(resumed.healthServer.url).port) });
 });
 
+test("OpenCode escapes percent-encoded runtime workspace names for --dir", () => {
+  const cwd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "opencode-encoded-work-")), "opencode%2Fdeepseek-v4-pro");
+  fs.mkdirSync(cwd);
+  const plan = opencode.start(provider, cwd, "review", "/tmp/runtime");
+  assert.equal(plan.clientArgv[plan.clientArgv.indexOf("--dir") + 1], fs.realpathSync(cwd).replaceAll("%", "%25"));
+});
+
 test("OpenCode probe binds status and message-part cursor to the requested session", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
