@@ -64,9 +64,9 @@ test("Cursor Agent uses read-only streamed headless arguments and parses success
   assert.equal(fs.realpathSync(path.join(execution.env.HOME, "Library", "Keychains", "login.keychain-db")), fs.realpathSync(path.join(process.env.HOME, "Library", "Keychains", "login.keychain-db")));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(execution.cwd, ".cursor", "cli.json"), "utf8")), {
     permissions: {
-      allow: ["Mcp(third-review-bundle:*)"],
+      allow: ["Mcp(third-review-bundle:*)", "Shell(**)"],
       deny: [
-        "Read(**)", "Write(**)", "Shell(*)", "WebFetch(*)",
+        "Read(**)", "Write(**)", "WebFetch(*)",
       ],
     },
   });
@@ -271,6 +271,79 @@ test("Cursor Agent admits Cursor's isolated MCP spill-file readback only", () =>
   assert.equal(sibling.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
 });
 
+test("Cursor Agent admits isolated spill-file readback from a large list_bundle result", () => {
+  const runtime = temp();
+  const execution = cursor.start(provider, temp(), "review", runtime);
+  const spill = path.join(execution.env.CURSOR_DATA_DIR, "projects", "review", "agent-tools", "list-output.txt");
+  fs.mkdirSync(path.dirname(spill), { recursive: true });
+  fs.writeFileSync(spill, "large bundle listing\n");
+  const observer = execution.observeLine;
+  const callId = "mcp-list-spill-1";
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: callId,
+    tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "list_bundle" } } },
+  }));
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: callId,
+    tool_call: { mcpToolCall: { result: { success: { content: [{ text: { outputLocation: { filePath: spill } } }] } } } },
+  }));
+  const readback = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "native-list-spill-read-1",
+    tool_call: { readToolCall: { args: { path: spill, limit: 250 } } },
+  }));
+  assert.equal(readback.terminal, undefined);
+});
+
+test("Cursor Agent admits a read-only shell inspection of an admitted spill file", () => {
+  const runtime = temp();
+  const execution = cursor.start(provider, temp(), "review", runtime);
+  const spill = path.join(execution.env.CURSOR_DATA_DIR, "projects", "review", "agent-tools", "shell-output.txt");
+  fs.mkdirSync(path.dirname(spill), { recursive: true });
+  fs.writeFileSync(spill, "large bundle listing\n");
+  const observer = execution.observeLine;
+  const mcpId = "mcp-shell-spill";
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: mcpId,
+    tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "list_bundle" } } },
+  }));
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: mcpId,
+    tool_call: { mcpToolCall: { result: { success: { content: [{ text: { outputLocation: { filePath: spill } } }] } } } },
+  }));
+  const shell = {
+    command: `head -n 5 "${spill}"`,
+    simpleCommands: ["head"],
+    hasInputRedirect: false,
+    hasOutputRedirect: false,
+    parsingResult: {
+      parsingFailed: false,
+      hasRedirects: false,
+      hasCommandSubstitution: false,
+      executableCommands: [{ name: "head", args: [{ type: "string", value: `"${spill}"` }] }],
+    },
+  };
+  const allowed = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "shell-spill-1",
+    tool_call: { shellToolCall: { args: shell } },
+  }));
+  assert.equal(allowed.terminal, undefined);
+  const changed = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "shell-spill-2",
+    tool_call: { shellToolCall: { args: shell } },
+  }));
+  assert.equal(changed.terminal, undefined);
+  const changedCompletion = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "shell-spill-2",
+    tool_call: { shellToolCall: { args: { ...shell, command: "head -n 5 /etc/hosts" } } },
+  }));
+  assert.equal(changedCompletion.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+  const outside = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "shell-outside-1",
+    tool_call: { shellToolCall: { args: { ...shell, command: "cat /etc/hosts" } } },
+  }));
+  assert.equal(outside.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+});
+
 test("Cursor Agent rejects a spill path that resolves through a symlink", () => {
   const runtime = temp();
   const execution = cursor.start(provider, temp(), "review", runtime);
@@ -380,7 +453,7 @@ test("Cursor Agent injects a no-tools constraint into a prompt-only request", ()
   assert.equal(withBundle.clientArgv.includes("--mode"), false);
   assert.equal(withBundle.promptOnlyRetry, undefined);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(bundled, ".cursor", "cli.json"), "utf8")).permissions.deny, [
-    "Read(**)", "Write(**)", "Shell(*)", "WebFetch(*)",
+    "Read(**)", "Write(**)", "WebFetch(*)",
   ]);
 });
 
