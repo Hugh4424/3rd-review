@@ -64,7 +64,7 @@ test("Cursor Agent uses read-only streamed headless arguments and parses success
   assert.equal(fs.realpathSync(path.join(execution.env.HOME, "Library", "Keychains", "login.keychain-db")), fs.realpathSync(path.join(process.env.HOME, "Library", "Keychains", "login.keychain-db")));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(execution.cwd, ".cursor", "cli.json"), "utf8")), {
     permissions: {
-      allow: ["Mcp(third-review-bundle:*)", "Shell(**)"],
+      allow: ["Mcp(third-review-bundle:*)", "Shell(rg)", "Shell(head)", "Shell(sed)", "Shell(wc)", "Shell(grep)", "Shell(cat)"],
       deny: [
         "Read(**)", "Write(**)", "WebFetch(*)",
       ],
@@ -116,6 +116,7 @@ test("Cursor bundle MCP reads only regular files below its frozen root", async (
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "list_bundle", arguments: {} } },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "read_bundle", arguments: { path: "allowed.txt" } } },
+    { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "search_bundle", arguments: { path: "allowed.txt", pattern: "BUNDLE" } } },
     { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "read_bundle", arguments: { path: "../outside.txt" } } },
   ];
   const result = await execute({
@@ -124,9 +125,10 @@ test("Cursor bundle MCP reads only regular files below its frozen root", async (
   }, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, true);
   const responses = result.stdout.trim().split("\n").map(JSON.parse);
-  assert.equal(responses.find((item) => item.id === 2).result.tools.length, 2);
+  assert.equal(responses.find((item) => item.id === 2).result.tools.length, 3);
   assert.equal(responses.find((item) => item.id === 5).result.content[0].text, "allowed.txt");
   assert.equal(responses.find((item) => item.id === 3).result.content[0].text, "BUNDLE_ONLY\n");
+  assert.equal(responses.find((item) => item.id === 6).result.content[0].text, "1:BUNDLE_ONLY");
   assert.equal(responses.find((item) => item.id === 4).result.isError, true);
 });
 
@@ -159,7 +161,17 @@ test("Cursor Agent reports terminal health", () => {
     type: "tool_call", subtype: "completed", session_id: "s", call_id: "orphan",
     tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "read_bundle" } } },
   }));
-  assert.equal(orphanCompletion.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+  assert.equal(orphanCompletion.terminal.error.code, "PROVIDER_MCP_PROTOCOL_INVALID");
+  const benignArgumentProbe = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "cursor-probe",
+    tool_call: { mcpToolCall: { result: { error: { error: "Tool execution error", readToolDefReminder: "Invalid arguments:\nserver: Required\ntoolName: Required" } } } },
+  }));
+  assert.equal(benignArgumentProbe.terminal, undefined);
+  const benignJsonProbe = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "cursor-json-probe",
+    tool_call: { mcpToolCall: { result: { error: { error: "Tool execution error", readToolDefReminder: "Failed to parse arguments string as JSON object. Re-issue the call with `arguments` as a JSON object literal rather than a quoted string." } } } },
+  }));
+  assert.equal(benignJsonProbe.terminal, undefined);
   const nativeRead = observer("stdout", JSON.stringify({
     type: "tool_call", subtype: "started", session_id: "s", call_id: "native",
     tool_call: { readToolCall: { args: { path: "/etc/hosts" } } },
@@ -168,6 +180,29 @@ test("Cursor Agent reports terminal health", () => {
   assert.equal(nativeRead.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
   const interaction = observer("stdout", JSON.stringify({ type: "interaction_query", subtype: "request", session_id: "s" }));
   assert.equal(interaction.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+});
+
+test("Cursor bundle MCP bounds large reads and exposes resumable line chunks", async () => {
+  const cwd = temp();
+  const root = path.join(cwd, "bundle");
+  fs.mkdirSync(root, { recursive: true });
+  const contents = Array.from({ length: 2000 }, (_, index) => `line-${index + 1}\n`).join("");
+  fs.writeFileSync(path.join(root, "large.txt"), contents);
+  fs.writeFileSync(path.join(root, "attachments-manifest.json"), JSON.stringify({
+    version: 1, files: [{ target: "large.txt", sha256: sha(contents), size: Buffer.byteLength(contents), embed: false }],
+  }));
+  const execution = cursor.start(provider, cwd, "review", temp());
+  const server = JSON.parse(fs.readFileSync(path.join(execution.cwd, ".cursor", "mcp.json"), "utf8")).mcpServers["third-review-bundle"];
+  const result = await execute({
+    command: server.command, argv: server.args, cwd: server.args[1], input: `${JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_bundle", arguments: { path: "large.txt", start_line: 101, max_bytes: 100 } },
+    })}\n`, env: process.env, redact: [],
+  }, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+  assert.equal(result.ok, true);
+  const text = JSON.parse(result.stdout).result.content[0].text;
+  assert.match(text, /^line-101/);
+  assert.match(text, /truncated; continue with start_line=/);
+  assert.ok(Buffer.byteLength(text) < 300);
 });
 
 test("Cursor bundle MCP serves an empty prompt-only bundle instead of exiting", async () => {
@@ -191,7 +226,7 @@ test("Cursor bundle MCP serves an empty prompt-only bundle instead of exiting", 
   assert.equal(result.ok, true);
   const responses = result.stdout.trim().split("\n").map(JSON.parse);
   assert.equal(responses.find((item) => item.id === 1).result.serverInfo.name, "third-review-bundle");
-  assert.equal(responses.find((item) => item.id === 2).result.tools.length, 2);
+  assert.equal(responses.find((item) => item.id === 2).result.tools.length, 3);
   assert.equal(responses.find((item) => item.id === 3).result.content[0].text, "");
   // An empty manifest still declares nothing readable.
   assert.equal(responses.find((item) => item.id === 4).result.isError, true);
@@ -230,7 +265,7 @@ test("Cursor Agent admits a scoped tool call whose completion event drops its ar
     type: "tool_call", subtype: "completed", session_id: "s", call_id: callId,
     tool_call: { getMcpToolsToolCall: { args: { toolCallId: "unknown-tool-call-id" } } },
   }));
-  assert.equal(replayed.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+  assert.equal(replayed.terminal.error.code, "PROVIDER_MCP_PROTOCOL_INVALID");
 });
 
 test("Cursor Agent admits Cursor's isolated MCP spill-file readback only", () => {
@@ -344,6 +379,79 @@ test("Cursor Agent admits a read-only shell inspection of an admitted spill file
   assert.equal(outside.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
 });
 
+test("Cursor Agent admits grepToolCall and rg patterns containing slash text without false denial", () => {
+  const runtime = temp();
+  const execution = cursor.start(provider, temp(), "review", runtime);
+  const spill = path.join(execution.env.CURSOR_DATA_DIR, "projects", "review", "agent-tools", "grep-output.txt");
+  fs.mkdirSync(path.dirname(spill), { recursive: true });
+  fs.writeFileSync(spill, "accepted.json results/ non.?empty AC\n");
+  const observer = execution.observeLine;
+  const admit = (callId) => {
+    observer("stdout", JSON.stringify({
+      type: "tool_call", subtype: "started", session_id: "s", call_id: callId,
+      tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "read_bundle" } } },
+    }));
+    observer("stdout", JSON.stringify({
+      type: "tool_call", subtype: "completed", session_id: "s", call_id: callId,
+      tool_call: { mcpToolCall: { result: { success: { content: [{ text: { outputLocation: { filePath: spill } } }] } } } },
+    }));
+  };
+  admit("mcp-grep-spill");
+  const grep = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "grep-spill",
+    tool_call: { grepToolCall: { args: { path: spill, pattern: "results/|non.?empty|AC" } } },
+  }));
+  assert.equal(grep.terminal, undefined);
+  assert.equal(observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "grep-spill",
+    tool_call: { grepToolCall: { args: { path: spill } } },
+  })).terminal, undefined);
+
+  const rg = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "rg-spill",
+    tool_call: { shellToolCall: { args: {
+      command: `rg -n "accepted\\.json|results/|non.?empty|AC " "${spill}"`,
+      simpleCommands: ["rg"], hasInputRedirect: false, hasOutputRedirect: false,
+      parsingResult: {
+        parsingFailed: false, hasRedirects: false, hasCommandSubstitution: false,
+        executableCommands: [{ name: "rg", args: [
+          { type: "word", value: "-n" },
+          { type: "string", value: '"accepted\\.json|results/|non.?empty|AC "' },
+          { type: "string", value: `"${spill}"` },
+        ] }],
+      },
+    } } },
+  }));
+  assert.equal(rg.terminal, undefined);
+});
+
+test("Cursor Agent reports spill identity changes separately from permissions", () => {
+  const runtime = temp();
+  const execution = cursor.start(provider, temp(), "review", runtime);
+  const spill = path.join(execution.env.CURSOR_DATA_DIR, "projects", "review", "agent-tools", "identity.txt");
+  fs.mkdirSync(path.dirname(spill), { recursive: true });
+  fs.writeFileSync(spill, "original\n");
+  const observer = execution.observeLine;
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "mcp-identity",
+    tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "read_bundle" } } },
+  }));
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "mcp-identity",
+    tool_call: { mcpToolCall: { result: { success: { content: [{ text: { outputLocation: { filePath: spill } } }] } } } },
+  }));
+  observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "started", session_id: "s", call_id: "read-identity",
+    tool_call: { readToolCall: { args: { path: spill } } },
+  }));
+  fs.writeFileSync(spill, "replaced-content\n");
+  const changed = observer("stdout", JSON.stringify({
+    type: "tool_call", subtype: "completed", session_id: "s", call_id: "read-identity",
+    tool_call: { readToolCall: { args: { path: spill } } },
+  }));
+  assert.equal(changed.terminal.error.code, "PROVIDER_SPILL_IDENTITY_CHANGED");
+});
+
 test("Cursor Agent rejects a spill path that resolves through a symlink", () => {
   const runtime = temp();
   const execution = cursor.start(provider, temp(), "review", runtime);
@@ -407,7 +515,7 @@ test("Cursor Agent still denies an out-of-scope call whose start event is unscop
     type: "tool_call", subtype: "completed", session_id: "s", call_id: "native-1",
     tool_call: { readToolCall: { args: { path: "/etc/hosts" } } },
   }));
-  assert.equal(completed.terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+  assert.equal(completed.terminal.error.code, "PROVIDER_MCP_PROTOCOL_INVALID");
   // Another server's MCP call is likewise never admitted.
   assert.equal(observer("stdout", JSON.stringify({
     type: "tool_call", subtype: "started", session_id: "s", call_id: "other-1",
@@ -418,11 +526,11 @@ test("Cursor Agent still denies an out-of-scope call whose start event is unscop
     type: "tool_call", subtype: "started", session_id: "s", call_id: "escalate-1",
     tool_call: { mcpToolCall: { args: { serverIdentifier: "third-review-bundle", providerIdentifier: "third-review-bundle", toolName: "write_bundle" } } },
   })).terminal.error.code, "PROVIDER_PERMISSION_DENIED");
-  // A missing call_id remains unattributable and therefore denied.
+  // A missing call_id is a protocol error, not a path-permission error.
   assert.equal(observer("stdout", JSON.stringify({
     type: "tool_call", subtype: "started", session_id: "s",
     tool_call: { getMcpToolsToolCall: { args: { server: "third-review-bundle" } } },
-  })).terminal.error.code, "PROVIDER_PERMISSION_DENIED");
+  })).terminal.error.code, "PROVIDER_MCP_PROTOCOL_INVALID");
 });
 
 test("Cursor Agent tells a prompt-only review to call no tools", () => {

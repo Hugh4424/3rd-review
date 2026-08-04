@@ -30,12 +30,16 @@ test("legacy wall-clock budgets are ignored and legacy timer fields are rejected
   delete value.runtime.idle_timeout_ms; value.runtime.max_duration_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
 });
 
-test("config requires every provider to appear exactly once in tiers", () => {
+test("config keeps usable tiers when dormant providers or duplicate routes exist", () => {
   const value = config(temp(), [["kimi", "codex"]]);
   value.providers.opencode = { ...value.providers.kimi, id: "opencode" };
-  assert.throws(() => validateConfig(value), /provider opencode must appear in tiers/);
-  value.tiers = [["kimi", "codex"], ["kimi", "opencode"]];
-  assert.throws(() => validateConfig(value), /provider kimi appears more than once/);
+  value.tiers = [["kimi", "codex"], ["kimi", "opencode", "kimi"]];
+  const normalized = validateConfig(value);
+  assert.deepEqual(normalized.tiers, [["kimi", "codex"], ["opencode"]]);
+  assert.ok(normalized.providers.opencode);
+
+  value.tiers = [["unknown-provider"]];
+  assert.throws(() => validateConfig(value), /references unknown provider/);
 });
 
 test("default route runs every heterologous provider in its first tier", async () => {
