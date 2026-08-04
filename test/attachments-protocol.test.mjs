@@ -173,6 +173,24 @@ test("workflowhub result v2 isolates a private-path provider failure without lea
   }
 });
 
+test("workflowhub result v2 repairs a private-path review through the adapter's same-session rewrite", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3"]], attachmentsRoot);
+  value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT", "THIRD_REVIEW_FAKE_KIMI_REWRITE_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "{\"verdict\":\"pass\",\"summary\":\"leaked /private/provider-secret\",\"findings\":[]}";
+  process.env.THIRD_REVIEW_FAKE_KIMI_REWRITE_OUTPUT = "{\"verdict\":\"pass\",\"summary\":\"review completed without host paths\",\"findings\":[]}";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["kimi/k3"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    const provider = result.providers[0];
+    assert.equal(provider.status, "completed");
+    assert.equal(JSON.parse(provider.output).verdict, "pass");
+    assert.equal(provider.public_output_rewrite_count, undefined);
+    assert.equal(JSON.stringify(result).includes("/private/provider-secret"), false);
+  } finally {
+    delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT;
+    delete process.env.THIRD_REVIEW_FAKE_KIMI_REWRITE_OUTPUT;
+  }
+});
+
 test("workflowhub result v2 allows ordinary slash-separated review terminology", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3"]], attachmentsRoot);
   value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
