@@ -23,7 +23,11 @@ else if (args.includes("--wire")) {
     const message = JSON.parse(line);
     if (message.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocol_version: "1.10" } }));
     if (message.method === "prompt") {
-      console.log(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "TextPart", payload: { text: process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT ?? "kimi opinion" } } }));
+      const userInput = message.params?.user_input ?? "";
+      const output = userInput.includes("cannot be published")
+        ? (process.env.THIRD_REVIEW_FAKE_KIMI_REWRITE_OUTPUT ?? process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT ?? "kimi opinion")
+        : (process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT ?? "kimi opinion");
+      console.log(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { type: "TextPart", payload: { text: output } } }));
       console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { status: "finished" } }));
       console.error(`To resume this session: kimi -r ${session}`);
     }
