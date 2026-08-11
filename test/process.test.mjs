@@ -12,6 +12,7 @@ const stream = path.resolve("test/stream-cli.mjs");
 const fail = path.resolve("test/fail-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const duplicate = path.resolve("test/duplicate-progress-cli.mjs");
+const providerFailure = path.resolve("test/provider-failure-cli.mjs");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function plan(command, env = {}) { return { command, argv: [], cwd: fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-process-test-")), input: null, env: { ...process.env, ...env }, redact: [] }; }
 
@@ -150,6 +151,20 @@ test("large output is streamed without terminating the provider", async () => {
   assert.equal(raw.join("").length, 20_000);
   assert.equal(result.stdout_truncated, true);
   assert.match(result.stdout, /retained privately/);
+});
+
+test("provider failure classification ignores review material on stdout", async () => {
+  const result = await execute({ ...plan(process.execPath), argv: [providerFailure], observeLine: (streamName, line) => {
+    if (streamName !== "stdout") return {};
+    try {
+      const value = JSON.parse(line);
+      return { progress: true, session_id: value.session_id, cursor: value.id ?? null };
+    } catch { return {}; }
+  } }, { maxOutputBytes: 4096 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROVIDER_HEALTH_FAILED");
+  assert.equal(result.error.message, "provider session reported a terminal failure");
+  assert.equal(result.session_id, "ses_failure_fixture");
 });
 
 test("an adapter can write follow-up stdin after observing provider output", async () => {

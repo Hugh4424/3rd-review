@@ -12,6 +12,7 @@ const response = (value, status = 200) => new Response(JSON.stringify(value), { 
 const healthFixture = path.resolve("test/opencode-health-fixture.mjs");
 const supervisorFixture = path.resolve("test/opencode-supervisor-fixture.mjs");
 const supervisor = path.resolve("lib/adapters/opencode-supervised-cli.mjs");
+let supervisorPort = 49152 + (process.pid % 1_000) * 10;
 async function assertEventuallyUnavailable(url, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -41,16 +42,16 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
 function runSupervisor(specification) {
   const encoded = Buffer.from(JSON.stringify(specification), "utf8").toString("base64url");
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [supervisor, encoded], { cwd: process.cwd(), env: { ...process.env, OPENCODE_FIXTURE_DELAY_MS: String(specification.delayMs) }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [supervisor, encoded], { cwd: process.cwd(), env: { ...process.env, OPENCODE_FIXTURE_DELAY_MS: String(specification.delayMs), OPENCODE_FIXTURE_MODE: specification.mode ?? "complete" }, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = ""; let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.stdin.end(); child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr, url: specification.url }));
   });
 }
 
-function supervisorSpecification(delayMs, maxDurationMs) {
-  const port = 49152 + Math.floor(Math.random() * 10_000); const url = `http://127.0.0.1:${port}`;
-  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session: null, maxDurationMs, delayMs };
+function supervisorSpecification(delayMs, maxDurationMs, mode = "complete") {
+  const port = supervisorPort++; const url = `http://127.0.0.1:${port}`;
+  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session: null, maxDurationMs, delayMs, mode };
 }
 
 test("OpenCode supervisor waits for a fresh session after the attached client exits", async () => {
@@ -64,6 +65,30 @@ test("OpenCode supervisor bounds a fresh session that never reaches terminal", a
   const result = await runSupervisor(supervisorSpecification(2_000, 100));
   assert.equal(result.code, 1);
   assert.match(result.stderr, /PROCESS_TIMEOUT/);
+  await assertEventuallyUnavailable(`${result.url}/global/health`);
+});
+
+test("OpenCode supervisor classifies an unstartable server", async () => {
+  const specification = supervisorSpecification(0, 1_000);
+  specification.command = path.join(os.tmpdir(), "missing-opencode-server");
+  const result = await runSupervisor(specification);
+  assert.equal(result.code, 1);
+  const failure = result.stderr.split(/\r?\n/).find((line) => line.startsWith("3RD_REVIEW_FAILURE "));
+  assert.ok(failure, result.stderr);
+  assert.equal(JSON.parse(failure.slice("3RD_REVIEW_FAILURE ".length)).code, "PROCESS_START_FAILED");
+});
+
+test("OpenCode supervisor emits a structured failure for a terminal session without assistant text", async () => {
+  const result = await runSupervisor(supervisorSpecification(0, 1_000, "no-terminal"));
+  assert.equal(result.code, 1);
+  const failure = result.stderr.split(/\r?\n/).find((line) => line.startsWith("3RD_REVIEW_FAILURE "));
+  assert.ok(failure, result.stderr);
+  assert.deepEqual(JSON.parse(failure.slice("3RD_REVIEW_FAILURE ".length)), {
+    version: 1,
+    code: "PROVIDER_NO_TERMINAL_RESULT",
+    message: "provider session ended without a terminal assistant result",
+    session_id: "fixture_session",
+  });
   await assertEventuallyUnavailable(`${result.url}/global/health`);
 });
 
@@ -139,6 +164,17 @@ test("OpenCode probe maps retry, failed, idle progress, unknown session, HTTP fa
   assert.equal((await make({})({ session_id: "ses", signal: controller.signal })).status, "unverifiable");
 });
 
+test("OpenCode probe distinguishes finish=unknown without assistant text", async () => {
+  const messages = [{
+    info: { id: "msg_unknown", sessionID: "ses_unknown", role: "assistant", finish: "unknown", time: { completed: 42 } },
+    parts: [{ id: "prt_unknown", type: "step-finish", reason: "unknown" }],
+  }];
+  const fetchImpl = async (url) => url.endsWith("/session/status") ? response({}) : response(messages);
+  const result = await createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl })({ session_id: "ses_unknown" });
+  assert.equal(result.status, "failed");
+  assert.equal(result.error.code, "PROVIDER_NO_TERMINAL_RESULT");
+});
+
 test("OpenCode harvests a terminal session when its attached CLI hangs and cleans up the server", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-health-plan-")); const plan = opencode.start({ ...provider, command: healthFixture }, cwd, "review");
   const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 100, probeDeadlineMs: 1_000, validateCompleted: (raw) => opencode.parse(raw.stdout, raw.stderr).ok });
@@ -155,5 +191,5 @@ test("OpenCode continuation harvests its known session when the attached client 
 test("OpenCode continuation fails explicitly when a zero-output client has no terminal session", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-health-missing-")); const plan = opencode.resume({ ...provider, command: healthFixture }, cwd, "missing_session", "continue");
   const result = await execute(plan, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000, probeDeadlineMs: 1_000, validateCompleted: (raw) => opencode.parse(raw.stdout, raw.stderr).ok });
-  assert.equal(result.ok, false); assert.match(result.stderr, /was not terminal after client exit/); assert.equal(result.stdout, "");
+  assert.equal(result.ok, false); assert.match(result.stderr, /3RD_REVIEW_FAILURE /); assert.equal(result.error.code, "PROBE_FAILED"); assert.equal(result.session_id, "missing_session"); assert.equal(result.stdout, "");
 });

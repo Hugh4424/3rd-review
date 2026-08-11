@@ -14,6 +14,7 @@ const slowSuccess = path.resolve("test/slow-success-cli.mjs");
 const silent = path.resolve("test/silent-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
+const providerFailure = path.resolve("test/provider-failure-cli.mjs");
 function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
   const ids = [...new Set(tiers.flat())];
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5 }, tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
@@ -82,6 +83,17 @@ test("reports missing environment authentication without running the provider", 
   const value = config(temp(), [["kimi"]]); value.providers.kimi.auth = { type: "env", env: ["THIRD_REVIEW_TEST_MISSING_KEY"] };
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   assert.equal(result.providers[0].error.code, "AUTH_ENV_MISSING"); assert.equal(result.providers.length, 1); assert.equal(result.outcome, "invalid_output");
+});
+
+test("persists OpenCode terminal failure classification and observed session identity", async () => {
+  const root = temp(); const value = config(root, [["opencode"]]); value.providers.opencode.command = providerFailure;
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.equal(result.providers[0].error.code, "PROVIDER_HEALTH_FAILED");
+  assert.equal(result.providers[0].session_id, "ses_failure_fixture");
+  assert.equal(result.providers[0].error.message, "provider session reported a terminal failure");
+  assert.equal(result.providers[0].diagnostic, "provider session reported a terminal failure");
+  assert.doesNotMatch(JSON.stringify(result), /\/Users\/private\/credential/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, result.runtime_id, "state.json"), "utf8")).providers.opencode.session_id, "ses_failure_fixture");
 });
 
 test("continuation excludes providers removed from the current config", async () => {

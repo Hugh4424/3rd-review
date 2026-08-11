@@ -65,7 +65,7 @@ test("adapters without a probe do not turn stream silence into an idle timeout",
 test("unchanged busy health is diagnosed but never terminated", async () => {
   const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
   await clock.tick(50); assert.deepEqual(decisions, []);
-  await clock.tick(10); assert.deepEqual(decisions, []); assert.equal(diagnostics[0].code, "PROCESS_STALLED"); runner.stop();
+  await clock.tick(10); assert.deepEqual(decisions, []); assert.equal(diagnostics[0].code, "PROCESS_STALLED"); assert.equal(diagnostics[0].session_id, "s"); assert.equal(diagnostics[0].cursor, "same"); runner.stop();
 });
 
 test("unchanged progressing and retry statuses remain diagnostic", async () => {

@@ -11,6 +11,7 @@ if (args[0] === "serve") {
   const port = Number(value("--port"));
   const state = path.join(os.tmpdir(), `opencode-supervisor-${port}.json`);
   const delay = Number(process.env.OPENCODE_FIXTURE_DELAY_MS ?? 80);
+  const mode = process.env.OPENCODE_FIXTURE_MODE ?? "complete";
   fs.rmSync(state, { force: true });
   setTimeout(() => fs.writeFileSync(state, "{}"), delay);
   const server = http.createServer((request, response) => {
@@ -18,8 +19,10 @@ if (args[0] === "serve") {
     if (request.url === "/global/health") return response.end(JSON.stringify({ healthy: true, version: "fixture" }));
     const completed = fs.existsSync(state);
     if (request.url === "/session/status") return response.end(JSON.stringify(completed ? {} : { fixture_session: { type: "busy" } }));
-    if (request.url === "/session/fixture_session/message") return response.end(JSON.stringify(completed
-      ? [{ info: { id: "message_done", sessionID: "fixture_session", role: "assistant", finish: "stop", time: { completed: 1 } }, parts: [{ id: "part_text", type: "text", text: "FIXTURE_SUPERVISOR_OK" }, { id: "part_done", type: "step-finish", reason: "stop" }] }]
+    if (request.url === "/session/fixture_session/message") return response.end(JSON.stringify(completed && mode === "no-terminal"
+      ? [{ info: { id: "message_unknown", sessionID: "fixture_session", role: "assistant", finish: "unknown", time: { completed: 1 } }, parts: [{ id: "part_unknown", type: "step-finish", reason: "unknown" }] }]
+      : completed
+        ? [{ info: { id: "message_done", sessionID: "fixture_session", role: "assistant", finish: "stop", time: { completed: 1 } }, parts: [{ id: "part_text", type: "text", text: "FIXTURE_SUPERVISOR_OK" }, { id: "part_done", type: "step-finish", reason: "stop" }] }]
       : []));
     response.statusCode = 404; response.end("{}");
   });

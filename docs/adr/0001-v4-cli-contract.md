@@ -114,6 +114,13 @@ provider-material 派生 hash，也不迁移旧 timeout/redaction schema。
 `RUNTIME_BUSY`、`NO_CONTINUABLE_SESSION`、`PROVIDER_BUSY` 和
 `ATTACHMENT_DELIVERY_UNSUPPORTED`。调用方必须保留 code 和诊断，不得把它们映射为 pass。
 
+adapter wrapper 与 broker 的 provider 失败分类另有一条私有机器协议：wrapper 在 provider 失败时把版本化的
+`3RD_REVIEW_FAILURE {"version":1,"code":"...","message":"..."}` 记录写入 stderr；broker
+优先解析该记录，且绝不把 provider stdout 中的审查内容当作错误证据。OpenCode 在会话结束但没有
+可解析的 terminal assistant 文本时返回 `PROVIDER_NO_TERMINAL_RESULT`，而不是笼统地伪装成认证或
+网络失败。wrapper 仍保留原始 stdout/stderr 供 runtime 私有证据使用；公共失败结果只发布稳定 code、
+安全 message 和已观察到的 native `session_id`，不发布 raw stream diagnostic。
+
 收到 `SIGINT` 或 `SIGTERM` 时 broker 终止其 provider process tree 并写入
 `workflow_shutdown` 取消来源；CLI 分别以 signal exit code `130` 或 `143` 结束。
 
