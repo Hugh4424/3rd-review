@@ -194,5 +194,5 @@ test("doctor keeps broker and provider delivery capabilities", async () => {
   assert.deepEqual(result.capabilities, { attachments: true, cancel_source: true });
   assert.deepEqual(result.material_protocol, { version: 5, delivery_attestation: "sealed-exact-copy.v1" });
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
-  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, terminal_recovery: true, attachment_delivery: ["file_only", "always_embed"] });
 });

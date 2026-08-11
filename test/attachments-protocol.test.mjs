@@ -63,7 +63,7 @@ test("doctor requires configured attachment roots and verifies the requested roo
   assert.equal(forbidden.attachment_root.status, "unavailable");
   assert.equal(forbidden.attachment_root.error.code, "ATTACHMENT_ROOT_FORBIDDEN");
   assert.deepEqual(result.providers.find((item) => item.provider === "kimi").capabilities, { continuation: true, attachment_delivery: ["file_only"] });
-  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, attachment_delivery: ["file_only", "always_embed"] });
+  assert.deepEqual(result.providers.find((item) => item.provider === "opencode").capabilities, { continuation: true, terminal_recovery: true, attachment_delivery: ["file_only", "always_embed"] });
 });
 
 test("workflowhub result is an additive public projection bound to broker-verified material", async () => {

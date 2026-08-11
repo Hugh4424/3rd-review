@@ -8,6 +8,7 @@
 | 未登录、API key 缺失 | 失败，`AUTHENTICATION_FAILED` 或 `AUTH_ENV_MISSING` |
 | 网络、TLS、限流 | 保留该 provider 的失败诊断；同层零成功才尝试下一层 |
 | CLI 输出格式变化 | `PROVIDER_OUTPUT_INVALID`，不把半截输出当成功 |
+| OpenCode 无终态 | 仅在首轮有 `PROVIDER_NO_TERMINAL_RESULT` 和有效 native session 时，同 session 做一次终态恢复；复用同一 cwd/材料并消耗剩余 deadline，恢复结果须是严格 JSON 对象且 session 不变；失败保留原错误并把两次证据留在 runtime 私有状态 |
 | 大型 prompt、附件、输出 | broker 不因字节数拒绝或中断审查；附件完整性仍逐项校验，stdout/stderr 流式写入 runtime 私有只读文件并记录 SHA-256，内存只保留解析所需摘要 |
 | 附件不可信 | root/source allowlist、相对路径、regular-file、single-link、size、SHA-256 任一不符都明确失败 |
 | 附件投递 | 同一请求按 provider 协商 `file_only`/`always_embed`；无法安全转换时 `ATTACHMENT_DELIVERY_UNSUPPORTED`，不得跳过 |
