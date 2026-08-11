@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import opencode, { createOpenCodeProbe } from "../lib/adapters/opencode.mjs";
+import opencode, { createOpenCodeProbe, OPENCODE_REVIEW_MAX_DURATION_MS, OPENCODE_REVIEW_MAX_IDLE_PROGRESS_MS } from "../lib/adapters/opencode.mjs";
 import { execute } from "../lib/process.mjs";
 
 const provider = { id: "opencode", command: "opencode", model: null, effort: null, auth: { env: [] }, env: [] };
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 const healthFixture = path.resolve("test/opencode-health-fixture.mjs");
+const supervisorFixture = path.resolve("test/opencode-supervisor-fixture.mjs");
+const supervisor = path.resolve("lib/adapters/opencode-supervised-cli.mjs");
 async function assertEventuallyUnavailable(url, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -31,6 +34,37 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--attach") + 1], resumed.healthServer.url);
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--session") + 1], "ses_keep");
   assert.deepEqual(resumed.healthServer.bind, { hostname: "127.0.0.1", port: Number(new URL(resumed.healthServer.url).port) });
+  assert.equal(first.maxDurationMs, OPENCODE_REVIEW_MAX_DURATION_MS);
+  assert.equal(first.maxIdleProgressMs, OPENCODE_REVIEW_MAX_IDLE_PROGRESS_MS);
+});
+
+function runSupervisor(specification) {
+  const encoded = Buffer.from(JSON.stringify(specification), "utf8").toString("base64url");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [supervisor, encoded], { cwd: process.cwd(), env: { ...process.env, OPENCODE_FIXTURE_DELAY_MS: String(specification.delayMs) }, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = ""; let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stdin.end(); child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr, url: specification.url }));
+  });
+}
+
+function supervisorSpecification(delayMs, maxDurationMs) {
+  const port = 49152 + Math.floor(Math.random() * 10_000); const url = `http://127.0.0.1:${port}`;
+  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session: null, maxDurationMs, delayMs };
+}
+
+test("OpenCode supervisor waits for a fresh session after the attached client exits", async () => {
+  const result = await runSupervisor(supervisorSpecification(80, 1_000));
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /FIXTURE_SUPERVISOR_OK/);
+  await assertEventuallyUnavailable(`${result.url}/global/health`);
+});
+
+test("OpenCode supervisor bounds a fresh session that never reaches terminal", async () => {
+  const result = await runSupervisor(supervisorSpecification(2_000, 100));
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /PROCESS_TIMEOUT/);
+  await assertEventuallyUnavailable(`${result.url}/global/health`);
 });
 
 test("OpenCode escapes percent-encoded runtime workspace names for --dir", () => {

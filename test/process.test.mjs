@@ -74,6 +74,31 @@ test("stream-only provider silence is governed by process exit, not an implicit 
   assert.equal(result.ok, true); assert.ok(result.duration_ms >= 50);
 });
 
+test("an opted-in provider max duration terminates a live process", async () => {
+  const result = await execute(plan(slow), { maxOutputBytes: 4096, maxDurationMs: 60, watchdogIntervalMs: 5 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_TIMEOUT");
+  assert.match(result.error.message, /60ms/);
+  assert.ok(result.duration_ms < 500);
+});
+
+test("an opted-in provider idle progress limit terminates a silent process", async () => {
+  const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), { maxOutputBytes: 4096, maxIdleProgressMs: 60, watchdogIntervalMs: 5 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_TIMEOUT");
+  assert.match(result.error.message, /observable progress/);
+  assert.ok(result.duration_ms < 500);
+});
+
+test("health cursor progress resets an opted-in provider idle limit", async () => {
+  let cursor = 0;
+  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "120" }), probeSession: async () => ({ status: "busy", session_id: "s", cursor: `cursor-${++cursor}`, raw: null, error: null, evidence: "moving" }) }, {
+    maxOutputBytes: 4096, healthCheckIntervalMs: 10, maxIdleProgressMs: 40, watchdogIntervalMs: 5,
+  });
+  assert.equal(result.ok, true);
+  assert.ok(cursor >= 3);
+});
+
 test("stream output reports activity and monitors stop after close or error", async () => {
   const activity = []; const liveness = [];
   const streamed = await execute(plan(stream), { maxOutputBytes: 4096, livenessIntervalMs: 5, onLiveness: () => liveness.push(Date.now()), onActivity: () => activity.push(Date.now()) });
