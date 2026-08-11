@@ -41,20 +41,44 @@ test("Kimi sends the Wire prompt only after initialize responds and uses officia
   assert.deepEqual(resumed.argv.slice(-2), ["--session", session]);
 });
 
-test("Kimi Wire gives its first ReadFile a logical packet-relative path", () => {
+test("Kimi Wire gives ReadFile an absolute provider-private path and preserves logical names", () => {
   const workspace = attachmentWorkspace();
   try {
     const plan = kimi.start(provider, workspace.cwd, "review", "/tmp/runtime");
     const initialized = feed(plan, { jsonrpc: "2.0", id: "initialize", result: { protocol_version: "1.10" } });
     const prompt = JSON.parse(initialized.stdin_write).params.user_input;
     const firstRead = "bundle/review-packet.v1.json";
-    assert.equal(prompt.includes(`First ReadFile target: ${JSON.stringify(firstRead)}`), true);
-    assert.equal(prompt.includes(JSON.stringify(workspace.bundle)), false);
+    const firstReadPath = path.join(workspace.bundle, "review-packet.v1.json");
+    assert.equal(prompt.includes(`First ReadFile target: ${JSON.stringify(firstReadPath)}`), true);
+    assert.match(prompt, new RegExp(`${firstRead.replace("/", "\\/")}.*${firstReadPath.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
     assert.match(prompt, /"bundle\/changes\.diff"/);
-    assert.match(prompt, /never use or disclose an absolute host path/);
+    assert.match(prompt, /Provider-private tool paths/);
+    assert.match(prompt, /never reproduce them in the final response/);
     assert.match(prompt, /Do not recompute or validate hashes/);
     assert.equal(fs.existsSync(path.join(workspace.bundle, "review-packet.v1.json")), true);
   } finally { fs.rmSync(workspace.cwd, { recursive: true, force: true }); }
+});
+
+test("Kimi Wire reads review instructions before the packet when delivered", () => {
+  const workspace = attachmentWorkspace();
+  try {
+    fs.writeFileSync(path.join(workspace.bundle, "review-instructions.md"), "instructions");
+    fs.writeFileSync(path.join(workspace.bundle, "attachments-manifest.json"), JSON.stringify({ files: [
+      { target: "review-packet.v1.json" }, { target: "review-instructions.md" }, { target: "changes.diff" },
+    ] }));
+    const plan = kimi.start(provider, workspace.cwd, "review", "/tmp/runtime");
+    const initialized = feed(plan, { jsonrpc: "2.0", id: "initialize", result: { protocol_version: "1.10" } });
+    const prompt = JSON.parse(initialized.stdin_write).params.user_input;
+    assert.equal(prompt.includes(`First ReadFile target: ${JSON.stringify(path.join(workspace.bundle, "review-instructions.md"))}`), true);
+  } finally { fs.rmSync(workspace.cwd, { recursive: true, force: true }); }
+});
+
+test("Kimi Wire reports malformed JSONL instead of silently waiting", async () => {
+  const plan = kimi.start(provider, "/tmp/work", "review", "/tmp/runtime");
+  const observation = plan.observeLine("stdout", "not-json");
+  assert.equal(observation.terminal.state, "failed");
+  assert.equal(observation.terminal.error.code, "PROVIDER_WIRE_INVALID");
+  assert.equal((await plan.probeSession()).status, "unverifiable");
 });
 
 test("Kimi Wire events expose progress and a finished turn exposes completed raw", async () => {
@@ -175,5 +199,24 @@ test("Kimi Wire fixture stays open through terminal and preserves the resume hin
   assert.equal(result.ok, true);
   assert.equal(parsed.text, "WIRE_FIXTURE_OK");
   assert.equal(parsed.session_id, session);
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test("Kimi Wire hanging progress is stopped by the provider hard timeout", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-wire-hanging-"));
+  const fakePath = path.resolve("test/fake-kimi-wire-hanging-cli.mjs");
+  fs.chmodSync(fakePath, 0o755);
+  const fake = { ...provider, command: fakePath };
+  const plan = kimi.start(fake, cwd, "review", cwd);
+  assert.equal(plan.maxDurationMs, 15 * 60 * 1000);
+  const result = await execute(plan, {
+    maxOutputBytes: 100_000,
+    maxDurationMs: 60,
+    watchdogIntervalMs: 5,
+    terminationGraceMs: 10,
+    healthCheckIntervalMs: 60_000,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_TIMEOUT");
   fs.rmSync(cwd, { recursive: true, force: true });
 });
