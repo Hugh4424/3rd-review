@@ -15,7 +15,7 @@ const transcript = (events) => `${events.map((event) => JSON.stringify(event)).j
 const complete = (session = "pi-session", options = {}) => transcript([
   { type: "pi.session", id: session, version: 3 },
   { type: "pi.progress", event: "thinking_delta" },
-  { type: "pi.final", text: options.text ?? "PI_FINAL", model: "k3", usage: { totalTokens: 9 }, stop_reason: options.stopReason ?? "stop" },
+  { type: "pi.final", text: options.text ?? "PI_FINAL", model: "k3", usage: { totalTokens: 9 }, stop_reason: options.stopReason ?? "stop", ...(options.errorMessage ? { error_message: options.errorMessage } : {}) },
   { type: "pi.agent_end", will_retry: options.willRetry ?? false },
   ...(options.settled === false ? [] : [{ type: "pi.agent_settled" }]),
 ]);
@@ -76,6 +76,12 @@ test("Pi parser requires an exact settled successful session transcript", () => 
   assert.deepEqual(pi.parse(complete("pi-session"), "", "pi-session"), { ok: true, text: "PI_FINAL", session_id: "pi-session", usage: { totalTokens: 9 } });
   for (const value of [complete("wrong-session"), complete("pi-session", { settled: false }), complete("pi-session", { willRetry: true }), complete("pi-session", { stopReason: "error" }), complete("pi-session", { stopReason: "unknown" }), transcript([{ type: "pi.final", text: "forged", stop_reason: "stop" }]), `${complete("pi-session")}${JSON.stringify({ type: "pi.progress", event: "forged" })}\n`]) assert.equal(pi.parse(value, "", "pi-session").ok, false);
   assert.equal(pi.parse(`${complete("pi-session")}not-json\n`, "", "pi-session").ok, false);
+  assert.deepEqual(pi.parse(complete("pi-session", { stopReason: "error", errorMessage: "provider internal failure" }), "", "pi-session"), {
+    ok: false,
+    error: { code: "PROVIDER_HEALTH_FAILED", message: "provider session reported a terminal failure" },
+    session_id: "pi-session",
+  });
+  assert.equal(pi.parse(complete("pi-session", { stopReason: "error", errorMessage: "429 overloaded", settled: false }), "", "pi-session").error.code, "RATE_LIMITED");
 });
 
 test("Pi progress does not preserve repeated raw thinking snapshots", () => {
@@ -97,6 +103,21 @@ test("Pi wrapper rejects malformed terminal events and oversized raw JSONL", asy
       if (old === undefined) delete process.env[name]; else process.env[name] = old;
     }
   }
+});
+
+test("Pi preserves terminal provider errors and classifies overloaded 429 as rate limited", async () => {
+  const runtime = temp(); const cwd = temp();
+  const execution = pi.start(provider(), cwd, "PI_RATE_LIMIT_FIXTURE", runtime);
+  const result = await execute(execution, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
+  assert.equal(result.ok, true);
+  const terminal = result.stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((item) => item.type === "pi.final");
+  assert.equal(terminal.stop_reason, "error");
+  assert.equal(terminal.error_message, "429 The engine is currently overloaded, please try again later");
+  assert.deepEqual(pi.parse(result.stdout, result.stderr, execution.expectedSession), {
+    ok: false,
+    error: { code: "RATE_LIMITED", message: "provider rate limit was reached" },
+    session_id: execution.expectedSession,
+  });
 });
 
 test("Pi wrapper handles an unexecutable native CLI without an uncaught stdin error", async () => {

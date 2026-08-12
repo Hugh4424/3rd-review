@@ -5,7 +5,6 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
-import opencode from "../lib/adapters/opencode.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cleanup, createRuntime, currentOwnerIdentity, ensureRuntimeGuardian, isAlive, processIdentity, readRuntime, terminateProcess, updateRuntime } from "../lib/runtime.mjs";
 
@@ -145,20 +144,6 @@ test("does not recover an OpenCode terminal failure without a session id", async
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "PROVIDER_NO_TERMINAL_RESULT"); assert.equal(result.providers[0].retry_count, 0);
   const state = JSON.parse(fs.readFileSync(path.join(root, result.runtime_id, "state.json"), "utf8")); assert.equal(Object.hasOwn(state.providers.opencode, "terminal_recovery"), false);
-});
-
-test("gives OpenCode terminal recovery only the remaining attempt deadline", async () => {
-  const originalStart = opencode.start; const originalResume = opencode.resume;
-  opencode.start = (...args) => ({ ...originalStart(...args), maxDurationMs: 100, maxIdleProgressMs: 1_000 });
-  opencode.resume = (...args) => ({ ...originalResume(...args), maxDurationMs: 100, maxIdleProgressMs: 1_000 });
-  try {
-    const root = temp(); const value = config(root, [["opencode"]]); value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "deadline";
-    const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-    assert.equal(result.providers[0].status, "failed"); assert.equal(result.providers[0].error.code, "PROVIDER_NO_TERMINAL_RESULT"); assert.equal(result.providers[0].retry_count, 1); assert.ok(result.providers[0].duration_ms < 300);
-    const state = JSON.parse(fs.readFileSync(path.join(root, result.runtime_id, "state.json"), "utf8")); assert.equal(state.providers.opencode.terminal_recovery.recovery_error.code, "PROCESS_TIMEOUT");
-  } finally {
-    opencode.start = originalStart; opencode.resume = originalResume;
-  }
 });
 
 test("continuation excludes providers removed from the current config", async () => {

@@ -119,7 +119,8 @@ adapter wrapper 与 broker 的 provider 失败分类另有一条私有机器协�
 优先解析该记录，且绝不把 provider stdout 中的审查内容当作错误证据。OpenCode 在会话结束但没有
 可解析的 terminal assistant 文本时返回 `PROVIDER_NO_TERMINAL_RESULT`，而不是笼统地伪装成认证或
 网络失败。若 OpenCode 同时提供有效 native `session_id`，broker 只在同一 cwd 和同一材料链上再发起一次
-终态恢复提示，并只使用首轮剩余的 review deadline；恢复结果仍须通过严格 JSON 与 session identity 校验。
+终态恢复提示；恢复过程由 managed session、provider process 和 health guardian 的真实活跃、失联、退出或
+失败事实裁决，不使用 adapter 固定总时限或 idle 时限。恢复结果仍须通过严格 JSON 与 session identity 校验。
 认证、网络、权限、无 session、超时或恢复失败都不得被当成成功；两次 stdout/stderr 与首错/恢复错只保留在
 runtime 私有证据中。wrapper 仍保留原始 stdout/stderr 供 runtime 私有证据使用；公共失败结果只发布稳定 code、
 安全 message 和已观察到的 native `session_id`，不发布 raw stream diagnostic。

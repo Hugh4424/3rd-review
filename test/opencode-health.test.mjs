@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import opencode, { createOpenCodeProbe, OPENCODE_REVIEW_MAX_DURATION_MS, OPENCODE_REVIEW_MAX_IDLE_PROGRESS_MS } from "../lib/adapters/opencode.mjs";
+import opencode, { createOpenCodeProbe } from "../lib/adapters/opencode.mjs";
 import { execute } from "../lib/process.mjs";
 
 const provider = { id: "opencode", command: "opencode", model: null, effort: null, auth: { env: [] }, env: [] };
@@ -35,8 +35,12 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--attach") + 1], resumed.healthServer.url);
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--session") + 1], "ses_keep");
   assert.deepEqual(resumed.healthServer.bind, { hostname: "127.0.0.1", port: Number(new URL(resumed.healthServer.url).port) });
-  assert.equal(first.maxDurationMs, OPENCODE_REVIEW_MAX_DURATION_MS);
-  assert.equal(first.maxIdleProgressMs, OPENCODE_REVIEW_MAX_IDLE_PROGRESS_MS);
+  assert.equal(Object.hasOwn(first, "maxDurationMs"), false);
+  assert.equal(Object.hasOwn(first, "maxIdleProgressMs"), false);
+  const firstSpecification = JSON.parse(Buffer.from(first.argv[0], "base64url").toString("utf8"));
+  assert.equal(Object.hasOwn(firstSpecification, "maxDurationMs"), false);
+  assert.match(opencode.terminalRecoveryPrompt, /Do not perform any further tool calls/i);
+  assert.doesNotMatch(opencode.terminalRecoveryPrompt, /unless strictly necessary/i);
 });
 
 function runSupervisor(specification) {
@@ -49,27 +53,35 @@ function runSupervisor(specification) {
   });
 }
 
-function supervisorSpecification(delayMs, maxDurationMs, mode = "complete") {
+function supervisorSpecification(delayMs, mode = "complete", session = null, legacyMaxDurationMs = null) {
   const port = supervisorPort++; const url = `http://127.0.0.1:${port}`;
-  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session: null, maxDurationMs, delayMs, mode };
+  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session, delayMs, mode, ...(legacyMaxDurationMs === null ? {} : { maxDurationMs: legacyMaxDurationMs }) };
 }
 
 test("OpenCode supervisor waits for a fresh session after the attached client exits", async () => {
-  const result = await runSupervisor(supervisorSpecification(80, 1_000));
+  const result = await runSupervisor(supervisorSpecification(80));
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /FIXTURE_SUPERVISOR_OK/);
   await assertEventuallyUnavailable(`${result.url}/global/health`);
 });
 
-test("OpenCode supervisor bounds a fresh session that never reaches terminal", async () => {
-  const result = await runSupervisor(supervisorSpecification(2_000, 100));
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /PROCESS_TIMEOUT/);
-  await assertEventuallyUnavailable(`${result.url}/global/health`);
+test("OpenCode supervisor never terminates a health-confirmed active session by fixed elapsed time", async () => {
+  for (const session of [null, "fixture_session"]) {
+    const specification = supervisorSpecification(2_000, "complete", session, 100);
+    const encoded = Buffer.from(JSON.stringify(specification), "utf8").toString("base64url");
+    const child = spawn(process.execPath, [supervisor, encoded], { cwd: process.cwd(), env: { ...process.env, OPENCODE_FIXTURE_DELAY_MS: "2000", OPENCODE_FIXTURE_MODE: "complete" }, stdio: ["pipe", "pipe", "pipe"] });
+    let stderr = ""; child.stderr.on("data", (chunk) => { stderr += chunk; }); child.stdin.end();
+    const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(child.exitCode, null, stderr);
+    child.kill("SIGTERM");
+    await closed;
+    await assertEventuallyUnavailable(`${specification.url}/global/health`);
+  }
 });
 
 test("OpenCode supervisor classifies an unstartable server", async () => {
-  const specification = supervisorSpecification(0, 1_000);
+  const specification = supervisorSpecification(0);
   specification.command = path.join(os.tmpdir(), "missing-opencode-server");
   const result = await runSupervisor(specification);
   assert.equal(result.code, 1);
@@ -79,7 +91,7 @@ test("OpenCode supervisor classifies an unstartable server", async () => {
 });
 
 test("OpenCode supervisor emits a structured failure for a terminal session without assistant text", async () => {
-  const result = await runSupervisor(supervisorSpecification(0, 1_000, "no-terminal"));
+  const result = await runSupervisor(supervisorSpecification(0, "no-terminal"));
   assert.equal(result.code, 1);
   const failure = result.stderr.split(/\r?\n/).find((line) => line.startsWith("3RD_REVIEW_FAILURE "));
   assert.ok(failure, result.stderr);
@@ -89,6 +101,15 @@ test("OpenCode supervisor emits a structured failure for a terminal session with
     message: "provider session ended without a terminal assistant result",
     session_id: "fixture_session",
   });
+  await assertEventuallyUnavailable(`${result.url}/global/health`);
+});
+
+test("OpenCode supervisor classifies a health-confirmed inactive tool-only session", async () => {
+  const result = await runSupervisor(supervisorSpecification(0, "tool-only"));
+  assert.equal(result.code, 1);
+  const failure = result.stderr.split(/\r?\n/).find((line) => line.startsWith("3RD_REVIEW_FAILURE "));
+  assert.ok(failure, result.stderr);
+  assert.equal(JSON.parse(failure.slice("3RD_REVIEW_FAILURE ".length)).code, "PROVIDER_NO_TERMINAL_RESULT");
   await assertEventuallyUnavailable(`${result.url}/global/health`);
 });
 
@@ -148,6 +169,24 @@ test("OpenCode does not harvest a completed tool step while the session is still
   const fetchImpl = async (url) => url.endsWith("/session/status") ? response({ ses_busy: { type: "busy" } }) : response(messages);
   const result = await createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl })({ session_id: "ses_busy" });
   assert.equal(result.status, "busy"); assert.equal(result.raw, null);
+});
+
+test("OpenCode classifies an idle tool-only turn as an explicit terminal failure", async () => {
+  const messages = [{
+    info: { id: "msg_tool", sessionID: "ses_tool_only", role: "assistant", finish: "tool-calls", time: { completed: 42 } },
+    parts: [
+      { id: "prt_tool", type: "tool", tool: "read", state: { status: "completed" } },
+      { id: "prt_done", type: "step-finish", reason: "tool-calls" },
+    ],
+  }];
+  const fetchImpl = async (url) => url.endsWith("/session/status") ? response({}) : response(messages);
+  const result = await createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl })({ session_id: "ses_tool_only" });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.error, {
+    code: "PROVIDER_NO_TERMINAL_RESULT",
+    message: "OpenCode session ended after tool-only steps without a terminal assistant result",
+  });
+  assert.match(result.evidence, /tool-only/i);
 });
 
 test("OpenCode probe maps retry, failed, idle progress, unknown session, HTTP failure, and abort", async () => {

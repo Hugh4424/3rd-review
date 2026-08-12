@@ -21,6 +21,8 @@ if (args[0] === "serve") {
     if (request.url === "/session/status") return response.end(JSON.stringify(completed ? {} : { fixture_session: { type: "busy" } }));
     if (request.url === "/session/fixture_session/message") return response.end(JSON.stringify(completed && mode === "no-terminal"
       ? [{ info: { id: "message_unknown", sessionID: "fixture_session", role: "assistant", finish: "unknown", time: { completed: 1 } }, parts: [{ id: "part_unknown", type: "step-finish", reason: "unknown" }] }]
+      : completed && mode === "tool-only"
+        ? [{ info: { id: "message_tool", sessionID: "fixture_session", role: "assistant", finish: "tool-calls", time: { completed: 1 } }, parts: [{ id: "part_tool", type: "tool", tool: "read", state: { status: "completed" } }, { id: "part_tool_finish", type: "step-finish", reason: "tool-calls" }] }]
       : completed
         ? [{ info: { id: "message_done", sessionID: "fixture_session", role: "assistant", finish: "stop", time: { completed: 1 } }, parts: [{ id: "part_text", type: "text", text: "FIXTURE_SUPERVISOR_OK" }, { id: "part_done", type: "step-finish", reason: "stop" }] }]
       : []));

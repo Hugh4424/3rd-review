@@ -11,7 +11,8 @@ process.stdin.on("end", () => {
   const rewrite = prompt.startsWith("Your prior final response cannot be published");
   const sessionFlag = args.includes("--session") ? "--session" : "--session-id";
   const session = process.env.PI_FAKE_SESSION_ID ?? args[args.indexOf(sessionFlag) + 1] ?? "pi-fake-session";
-  const stopReason = process.env.PI_FAKE_STOP_REASON ?? "stop";
+  const rateLimitFixture = prompt === "PI_RATE_LIMIT_FIXTURE";
+  const stopReason = rateLimitFixture ? "error" : process.env.PI_FAKE_STOP_REASON ?? "stop";
   const willRetry = process.env.PI_FAKE_WILL_RETRY === "1";
   const settled = rewrite ? process.env.PI_FAKE_REWRITE_NO_SETTLED !== "1" : process.env.PI_FAKE_NO_SETTLED !== "1";
   console.log(JSON.stringify({ type: "session", version: 3, id: session }));
@@ -26,7 +27,7 @@ process.stdin.on("end", () => {
   if (process.env.PI_FAKE_PROMPT_LOG) {
     fs.appendFileSync(process.env.PI_FAKE_PROMPT_LOG, `${JSON.stringify({ session, prompt })}\n`);
   }
-  console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }, { type: "text", text }], model: "deepseek-v4-flash", usage: { totalTokens: 7 }, stopReason } }));
+  console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "private" }, { type: "text", text }], model: "deepseek-v4-flash", usage: { totalTokens: 7 }, stopReason, ...(rateLimitFixture ? { errorMessage: "429 The engine is currently overloaded, please try again later" } : process.env.PI_FAKE_ERROR_MESSAGE ? { errorMessage: process.env.PI_FAKE_ERROR_MESSAGE } : {}) } }));
   console.log(JSON.stringify(process.env.PI_FAKE_MISSING_WILL_RETRY === "1" ? { type: "agent_end" } : { type: "agent_end", willRetry }));
   if (settled) console.log(JSON.stringify({ type: "agent_settled" }));
 });
