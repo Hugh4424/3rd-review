@@ -43,6 +43,54 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
   assert.doesNotMatch(opencode.terminalRecoveryPrompt, /unless strictly necessary/i);
 });
 
+test("OpenCode isolates its data directory per runtime and provider profile", () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-data-isolation-"));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-data-work-"));
+  const coding = { ...provider, id: "opencode/coding", runtime_key: "opencode%2Fcoding" };
+  const v4flash = { ...provider, id: "opencode/v4flash", runtime_key: "opencode%2Fv4flash" };
+  const first = opencode.start(coding, cwd, "review", runtime);
+  const resumed = opencode.resume(coding, cwd, "ses_keep", "continue", runtime);
+  const other = opencode.start(v4flash, cwd, "review", runtime);
+  assert.match(first.env.XDG_DATA_HOME, new RegExp(`^${runtime.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}${path.sep}opencode-data${path.sep}[a-f0-9]{64}$`));
+  assert.equal(first.env.XDG_DATA_HOME, resumed.env.XDG_DATA_HOME);
+  assert.notEqual(first.env.XDG_DATA_HOME, other.env.XDG_DATA_HOME);
+  assert.equal(fs.statSync(first.env.XDG_DATA_HOME).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(other.env.XDG_DATA_HOME).mode & 0o777, 0o700);
+});
+
+test("OpenCode keeps native auth available when its data directory is isolated", () => {
+  const hostData = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-native-auth-"));
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-native-auth-runtime-"));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-native-auth-work-"));
+  const authDir = path.join(hostData, "opencode");
+  const authFile = path.join(authDir, "auth.json");
+  fs.mkdirSync(authDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(authFile, '{"provider":"fixture"}\n', { mode: 0o600 });
+  const prior = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = hostData;
+  try {
+    const plan = opencode.start(provider, cwd, "review", runtime);
+    const isolatedAuth = path.join(plan.env.XDG_DATA_HOME, "opencode", "auth.json");
+    assert.equal(fs.lstatSync(isolatedAuth).isSymbolicLink(), false);
+    assert.equal(fs.readFileSync(isolatedAuth, "utf8"), fs.readFileSync(authFile, "utf8"));
+    assert.equal(fs.statSync(isolatedAuth).mode & 0o777, 0o600);
+  } finally {
+    if (prior === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prior;
+  }
+});
+
+test("OpenCode preserves a terminal permission failure instead of hiding it as health failure", async () => {
+  const messages = [{
+    info: { id: "msg_permission", sessionID: "ses_permission", role: "assistant", finish: "error", time: { completed: 42 }, error: { message: "permission denied while reading the provider workspace" } },
+    parts: [{ id: "prt_error", type: "step-finish", reason: "error" }],
+  }];
+  const fetchImpl = async (url) => url.endsWith("/session/status") ? response({}) : response(messages);
+  const result = await createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl })({ session_id: "ses_permission" });
+  assert.equal(result.status, "failed");
+  assert.equal(result.error.code, "PROVIDER_PERMISSION_DENIED");
+});
+
 function runSupervisor(specification) {
   const encoded = Buffer.from(JSON.stringify(specification), "utf8").toString("base64url");
   return new Promise((resolve) => {

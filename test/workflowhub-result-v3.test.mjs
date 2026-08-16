@@ -128,6 +128,13 @@ test("v3 rejects private paths and mixed-version member projections", () => {
   assert.throws(() => createWorkflowHubResultV3({ ...context, providers: [{ result_protocol: "workflowhub-result.v2" }] }), { code: "PROTOCOL_INCOMPATIBLE" });
 });
 
+test("v3 allows slash notation that follows a Unicode word", () => {
+  assert.doesNotThrow(() => projectWorkflowHubMemberV3({
+    provider: "pi/k3", adapter: "pi", status: "completed",
+    output: JSON.stringify({ findings: [{ issue: "代码/AC/oracle/接口变化需要重新绑定事实" }] }),
+  }, context));
+});
+
 test("v3 rejects untyped usage, invalid provenance hashes, and inconsistent recovery facts", () => {
   assert.throws(() => projectWorkflowHubMemberV3({ provider: "pi/k3", adapter: "pi", status: "failed", output: null, usage: [] }, context), { code: "PUBLIC_RESULT_INVALID" });
   assert.throws(() => projectWorkflowHubMemberV3({ provider: "pi/k3", adapter: "pi", status: "failed", output: null }, { ...context, raw_output_sha256: "not-a-sha" }), { code: "PUBLIC_RESULT_INVALID" });
