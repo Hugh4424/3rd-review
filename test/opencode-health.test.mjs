@@ -164,6 +164,14 @@ test("OpenCode probe harvests a terminal assistant message as parser-valid canon
   assert.equal(opencode.parse(result.raw.stdout, result.raw.stderr).text, "APPROVED");
 });
 
+test("OpenCode parser unwraps one JSON Markdown fence without accepting surrounding prose", () => {
+  const text = "```json\n{\"findings\":[]}\n```";
+  const raw = `${JSON.stringify({ type: "session.completed", session_id: "ses_json", text })}\n`;
+  const parsed = opencode.parse(raw, "");
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.text, '{"findings":[]}');
+});
+
 test("OpenCode does not harvest a completed tool step while the session is still busy", async () => {
   const messages = [{ info: { id: "msg_tool", sessionID: "ses_busy", role: "assistant", finish: "tool-calls", time: { completed: 42 } }, parts: [{ id: "prt_tool", type: "step-finish", reason: "tool-calls" }] }];
   const fetchImpl = async (url) => url.endsWith("/session/status") ? response({ ses_busy: { type: "busy" } }) : response(messages);
@@ -187,6 +195,23 @@ test("OpenCode classifies an idle tool-only turn as an explicit terminal failure
     message: "OpenCode session ended after tool-only steps without a terminal assistant result",
   });
   assert.match(result.evidence, /tool-only/i);
+});
+
+test("OpenCode classifies an idle session without a terminal assistant as terminal failure", async () => {
+  const messages = [{
+    info: { id: "msg_idle", sessionID: "ses_idle", role: "assistant" },
+    parts: [{ id: "prt_reasoning", type: "reasoning", text: "stopped" }],
+  }];
+  const fetchImpl = async (url) => url.endsWith("/session/status") ? response({ ses_idle: { type: "idle" } }) : response(messages);
+  const probe = createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl });
+  const first = await probe({ session_id: "ses_idle" });
+  const result = await probe({ session_id: "ses_idle", cursor: first.cursor });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(result.error, {
+    code: "PROVIDER_NO_TERMINAL_RESULT",
+    message: "OpenCode session ended without a terminal assistant result",
+  });
+  assert.match(result.evidence, /not busy/i);
 });
 
 test("OpenCode probe maps retry, failed, idle progress, unknown session, HTTP failure, and abort", async () => {
