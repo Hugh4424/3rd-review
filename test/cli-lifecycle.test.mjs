@@ -77,7 +77,7 @@ test("CLI returns a parseable v2 group instead of exit 2 when one provider outpu
   } }));
   fs.writeFileSync(request, JSON.stringify({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: ["codex/terra", "kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: material.attachments }));
   const call = await collect(process.execPath, [cli, "run", `--config=${config}`, `--request=${request}`], { THIRD_REVIEW_FAKE_KIMI_OUTPUT: "contains /private/provider-secret" });
-  assert.equal(call.code, 0, call.stderr); const result = JSON.parse(call.stdout); const [sameSource, polluted, normal] = result.providers;
-  assert.equal(sameSource.error.code, "SAME_SOURCE"); assert.equal(polluted.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(polluted.output, null); assert.equal(normal.status, "completed");
+  assert.equal(call.code, 0, call.stderr); const result = JSON.parse(call.stdout); const [hostProfile, polluted, normal] = result.providers;
+  assert.equal(hostProfile.status, "failed"); assert.equal(hostProfile.error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED"); assert.equal(polluted.error.code, "PUBLIC_RESULT_INVALID"); assert.equal(polluted.output, null); assert.equal(normal.status, "completed");
   assert.equal(JSON.stringify(result).includes("/private/provider-secret"), false);
 });

@@ -58,6 +58,23 @@ test("explicit cancellation remains terminal even when probe is advisory", async
   runner.cancel(); await clock.tick(10); assert.equal(decisions[0].error.code, "CANCELLED");
 });
 
+test("an adapter-marked terminal provider failure ends supervision immediately", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 10, probeSession: async () => ({
+    status: "unverifiable", terminal: true, session_id: "s", cursor: "idle", raw: null,
+    error: { code: "PROVIDER_PERMISSION_DENIED", message: "provider permission was denied" },
+    evidence: "permission denial",
+  }) });
+  await clock.tick(10);
+  assert.deepEqual(decisions[0], {
+    status: "failed",
+    error: { code: "PROVIDER_PERMISSION_DENIED", message: "provider permission was denied" },
+    evidence: "permission denial",
+    session_id: "s",
+    cursor: "idle",
+  });
+  assert.equal(runner.snapshot().stopped, true);
+});
+
 test("adapters without a probe do not turn stream silence into an idle timeout", async () => {
   const { clock, decisions, runner } = setup({ intervalMs: 10 }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.noteProgress({ cursor: "event-1" }); await clock.tick(1_000); assert.deepEqual(decisions, []); runner.stop();
 });

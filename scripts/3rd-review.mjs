@@ -44,7 +44,13 @@ async function main() {
   validateArgs(command);
   const broker = new Broker(loadConfig(value("config") ?? undefined)); activeBroker = broker;
   if (command === "doctor") console.log(JSON.stringify(await broker.doctor({ attachmentRoot: value("attachments-root") ? path.resolve(value("attachments-root")) : null }), null, 2));
-  else if (command === "run") { const result = await broker.run(runRequest()); console.log(JSON.stringify(result, null, 2)); if (result.outcome !== "completed") process.exitCode = 3; }
+  else if (command === "run") {
+    const result = await broker.run(runRequest());
+    console.log(JSON.stringify(result, null, 2));
+    // v3 callers consume partial/unavailable groups as structured public
+    // facts. Keep the legacy exit-code contract for v1/v2 callers only.
+    if (result.outcome !== "completed" && result.version !== "workflowhub-result.v3") process.exitCode = 3;
+  }
   else if (command === "start") console.log(JSON.stringify(broker.startManaged(runRequest(), required("request-id")), null, 2));
   else if (command === "status") {
     const runtimeId = required("runtime-id");
