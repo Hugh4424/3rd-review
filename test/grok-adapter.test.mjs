@@ -38,6 +38,8 @@ test("Grok rejects malformed, unsuccessful, and empty terminal output", () => {
 test("Grok observes terminal health decisions", () => {
   const completed = grok.observeLine("stdout", JSON.stringify({ type: "end", stopReason: "EndTurn", sessionId: "s" }));
   assert.deepEqual(completed.terminal, { state: "completed", session_id: "s" });
+  const snakeCaseCompleted = grok.observeLine("stdout", JSON.stringify({ type: "end", stopReason: "end_turn", sessionId: "s" }));
+  assert.deepEqual(snakeCaseCompleted.terminal, { state: "completed", session_id: "s" });
   const failed = grok.observeLine("stdout", JSON.stringify({ type: "end", stopReason: "MaxTurns", sessionId: "s" }));
   assert.equal(failed.terminal.state, "failed");
   const error = grok.observeLine("stdout", JSON.stringify({ type: "error", sessionId: "s" }));

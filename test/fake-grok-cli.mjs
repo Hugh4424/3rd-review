@@ -7,4 +7,4 @@ const sessionId = resumeIndex >= 0 ? args[resumeIndex + 1] : "grok-session";
 console.log(JSON.stringify({ type: "thought", data: "checking" }));
 console.log(JSON.stringify({ type: "text", data: "GROK_" }));
 console.log(JSON.stringify({ type: "text", data: "FINAL" }));
-console.log(JSON.stringify({ type: "end", stopReason: "EndTurn", sessionId }));
+console.log(JSON.stringify({ type: "end", stopReason: "end_turn", sessionId }));
