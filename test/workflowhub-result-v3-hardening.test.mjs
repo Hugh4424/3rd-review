@@ -34,7 +34,7 @@ test("v3 keeps unknown deadline and timing as null instead of inventing telemetr
 });
 
 test("v3 rejects absolute paths and file URIs consistently with WorkflowHub", () => {
-  for (const path of ["/secret/review.md", "/workspace/subject.md", "/srv/review/subject.md", "file://host/review.json"]) {
+  for (const path of ["/secret/review.md", "/workspace/subject.md", "/srv/review/subject.md", "/data/review/subject.md", "file://host/review.json"]) {
     assert.throws(() => member({ output: JSON.stringify({ path }) }), { code: "PUBLIC_RESULT_INVALID" });
   }
 });

@@ -259,6 +259,61 @@ test("workflowhub result v2 isolates projection-field path violations without re
   }
 });
 
+test("workflowhub result v3 isolates projection-field path violations without rejecting the candidate group", async () => {
+  const cases = [
+    { name: "profile model", configure: (value) => { value.providers["kimi/k3"].model = "model=/private/profile"; }, polluted: "kimi/k3", normal: "claude-code/opus", marker: "/private/profile" },
+    { name: "session", configure: (value) => { value.providers["claude-code/opus"].model = "emit-private-session"; }, polluted: "claude-code/opus", normal: "kimi/k3", marker: "/private/session" },
+    { name: "usage", configure: (value) => { value.providers["claude-code/opus"].model = "emit-private-usage"; }, polluted: "claude-code/opus", normal: "kimi/k3", marker: "/private/usage" },
+  ];
+  for (const scenario of cases) {
+    const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["codex/terra", "kimi/k3", "claude-code/opus"]], attachmentsRoot); scenario.configure(value);
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v3", provider_allowlist: ["codex/terra", "kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    assert.doesNotThrow(() => JSON.parse(JSON.stringify(result)), scenario.name);
+    const providers = Object.fromEntries(result.providers.map((provider) => [provider.identity.provider, provider]));
+    assert.equal(providers["codex/terra"].status, "failed", scenario.name);
+    assert.equal(providers["codex/terra"].error.code, "ATTACHMENT_DELIVERY_UNSUPPORTED", scenario.name);
+    assert.equal(providers[scenario.polluted].status, "failed", scenario.name); assert.equal(providers[scenario.polluted].error.code, "PUBLIC_RESULT_INVALID", scenario.name); assert.equal(providers[scenario.polluted].output, null, scenario.name); assert.equal(providers[scenario.polluted].continuable, false, scenario.name);
+    assert.equal(providers[scenario.normal].status, "completed", scenario.name); assert.equal(result.outcome, "partial", scenario.name); assert.equal(JSON.stringify(result).includes(scenario.marker), false, scenario.name);
+  }
+});
+
+test("workflowhub result v3 isolates a v3-only absolute-path projection failure", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3", "claude-code/opus"]], attachmentsRoot);
+  value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "finding=/data/provider-secret";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v3", provider_allowlist: ["kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    const providers = Object.fromEntries(result.providers.map((provider) => [provider.identity.provider, provider]));
+    assert.equal(providers["kimi/k3"].status, "failed"); assert.equal(providers["kimi/k3"].error.code, "PUBLIC_RESULT_INVALID"); assert.equal(providers["kimi/k3"].output, null);
+    assert.equal(providers["claude-code/opus"].status, "completed"); assert.equal(result.outcome, "partial"); assert.equal(JSON.stringify(result).includes("/data/provider-secret"), false);
+  } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
+test("workflowhub result v3 reports unavailable when every member output violates the public contract", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3", "claude-code/opus"]], attachmentsRoot);
+  value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "finding=/data/provider-secret";
+  value.providers["claude-code/opus"].model = "emit-private-session";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v3", provider_allowlist: ["kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    assert.equal(result.outcome, "unavailable"); assert.equal(result.providers.length, 2);
+    assert.ok(result.providers.every((provider) => provider.status === "failed" && provider.output === null && provider.error.code === "PUBLIC_RESULT_INVALID"));
+    assert.equal(JSON.stringify(result).includes("/data/provider-secret"), false); assert.equal(JSON.stringify(result).includes("/private/session"), false);
+  } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
+test("workflowhub result v3 isolates an empty Kimi TextPart without discarding another provider review", async () => {
+  const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3", "claude-code/opus"]], attachmentsRoot);
+  value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
+  process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "";
+  try {
+    const result = await new Broker(value).run({ version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v3", provider_allowlist: ["kimi/k3", "claude-code/opus"], prompt: "review", continuation: null, attachments: packet(attachmentsRoot) });
+    const providers = Object.fromEntries(result.providers.map((provider) => [provider.identity.provider, provider]));
+    assert.equal(providers["kimi/k3"].status, "failed"); assert.equal(providers["kimi/k3"].error.code, "PROVIDER_OUTPUT_INVALID"); assert.equal(providers["kimi/k3"].output, null);
+    assert.equal(providers["claude-code/opus"].status, "completed"); assert.equal(providers["claude-code/opus"].output, "claude opinion"); assert.equal(result.outcome, "partial");
+  } finally { delete process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT; }
+});
+
 test("workflowhub result v1 turns a private provider output into a safe provider failure", async () => {
   const attachmentsRoot = source(); const runtime = temp(); const value = config(runtime, [["kimi/k3"]], attachmentsRoot); value.providers["kimi/k3"].env = ["THIRD_REVIEW_FAKE_KIMI_OUTPUT"];
   process.env.THIRD_REVIEW_FAKE_KIMI_OUTPUT = "finding file:///private/v1-output";

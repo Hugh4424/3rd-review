@@ -130,10 +130,10 @@ test("v3 rejects private paths and mixed-version member projections", () => {
   assert.throws(() => createWorkflowHubResultV3({ ...context, providers: [{ result_protocol: "workflowhub-result.v2" }] }), { code: "PROTOCOL_INCOMPATIBLE" });
 });
 
-test("v3 allows slash notation that follows a Unicode word", () => {
+test("v3 allows ordinary slash-separated review terminology", () => {
   assert.doesNotThrow(() => projectWorkflowHubMemberV3({
     provider: "pi/k3", adapter: "pi", status: "completed",
-    output: JSON.stringify({ findings: [{ issue: "代码/AC/oracle/接口变化需要重新绑定事实" }] }),
+    output: JSON.stringify({ findings: [{ issue: "代码 / AC / oracle 与 map/AC 都需要重新绑定事实" }] }),
   }, context));
 });
 
