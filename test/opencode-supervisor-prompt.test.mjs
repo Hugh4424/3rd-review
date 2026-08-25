@@ -12,7 +12,7 @@ async function freePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const port = server.address().port;
-  await new Promise((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); });
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   return port;
 }
 
@@ -30,15 +30,27 @@ if (args[0] === "serve") {
     response.setHeader("content-type", "application/json");
     if (request.url === "/global/health") return response.end(JSON.stringify({ healthy: true }));
     if (request.url === "/session/status") return response.end(JSON.stringify({}));
-    if (request.url === "/session") return response.end(JSON.stringify([
-      { id: "prompt_session", directory: process.env.FAKE_OPENCODE_DIR, time: { created: Date.now() } },
-    ]));
-    if (request.url === "/session/prompt_session/message") return response.end(JSON.stringify([
-      { info: { id: "message_done", sessionID: "prompt_session", role: "assistant", finish: "stop", time: { completed: 1 } }, parts: [
+    if (request.url === "/session") {
+      const mode = process.env.FAKE_OPENCODE_SESSION_MODE ?? "fresh";
+      const sessions = mode === "stale"
+        ? [{ id: "prompt_session", directory: process.env.FAKE_OPENCODE_DIR, time: { created: Date.now() - 60_000 } }]
+        : mode === "ambiguous"
+          ? [
+              { id: "prompt_session_a", directory: process.env.FAKE_OPENCODE_DIR, time: { created: Date.now() } },
+              { id: "prompt_session_b", directory: process.env.FAKE_OPENCODE_DIR, time: { created: Date.now() } },
+            ]
+          : [{ id: "prompt_session", directory: process.env.FAKE_OPENCODE_DIR, time: { created: Date.now() } }];
+      return response.end(JSON.stringify(sessions));
+    }
+    if (request.url.startsWith("/session/") && request.url.endsWith("/message")) {
+      const sessionID = request.url.slice("/session/".length, -"/message".length);
+      return response.end(JSON.stringify([
+      { info: { id: "message_done", sessionID, role: "assistant", finish: "stop", time: { completed: 1 } }, parts: [
         { id: "part_text", type: "text", text: "PROMPT_FORWARDING_OK" },
         { id: "part_done", type: "step-finish", reason: "stop" },
       ] },
-    ]));
+      ]));
+    }
     response.statusCode = 404;
     response.end("{}");
   });
@@ -93,5 +105,35 @@ test("OpenCode supervisor discovers a session when attached CLI emits no session
     const result = await runSupervisor({ command, url, port, clientArgv: ["run", "--attach", url, "--dir", runtime], workspace: runtime }, { FAKE_OPENCODE_CALLS: calls, FAKE_OPENCODE_DIR: runtime, FAKE_OPENCODE_NO_SESSION_OUTPUT: "1" }, "SESSION_DISCOVERY_SENTINEL");
     assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /PROMPT_FORWARDING_OK/);
     const call = JSON.parse(fs.readFileSync(calls, "utf8")); assert.equal(call.stdin, "SESSION_DISCOVERY_SENTINEL");
+  } finally { fs.rmSync(runtime, { recursive: true, force: true }); }
+});
+
+test("OpenCode supervisor rejects a stale session discovered after client exit", async () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-stale-session-"));
+  try {
+    const calls = path.join(runtime, "calls.json"); const command = fakeOpenCode(runtime); const port = await freePort(); const url = `http://127.0.0.1:${port}`;
+    const result = await runSupervisor({ command, url, port, clientArgv: ["run", "--attach", url, "--dir", runtime], workspace: runtime }, {
+      FAKE_OPENCODE_CALLS: calls,
+      FAKE_OPENCODE_DIR: runtime,
+      FAKE_OPENCODE_NO_SESSION_OUTPUT: "1",
+      FAKE_OPENCODE_SESSION_MODE: "stale",
+    }, "STALE_SESSION_SENTINEL");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /SESSION_UNKNOWN/);
+  } finally { fs.rmSync(runtime, { recursive: true, force: true }); }
+});
+
+test("OpenCode supervisor rejects ambiguous fresh session discovery", async () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-ambiguous-session-"));
+  try {
+    const calls = path.join(runtime, "calls.json"); const command = fakeOpenCode(runtime); const port = await freePort(); const url = `http://127.0.0.1:${port}`;
+    const result = await runSupervisor({ command, url, port, clientArgv: ["run", "--attach", url, "--dir", runtime], workspace: runtime }, {
+      FAKE_OPENCODE_CALLS: calls,
+      FAKE_OPENCODE_DIR: runtime,
+      FAKE_OPENCODE_NO_SESSION_OUTPUT: "1",
+      FAKE_OPENCODE_SESSION_MODE: "ambiguous",
+    }, "AMBIGUOUS_SESSION_SENTINEL");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /SESSION_UNKNOWN/);
   } finally { fs.rmSync(runtime, { recursive: true, force: true }); }
 });

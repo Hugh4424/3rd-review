@@ -34,9 +34,13 @@ test("v3 keeps unknown deadline and timing as null instead of inventing telemetr
 });
 
 test("v3 rejects absolute paths and file URIs consistently with WorkflowHub", () => {
-  for (const path of ["/workspace/subject.md", "/srv/review/subject.md", "file://host/review.json"]) {
+  for (const path of ["/secret/review.md", "/workspace/subject.md", "/srv/review/subject.md", "file://host/review.json"]) {
     assert.throws(() => member({ output: JSON.stringify({ path }) }), { code: "PUBLIC_RESULT_INVALID" });
   }
+});
+
+test("v3 keeps an explicit logical API route without allowing arbitrary absolute paths", () => {
+  assert.doesNotThrow(() => member({ output: JSON.stringify({ path: "/api/items/42" }) }));
 });
 
 test("v3 rejects inconsistent timing and usage telemetry at the producer boundary", () => {
