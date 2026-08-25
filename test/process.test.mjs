@@ -37,6 +37,15 @@ test("health completion terminates a hanging wrapper without a wall-clock race",
   assert.equal(result.ok, true); assert.equal(result.health_harvested, true); assert.equal(result.stdout, raw);
 });
 
+test("health busy without progress terminates only after the configured no-progress threshold", async () => {
+  const result = await execute({ ...plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "500" }), probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) }, {
+    maxOutputBytes: 4096, healthCheckIntervalMs: 10, noProgressAfterMs: 40, terminationGraceMs: 10,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROCESS_STALLED");
+  assert.ok(result.duration_ms < 500);
+});
+
 test("PID liveness remains diagnostic for a stream-only provider", async () => {
   const liveness = []; const result = await execute(plan(silent, { THIRD_REVIEW_TEST_DURATION_MS: "80" }), { maxOutputBytes: 4096, healthCheckIntervalMs: 10, livenessIntervalMs: 5, onLiveness: (value) => liveness.push(value) });
   assert.ok(liveness.length > 0); assert.equal(result.ok, true);

@@ -88,8 +88,14 @@ test("unchanged busy health is diagnosed but never terminated", async () => {
 test("unchanged progressing and retry statuses remain diagnostic", async () => {
   for (const status of ["progressing", "retry"]) {
     const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status, session_id: "s", cursor: "same", raw: null, error: null, evidence: status }) });
-    await clock.tick(60); assert.deepEqual(decisions, [], status); assert.equal(diagnostics[0].code, "PROCESS_STALLED", status); runner.stop();
+    await clock.tick(60); assert.deepEqual(decisions, [], status); assert.equal(diagnostics[0].code, status === "progressing" ? "HEALTH_PROGRESSING" : "HEALTH_RETRY", status); runner.stop();
   }
+});
+
+test("busy health reaches PROCESS_STALLED only after the no-progress threshold", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 10, noProgressAfterMs: 25, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
+  await clock.tick(20); assert.deepEqual(decisions, []);
+  await clock.tick(20); assert.equal(decisions[0].error.code, "PROCESS_STALLED"); assert.equal(decisions[0].no_progress_ms, 30); runner.stop();
 });
 
 test("changing probe cursor keeps a long-running provider healthy", async () => {

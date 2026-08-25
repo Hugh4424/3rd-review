@@ -202,21 +202,12 @@ test("Kimi Wire fixture stays open through terminal and preserves the resume hin
   fs.rmSync(cwd, { recursive: true, force: true });
 });
 
-test("Kimi Wire hanging progress is stopped by the provider hard timeout", async () => {
+test("Kimi Wire does not add a provider wall-clock timeout", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-wire-hanging-"));
   const fakePath = path.resolve("test/fake-kimi-wire-hanging-cli.mjs");
   fs.chmodSync(fakePath, 0o755);
   const fake = { ...provider, command: fakePath };
   const plan = kimi.start(fake, cwd, "review", cwd);
-  assert.equal(plan.maxDurationMs, 15 * 60 * 1000);
-  const result = await execute(plan, {
-    maxOutputBytes: 100_000,
-    maxDurationMs: 60,
-    watchdogIntervalMs: 5,
-    terminationGraceMs: 10,
-    healthCheckIntervalMs: 60_000,
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, "PROCESS_TIMEOUT");
+  assert.equal(plan.maxDurationMs, undefined);
   fs.rmSync(cwd, { recursive: true, force: true });
 });

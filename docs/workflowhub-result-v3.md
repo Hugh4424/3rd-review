@@ -10,8 +10,9 @@ its own; one successful member is not rerun because another member failed.
 `completed`, `partial`, `unavailable`, and `cancelled` are aggregate facts, not
 stage completion permissions.
 
-Each member exposes safe profile identity, material/contract identity, the
-positive configured deadline, timing, provider usage (or `null`), every broker
+Each member exposes safe profile identity, material/contract identity, a
+health-owned deadline fact (`null` when no provider wall-clock deadline is
+configured), timing, provider usage (or `null`), every broker
 attempt, and three separate recovery counters:
 
 - `provider_internal_retry_count`
@@ -26,3 +27,7 @@ Recovery is classified once by the broker: configuration/authentication,
 packet, and timeout errors do not recover; startup/death/recoverable transport
 errors may receive one fresh execution; output syntax/schema errors may receive
 one same-session repair. WorkflowHub does not add another retry layer.
+
+Usage token counters remain non-negative safe integers. Provider accounting may
+also expose a finite non-negative decimal `cost`; the broker may add it across
+recovery attempts without treating it as a token counter.

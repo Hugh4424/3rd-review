@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Broker, publicV2Error } from "../lib/broker.mjs";
-import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, canonicalWorkflowHubMaterialId, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
+import { Broker, publicV2Error, sumUsage } from "../lib/broker.mjs";
+import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash, canonicalWorkflowHubMaterialId, planDelivery, prepareAttachments, probeAttachmentWorkspace, validateAttachments } from "../lib/attachments.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cancellationRequested, cancellationSource, createRuntime, requestCancellation } from "../lib/runtime.mjs";
 
@@ -43,6 +43,27 @@ test("workflowhub material id binds semantic files and ignores transport wrapper
   assert.equal(canonicalWorkflowHubMaterialId(files.map((item, index) => index === 1 ? { ...item, sha256: sha("changed") } : item)), expected);
   assert.notEqual(canonicalWorkflowHubMaterialId(files.map((item, index) => index === 0 ? { ...item, sha256: sha("changed") } : item)), expected);
   assert.notEqual(canonicalWorkflowHubMaterialId([...files, { target: "review-packet.v1.json", size: 5, sha256: sha("three"), embed: false }]), expected);
+  assert.equal(canonicalWorkflowHubMaterialId([...files, { target: "canonical-evidence.json", size: 5, sha256: sha("audit"), embed: false }]), expected);
+});
+
+test("negotiated delivery keeps one shared material identity and chooses the existing file_only capability", () => {
+  const root = source(); const input = packet(root, "negotiated");
+  const checked = validateAttachments(input, 10_000, [{ root, sources: ["skills", "review-packet.v1.json", "changes.diff", "manifest.json"] }]);
+  const planned = planDelivery({ capabilities: { attachment_delivery: ["file_only", "always_embed"] } }, checked, "review", 10_000, { requireTriad: false });
+  const embedded = planDelivery({ capabilities: { attachment_delivery: ["always_embed"] } }, checked, "review", 10_000, { requireTriad: false });
+  assert.equal(planned.delivery_mode, "file_only");
+  assert.equal(planned.material_manifest_hash, checked.manifest_hash);
+  assert.equal(embedded.delivery_mode, "always_embed");
+  assert.equal(embedded.material_manifest_hash, checked.manifest_hash);
+  assert.match(embedded.provider_prompt, /<attachments mode="always_embed">/);
+});
+
+test("usage recovery preserves decimal cost but rejects misplaced decimal fields", () => {
+  assert.deepEqual(sumUsage(
+    { input: 10, cost: { total: 0.1 } },
+    { input: 5, cost: { total: 0.2 } },
+  ), { input: 15, cost: { total: 0.30000000000000004 } });
+  assert.equal(sumUsage({ input: 1, nested: { cost: 0.1 } }, { input: 1, nested: { cost: 0.2 } }), null);
 });
 
 test("doctor requires configured attachment roots and verifies the requested root", async () => {

@@ -18,7 +18,7 @@ const context = {
   semantic_hash: "semantic-sha",
   config_id: "config-sha",
   source_id: "pi/k3",
-  deadline_ms: 250,
+  deadline_ms: null,
   attempts: [
     {
       attempt_id: "attempt-1",
@@ -76,7 +76,7 @@ test("v3 keeps member identity, attempts, recovery counters, usage, timing, and 
     contract_hash: "contract-sha",
     semantic_hash: "semantic-sha",
   });
-  assert.equal(member.deadline_ms, 250);
+  assert.equal(member.deadline_ms, null);
   assert.equal(member.usage, null);
   assert.equal(member.recovery.provider_internal_retry_count, 2);
   assert.equal(member.recovery.fresh_execution_retry_count, 0);

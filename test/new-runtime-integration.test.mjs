@@ -7,7 +7,7 @@ import test from "node:test";
 import { canonicalDeliveryManifestHash, canonicalInnerManifestHash, canonicalMaterialManifestHash, canonicalPacketHash } from "../lib/attachments.mjs";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
-import { SUPPORTED_PROVIDER_IDS } from "../lib/provider-ids.mjs";
+import { parseProviderId, SUPPORTED_PROVIDER_IDS } from "../lib/provider-ids.mjs";
 import { cancellationRequested, createRuntime, readRuntime, updateRuntime } from "../lib/runtime.mjs";
 import { nodeFixtureCommand } from "./node-fixture-command.mjs";
 
@@ -46,6 +46,8 @@ test("supported provider IDs have one config and request contract", () => {
   const providers = Object.fromEntries(SUPPORTED_PROVIDER_IDS.map((id) => [id, provider(id, id === "antigravity" ? agy : pi)]));
   const value = config(runtime, root, providers, [SUPPORTED_PROVIDER_IDS]);
   assert.deepEqual(Object.keys(value.providers).sort(), [...SUPPORTED_PROVIDER_IDS].sort());
+  assert.equal(parseProviderId("opencode/512mac").profile, "512mac");
+  assert.equal(parseProviderId("opencode/pax3.8").profile, "pax3.8");
 });
 
 test("CLI/model provider instances use one adapter and isolated runtime keys", async () => {

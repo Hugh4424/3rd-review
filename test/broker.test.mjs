@@ -23,11 +23,10 @@ function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
 async function eventually(check, timeoutMs = 3_000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 20)); } assert.fail("condition did not become true"); }
 
-test("legacy wall-clock budgets are ignored and legacy timer fields are rejected", () => {
+test("provider wall-clock budgets are rejected and health owns termination", () => {
   const value = config(temp(), [["kimi"]]);
   assert.equal(value.runtime.max_wall_clock_ms, null);
-  value.providers.kimi.deadline_ms = 123; assert.equal(validateConfig(value).providers.kimi.deadline_ms, 123);
-  for (const invalid of [0, -1, 1.5, "1000"]) { value.providers.kimi.deadline_ms = invalid; assert.throws(() => validateConfig(value), /deadline_ms must be a positive integer/); }
+  for (const invalid of [123, 0, -1, 1.5, "1000"]) { value.providers.kimi.deadline_ms = invalid; assert.throws(() => validateConfig(value), /deadline_ms is no longer supported/); }
   value.providers.kimi.deadline_ms = null; assert.equal(validateConfig(value).providers.kimi.deadline_ms, null);
   value.runtime.max_wall_clock_ms = null; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, null);
   for (const legacy of [900_000, 0, -1, 1.5, "1000"]) { value.runtime.max_wall_clock_ms = legacy; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, null); }
@@ -35,12 +34,9 @@ test("legacy wall-clock budgets are ignored and legacy timer fields are rejected
   delete value.runtime.idle_timeout_ms; value.runtime.max_duration_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
 });
 
-test("an opted-in provider deadline settles a live provider", async () => {
-  const root = temp(); const value = config(root, [["kimi"]]);
-  value.providers.kimi.command = slow; value.providers.kimi.deadline_ms = 60;
-  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "PROCESS_TIMEOUT");
+test("a provider deadline cannot reintroduce a second execution timer", () => {
+  const value = config(temp(), [["kimi"]]); value.providers.kimi.deadline_ms = 60;
+  assert.throws(() => validateConfig(value), /deadline_ms is no longer supported/);
 });
 
 test("config keeps usable tiers when dormant providers or duplicate routes exist", () => {
