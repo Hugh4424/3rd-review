@@ -13,7 +13,7 @@ const deferred = () => { let resolve; const promise = new Promise((done) => { re
 function setup(options = {}) { const clock = new FakeClock(); const decisions = []; const diagnostics = []; const runner = createHealthRunner({ clock, onDecision: (value) => decisions.push(value), onDiagnostic: (value) => diagnostics.push(value), ...options }); runner.start(); return { clock, decisions, diagnostics, runner }; }
 
 test("health probes start at the default 60 second interval and never overlap", async () => {
-  const pending = deferred(); let calls = 0; const { clock, runner } = setup({ probeSession: () => { calls += 1; return pending.promise; }, probeDeadlineMs: 120_000 });
+  const pending = deferred(); let calls = 0; const { clock, runner } = setup({ probeSession: () => { calls += 1; return pending.promise; } });
   await clock.tick(59_999); assert.equal(calls, 0); await clock.tick(1); assert.equal(calls, 1); await clock.tick(60_000); assert.equal(calls, 1);
   pending.resolve({ status: "busy", session_id: "s", cursor: "c", raw: null, error: null, evidence: "running" }); await clock.tick(0); runner.stop();
 });
@@ -85,17 +85,19 @@ test("unchanged busy health is diagnosed but never terminated", async () => {
   await clock.tick(10); assert.deepEqual(decisions, []); assert.equal(diagnostics[0].code, "PROCESS_STALLED"); assert.equal(diagnostics[0].session_id, "s"); assert.equal(diagnostics[0].cursor, "same"); runner.stop();
 });
 
+test("default health supervision does not end a busy provider by elapsed time", async () => {
+  const { clock, decisions, runner } = setup({ intervalMs: 60_000, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
+  await clock.tick(16 * 60_000);
+  assert.deepEqual(decisions, []);
+  assert.ok(runner.snapshot().no_progress_ms >= 15 * 60_000);
+  runner.stop();
+});
+
 test("unchanged progressing and retry statuses remain diagnostic", async () => {
   for (const status of ["progressing", "retry"]) {
     const { clock, decisions, diagnostics, runner } = setup({ intervalMs: 10, probeSession: async () => ({ status, session_id: "s", cursor: "same", raw: null, error: null, evidence: status }) });
     await clock.tick(60); assert.deepEqual(decisions, [], status); assert.equal(diagnostics[0].code, status === "progressing" ? "HEALTH_PROGRESSING" : "HEALTH_RETRY", status); runner.stop();
   }
-});
-
-test("busy health reaches PROCESS_STALLED only after the no-progress threshold", async () => {
-  const { clock, decisions, runner } = setup({ intervalMs: 10, noProgressAfterMs: 25, probeSession: async () => ({ status: "busy", session_id: "s", cursor: "same", raw: null, error: null, evidence: "busy" }) });
-  await clock.tick(20); assert.deepEqual(decisions, []);
-  await clock.tick(20); assert.equal(decisions[0].error.code, "PROCESS_STALLED"); assert.equal(decisions[0].no_progress_ms, 30); runner.stop();
 });
 
 test("changing probe cursor keeps a long-running provider healthy", async () => {

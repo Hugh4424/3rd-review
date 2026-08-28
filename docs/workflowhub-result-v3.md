@@ -10,9 +10,9 @@ its own; one successful member is not rerun because another member failed.
 `completed`, `partial`, `unavailable`, and `cancelled` are aggregate facts, not
 stage completion permissions.
 
-Each member exposes safe profile identity, material/contract identity, a
-health-owned deadline fact (`null` when no provider wall-clock deadline is
-configured), timing, provider usage (or `null`), every broker
+Each member exposes safe profile identity, material/contract identity, an
+explicit provider deadline fact (always `null` in v4; the broker adds no
+wall-clock execution limit), timing, provider usage (or `null`), every broker
 attempt, and three separate recovery counters:
 
 - `provider_internal_retry_count`

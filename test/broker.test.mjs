@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-import { Broker, DEFAULT_PROVIDER_MAX_DURATION_MS } from "../lib/broker.mjs";
+import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
 import { cleanup, createRuntime, currentOwnerIdentity, ensureRuntimeGuardian, isAlive, processIdentity, readRuntime, terminateProcess, updateRuntime } from "../lib/runtime.mjs";
 
@@ -23,7 +23,7 @@ function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
 async function eventually(check, timeoutMs = 3_000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 20)); } assert.fail("condition did not become true"); }
 
-test("provider wall-clock budgets are rejected and health owns termination", () => {
+test("legacy elapsed-time configuration is rejected", () => {
   const value = config(temp(), [["kimi"]]);
   assert.equal(value.runtime.max_wall_clock_ms, null);
   for (const invalid of [123, 0, -1, 1.5, "1000"]) { value.providers.kimi.deadline_ms = invalid; assert.throws(() => validateConfig(value), /deadline_ms is no longer supported/); }
@@ -32,11 +32,6 @@ test("provider wall-clock budgets are rejected and health owns termination", () 
   for (const legacy of [900_000, 0, -1, 1.5, "1000"]) { value.runtime.max_wall_clock_ms = legacy; assert.equal(validateConfig(value).runtime.max_wall_clock_ms, null); }
   delete value.runtime.max_wall_clock_ms; value.runtime.idle_timeout_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
   delete value.runtime.idle_timeout_ms; value.runtime.max_duration_ms = 1; assert.throws(() => validateConfig(value), /no longer supported/);
-});
-
-test("provider logical runs keep a finite internal default deadline", () => {
-  assert.equal(DEFAULT_PROVIDER_MAX_DURATION_MS, 15 * 60 * 1000);
-  assert.ok(Number.isSafeInteger(DEFAULT_PROVIDER_MAX_DURATION_MS));
 });
 
 test("a provider deadline cannot reintroduce a second execution timer", () => {
@@ -151,17 +146,15 @@ test("preserves the original OpenCode no-terminal error when recovery fails", as
   assert.equal(recovery.recovery_error.code, "PROVIDER_NO_TERMINAL_RESULT"); assert.ok(recovery.recovery_raw_output_refs.raw_stdout_ref);
 });
 
-test("provider terminal recovery consumes one shared deadline", async () => {
+test("provider terminal recovery has no elapsed-time budget", async () => {
   const root = temp(); const value = config(root, [["opencode"]]);
   value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "deadline";
-  const result = await new Broker(value, { maxDurationMs: 100, watchdogIntervalMs: 2, terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  const result = await new Broker(value, { terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   const state = readRuntime(root, result.runtime_id); const provider = state.providers.opencode;
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
+  assert.equal(result.providers[0].status, "completed");
   assert.equal(provider.attempts.length, 2);
-  assert.equal(provider.attempts[1].error.code, "PROCESS_TIMEOUT");
-  const remainingLimit = Number(provider.attempts[1].error.message.match(/max duration of (\d+)ms$/)?.[1]);
-  assert.ok(Number.isInteger(remainingLimit) && remainingLimit < 100, `recovery received a fresh deadline: ${provider.attempts[1].error.message}`);
+  assert.equal(provider.attempts[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
+  assert.equal(provider.attempts[1].error, null);
 });
 
 test("does not recover an OpenCode terminal failure without a session id", async () => {

@@ -35,10 +35,6 @@ test("OpenCode start and resume attach to one loopback server owned by the plan"
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--attach") + 1], resumed.healthServer.url);
   assert.equal(resumed.clientArgv[resumed.clientArgv.indexOf("--session") + 1], "ses_keep");
   assert.deepEqual(resumed.healthServer.bind, { hostname: "127.0.0.1", port: Number(new URL(resumed.healthServer.url).port) });
-  assert.equal(Object.hasOwn(first, "maxDurationMs"), false);
-  assert.equal(Object.hasOwn(first, "maxIdleProgressMs"), false);
-  const firstSpecification = JSON.parse(Buffer.from(first.argv[0], "base64url").toString("utf8"));
-  assert.equal(Object.hasOwn(firstSpecification, "maxDurationMs"), false);
   assert.match(opencode.terminalRecoveryPrompt, /Do not perform any further tool calls/i);
   assert.doesNotMatch(opencode.terminalRecoveryPrompt, /unless strictly necessary/i);
 });
@@ -101,9 +97,9 @@ function runSupervisor(specification) {
   });
 }
 
-function supervisorSpecification(delayMs, mode = "complete", session = null, legacyMaxDurationMs = null) {
+function supervisorSpecification(delayMs, mode = "complete", session = null) {
   const port = supervisorPort++; const url = `http://127.0.0.1:${port}`;
-  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session, delayMs, mode, ...(legacyMaxDurationMs === null ? {} : { maxDurationMs: legacyMaxDurationMs }) };
+  return { command: supervisorFixture, url, port, clientArgv: ["run", "--attach", url], session, delayMs, mode };
 }
 
 test("OpenCode supervisor waits for a fresh session after the attached client exits", async () => {
@@ -115,7 +111,7 @@ test("OpenCode supervisor waits for a fresh session after the attached client ex
 
 test("OpenCode supervisor never terminates a health-confirmed active session by fixed elapsed time", async () => {
   for (const session of [null, "fixture_session"]) {
-    const specification = supervisorSpecification(2_000, "complete", session, 100);
+    const specification = supervisorSpecification(2_000, "complete", session);
     const encoded = Buffer.from(JSON.stringify(specification), "utf8").toString("base64url");
     const child = spawn(process.execPath, [supervisor, encoded], { cwd: process.cwd(), env: { ...process.env, OPENCODE_FIXTURE_DELAY_MS: "2000", OPENCODE_FIXTURE_MODE: "complete" }, stdio: ["pipe", "pipe", "pipe"] });
     let stderr = ""; child.stderr.on("data", (chunk) => { stderr += chunk; }); child.stdin.end();
