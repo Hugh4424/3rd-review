@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { execute } from "../lib/process.mjs";
 import { jsonProgress } from "../lib/adapters/shared.mjs";
-import { terminateProcess } from "../lib/runtime.mjs";
+import { isAlive, terminateProcess } from "../lib/runtime.mjs";
 
 const silent = path.resolve("test/silent-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
@@ -13,6 +13,7 @@ const fail = path.resolve("test/fail-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
 const duplicate = path.resolve("test/duplicate-progress-cli.mjs");
 const providerFailure = path.resolve("test/provider-failure-cli.mjs");
+const ignoreSigterm = path.resolve("test/ignore-sigterm-cli.mjs");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function plan(command, env = {}) { return { command, argv: [], cwd: fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-process-test-")), input: null, env: { ...process.env, ...env }, redact: [] }; }
 
@@ -90,6 +91,60 @@ test("an opted-in provider max duration terminates a live process", async () => 
   assert.equal(result.error.code, "PROCESS_TIMEOUT");
   assert.match(result.error.message, /60ms/);
   assert.ok(result.duration_ms < 500);
+});
+
+test("timeout eventually kills a provider that ignores SIGTERM", async () => {
+  let pid = null;
+  try {
+    const result = await execute({ ...plan(process.execPath), argv: [ignoreSigterm] }, {
+      maxOutputBytes: 4096,
+      maxDurationMs: 20,
+      watchdogIntervalMs: 2,
+      terminationGraceMs: 30,
+      onStart: (value) => { pid = value; },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "PROCESS_TIMEOUT");
+    await delay(80);
+    assert.equal(isAlive(pid), false);
+  } finally {
+    if (isAlive(pid)) terminateProcess(pid, "SIGKILL");
+  }
+});
+
+test("timeout kills descendants after a provider leader exits", async () => {
+  let pid = null;
+  let descendantPid = null;
+  const marker = path.join(os.tmpdir(), `3rd-review-process-tree-${process.pid}-${Date.now()}.json`);
+  const stubborn = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+  const leader = [
+    "const fs = require('node:fs');",
+    "const { spawn } = require('node:child_process');",
+    "const marker = process.argv[1];",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(stubborn)}], { stdio: 'ignore' });`,
+    "fs.writeFileSync(marker, JSON.stringify({ child: child.pid }));",
+    "process.on('SIGTERM', () => process.exit(0));",
+    "setInterval(() => {}, 1000);",
+  ].join(" ");
+  try {
+    const result = await execute({ ...plan(process.execPath), argv: ["-e", leader, marker] }, {
+      maxOutputBytes: 4096,
+      maxDurationMs: 20,
+      watchdogIntervalMs: 2,
+      terminationGraceMs: 30,
+      onStart: (value) => { pid = value; },
+    });
+    assert.equal(result.error.code, "PROCESS_TIMEOUT");
+    for (let attempt = 0; attempt < 100 && !fs.existsSync(marker); attempt += 1) await delay(5);
+    descendantPid = JSON.parse(fs.readFileSync(marker, "utf8")).child;
+    await delay(80);
+    assert.equal(isAlive(pid), false);
+    assert.equal(isAlive(descendantPid), false);
+  } finally {
+    if (isAlive(pid)) terminateProcess(pid, "SIGKILL");
+    if (isAlive(descendantPid)) terminateProcess(descendantPid, "SIGKILL");
+    try { fs.unlinkSync(marker); } catch {}
+  }
 });
 
 test("an opted-in provider idle progress limit terminates a silent process", async () => {
