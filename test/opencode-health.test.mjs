@@ -241,7 +241,7 @@ test("OpenCode classifies an idle tool-only turn as an explicit terminal failure
   assert.match(result.evidence, /tool-only/i);
 });
 
-test("OpenCode classifies an idle session without a terminal assistant as terminal failure", async () => {
+test("OpenCode classifies an explicit idle session without a terminal assistant as terminal failure", async () => {
   const messages = [{
     info: { id: "msg_idle", sessionID: "ses_idle", role: "assistant" },
     parts: [{ id: "prt_reasoning", type: "reasoning", text: "stopped" }],
@@ -256,6 +256,21 @@ test("OpenCode classifies an idle session without a terminal assistant as termin
     message: "OpenCode session ended without a terminal assistant result",
   });
   assert.match(result.evidence, /not busy/i);
+});
+
+test("OpenCode keeps an unknown session status advisory while the process is still alive", async () => {
+  const messages = [{
+    info: { id: "msg_unknown_status", sessionID: "ses_unknown_status", role: "assistant" },
+    parts: [{ id: "prt_reasoning", type: "reasoning", text: "still running" }],
+  }];
+  const fetchImpl = async (url) => url.endsWith("/session/status") ? response({ ses_unknown_status: { type: "paused" } }) : response(messages);
+  const probe = createOpenCodeProbe({ url: "http://127.0.0.1:43210", fetchImpl });
+  const first = await probe({ session_id: "ses_unknown_status" });
+  assert.equal(first.status, "progressing");
+  const result = await probe({ session_id: "ses_unknown_status", cursor: first.cursor });
+  assert.equal(result.status, "unverifiable");
+  assert.equal(result.terminal, undefined);
+  assert.equal(result.error.code, "PROBE_STATUS_UNKNOWN");
 });
 
 test("OpenCode probe maps retry, failed, idle progress, unknown session, HTTP failure, and abort", async () => {

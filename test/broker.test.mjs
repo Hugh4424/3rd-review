@@ -15,6 +15,7 @@ const silent = path.resolve("test/silent-cli.mjs");
 const stream = path.resolve("test/stream-cli.mjs");
 const kimiRetry = path.resolve("test/kimi-retry-cli.mjs");
 const providerFailure = path.resolve("test/provider-failure-cli.mjs");
+const hugeOutput = path.resolve("test/huge-output-cli.mjs");
 const terminalRecovery = path.resolve("test/fake-opencode-terminal-recovery-cli.mjs");
 function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
   const ids = [...new Set(tiers.flat())];
@@ -93,6 +94,17 @@ test("reports missing environment authentication without running the provider", 
   assert.equal(result.providers[0].error.code, "AUTH_ENV_MISSING"); assert.equal(result.providers.length, 1); assert.equal(result.outcome, "invalid_output");
 });
 
+test("bounds private raw capture and preserves an explicit output-limit failure", async () => {
+  const root = temp(); const value = config(root, [["kimi"]]); value.providers.kimi.command = hugeOutput;
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.equal(result.providers[0].status, "failed");
+  assert.equal(result.providers[0].error.code, "PROVIDER_OUTPUT_LIMIT");
+  const state = readRuntime(root, result.runtime_id);
+  assert.ok(state.providers.kimi.raw_stdout_ref);
+  const rawSize = fs.statSync(path.join(root, result.runtime_id, state.providers.kimi.raw_stdout_ref)).size;
+  assert.ok(rawSize > 0 && rawSize <= 100_000);
+});
+
 test("persists OpenCode terminal failure classification and observed session identity", async () => {
   const root = temp(); const value = config(root, [["opencode"]]); value.providers.opencode.command = providerFailure;
   const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
@@ -106,7 +118,7 @@ test("persists OpenCode terminal failure classification and observed session ide
 
 test("recovers an OpenCode no-terminal result in the same native session", async () => {
   const root = temp(); const value = config(root, [["opencode"]]); value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "recovery-success";
-  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  const result = await new Broker(value).run({ version: 4, review_mode: "single_round", host_provider: "codex", prompt: "review", continuation: null });
   const provider = result.providers[0]; assert.equal(provider.status, "completed"); assert.equal(provider.session_id, "terminal-recovery-session"); assert.equal(JSON.parse(provider.output).verdict, "pass");
   assert.equal(provider.retry_count, 1); assert.equal(Object.hasOwn(provider, "terminal_recovery"), false);
   const state = JSON.parse(fs.readFileSync(path.join(root, result.runtime_id, "state.json"), "utf8")); const recovery = state.providers.opencode.terminal_recovery;
@@ -146,7 +158,7 @@ test("preserves the original OpenCode no-terminal error when recovery fails", as
   assert.equal(recovery.recovery_error.code, "PROVIDER_NO_TERMINAL_RESULT"); assert.ok(recovery.recovery_raw_output_refs.raw_stdout_ref);
 });
 
-test("provider terminal recovery has no elapsed-time budget", async () => {
+test("provider terminal recovery stays within its scoped recovery budget", async () => {
   const root = temp(); const value = config(root, [["opencode"]]);
   value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "deadline";
   const result = await new Broker(value, { terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
@@ -155,6 +167,19 @@ test("provider terminal recovery has no elapsed-time budget", async () => {
   assert.equal(provider.attempts.length, 2);
   assert.equal(provider.attempts[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
   assert.equal(provider.attempts[1].error, null);
+});
+
+test("bounded terminal recovery fails closed when the resumed provider never terminates", async () => {
+  const root = temp(); const value = config(root, [["opencode"]]);
+  value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "recovery-hang";
+  const result = await new Broker(value, { terminalRecoveryTimeoutMs: 20, terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  assert.equal(result.providers[0].status, "failed");
+  assert.equal(result.providers[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
+  const state = readRuntime(root, result.runtime_id); const recovery = state.providers.opencode.terminal_recovery;
+  assert.equal(recovery.recovered, undefined);
+  assert.equal(recovery.recovery_error.code, "PROVIDER_NO_TERMINAL_RESULT");
+  assert.ok(recovery.recovery_raw_output_refs.raw_stdout_ref);
+  assert.ok(state.providers.opencode.attempts[1].duration_ms < 500);
 });
 
 test("does not recover an OpenCode terminal failure without a session id", async () => {

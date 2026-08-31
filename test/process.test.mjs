@@ -136,6 +136,12 @@ test("large output is streamed without terminating the provider", async () => {
   assert.match(result.stdout, /retained privately/);
 });
 
+test("a provider line cannot grow the pending-line buffer without bound", async () => {
+  const result = await execute({ ...plan(process.execPath), argv: ["-e", "process.stdout.write('x'.repeat(20000))"] }, { maxOutputBytes: 4096, maxPendingLineBytes: 128 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "PROVIDER_OUTPUT_LINE_TOO_LARGE");
+});
+
 test("provider failure classification ignores review material on stdout", async () => {
   const result = await execute({ ...plan(process.execPath), argv: [providerFailure], observeLine: (streamName, line) => {
     if (streamName !== "stdout") return {};

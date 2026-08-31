@@ -24,6 +24,11 @@ if (mode === "recovery-fail") {
   process.exit(1);
 }
 
+if (mode === "recovery-hang") {
+  setInterval(() => {}, 1_000);
+  await new Promise(() => {});
+}
+
 if (mode === "deadline") await wait(75);
 
 const text = mode === "recovery-invalid" ? "```json\n{\"verdict\":\"pass\"}\n```" : mode === "recovery-mismatch" ? JSON.stringify({ verdict: "pass" }) : mode === "recovery-private" ? JSON.stringify({ verdict: "pass", source: "/private/recovery" }) : JSON.stringify({ verdict: "pass", source: "same-session-recovery" });
