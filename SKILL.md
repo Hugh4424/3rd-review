@@ -45,7 +45,7 @@ node {skill-root}/scripts/3rd-review.mjs run \
 - 自动排除 request 中的 `host_provider`；这是调用方受信任地声明的宿主身份，broker 不自动探测 host。成功和失败都返回，调用方自行合并成功意见。
 - 配置 key 可用裸 CLI id（如 `pi`）或 `CLI/model` 实例名（如 `pi/deepseek`、`pi/k3`）。实例名独立路由、session 和 runtime workspace；`provider_allowlist` 必须填写配置中的完整实例名。同一 CLI 的不同实例仍视为同源，不能互相审查。
 - 订阅 CLI 使用 `auth.type:"native"`；API-key provider 使用 `auth.type:"env"` 并只填写 `auth.env` 的变量名，绝不写入值。
-- 不 fresh fallback、不伪造成功。除 OpenCode 在首轮明确返回 `PROVIDER_NO_TERMINAL_RESULT` 且已观察到 native session 时，broker 最多用同一 session 做一次终态恢复外，不自动重试；恢复由 managed session、provider process 和 health guardian 的真实状态裁决，不使用 adapter 固定总时限或 idle 时限。失败仍 fail-closed，并保留两次私有 raw evidence。每个 provider 独立续跑自己的 session。
+- 不 fresh fallback、不伪造成功。除 OpenCode 在首轮明确返回 `PROVIDER_NO_TERMINAL_RESULT` 且已观察到 native session 时，broker 最多用同一 session 做一次终态恢复外，不自动重试；首轮 `single_round` 也允许这一次内部恢复，`full_only` 除外。初始 provider 执行不设总时限；同 session 恢复使用独立的 bounded recovery window（默认 30 秒），超时仍 fail-closed，并保留两次私有 raw evidence。每个 provider 独立续跑自己的 session。
 - `file_only` 先生成 delivery plan，再把完整、hash/size 校验的 `review-packet.v1.json`、`changes.diff`、`manifest.json` 复制到 provider 专用只读 bundle。Kimi/OpenCode 的 profile、运行配置和 legacy `review-input.md` 不放入该 bundle。prompt 不嵌入 diff，也不泄露宿主路径、worktree 或 git。
 - delivery receipt 使用明确字节语义：`material_total_bytes` 是 provider-visible 附件总字节（两种 delivery 都记录）；`rendered_prompt_bytes` 只在 `always_embed` 记录，表示 adapter model instruction、调用方审查指令和完整渲染附件组成的最终模型文本字节，并用于单次 512KB gate。禁止使用含糊的 `total_bytes`。
 - `file_only` 不依赖系统级 wrapper 或 root policy。broker 校验来源路径、普通单链接文件、size 与 SHA-256，把材料复制到 provider-private workspace，锁定副本，并在首次运行和续跑前重新验证冻结材料。
@@ -57,7 +57,7 @@ node {skill-root}/scripts/3rd-review.mjs run \
 - `status` 是公开投影，不返回 session、review output、raw output ref 或绝对路径。
 - 首轮结果含 `selected_tier`；续跑为 `null`。`cancelled` 是独立状态，不是 provider 失败。
 - 临时状态在 `/tmp/3rd-review`，每次命令自动清理超过 24 小时且没有活跃进程的状态。
-- `status` 查看活跃进程；只有 `cancel` 会终止进程。没有默认 120/180 秒限制。
+- `status` 查看活跃进程；只有 `cancel` 或明确终态失败会终止进程。初始执行没有默认 120/180 秒限制；仅同 session 终态恢复有独立的 bounded recovery window。
 - `doctor` 只验证 CLI executable，不能证明登录、认证或真实模型调用。
 
 查看完整异常语义与维护约束：[`docs/exceptions.md`](docs/exceptions.md)。

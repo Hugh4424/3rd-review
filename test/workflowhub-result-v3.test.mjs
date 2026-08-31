@@ -137,6 +137,19 @@ test("v3 allows ordinary slash-separated review terminology", () => {
   }, context));
 });
 
+test("v3 allows slash syntax after a function call without weakening private path rejection", () => {
+  assert.doesNotThrow(() => projectWorkflowHubMemberV3({
+    provider: "pi/k3", adapter: "pi", status: "completed",
+    output: JSON.stringify({ findings: [{ issue: "currentVNextSnapshot()/currentVNextMaterialRevision()" }] }),
+  }, context));
+  for (const issue of ["review /private/secret", "review /workspace/secret", "review file:///private/secret", "currentVNextSnapshot()/private/secret"]) {
+    assert.throws(() => projectWorkflowHubMemberV3({
+      provider: "pi/k3", adapter: "pi", status: "completed",
+      output: JSON.stringify({ findings: [{ issue }] }),
+    }, context), { code: "PUBLIC_RESULT_INVALID" });
+  }
+});
+
 test("v3 rejects untyped usage, invalid provenance hashes, and inconsistent recovery facts", () => {
   assert.throws(() => projectWorkflowHubMemberV3({ provider: "pi/k3", adapter: "pi", status: "failed", output: null, usage: [] }, context), { code: "PUBLIC_RESULT_INVALID" });
   assert.throws(() => projectWorkflowHubMemberV3({ provider: "pi/k3", adapter: "pi", status: "failed", output: null }, { ...context, raw_output_sha256: "not-a-sha" }), { code: "PUBLIC_RESULT_INVALID" });
