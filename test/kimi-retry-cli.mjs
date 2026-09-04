@@ -1,19 +1,7 @@
 #!/usr/bin/env node
-import readline from "node:readline";
-
 const session = "12345678-1234-1234-1234-123456789abc";
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const input = readline.createInterface({ input: process.stdin });
-
-input.on("line", (line) => {
-  const request = JSON.parse(line);
-  if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocol_version: "1.10" } });
-  if (request.method === "prompt") {
-    process.stderr.write("APIEmptyResponseError: empty response\nAPIEmptyResponseError: empty response\n");
-    send({ jsonrpc: "2.0", method: "event", params: { type: "StepRetry", payload: { n: 1, next_attempt: 2, max_attempts: 3, wait_s: 0, error_type: "APIEmptyResponseError" } } });
-    send({ jsonrpc: "2.0", method: "event", params: { type: "ContentPart", payload: { type: "text", text: "kimi opinion" } } });
-    send({ jsonrpc: "2.0", id: request.id, result: { status: "finished" } });
-  }
-});
-
-input.on("close", () => process.stderr.write(`To resume this session: kimi -r ${session}\n`));
+process.stderr.write("APIEmptyResponseError: empty response\nAPIEmptyResponseError: empty response\n");
+send({ role: "meta", type: "system.version", version: "0.40.1" });
+send({ role: "assistant", content: "kimi opinion" });
+send({ role: "meta", type: "session.resume_hint", session_id: session, command: `kimi -r ${session}` });
