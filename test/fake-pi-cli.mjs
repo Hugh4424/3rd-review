@@ -66,7 +66,10 @@ function runTurn(prompt) {
   emit({ type: "message_start", message: userMessage });
   emit({ type: "message_end", message: userMessage });
   emit({ type: "message_start", message: { role: "assistant", content: [], model: "deepseek-v4-flash", timestamp: 2 } });
-  emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "x".repeat(process.env.PI_FAKE_OVERSIZED_UPDATE === "1" ? 1024 * 1024 + 1 : 8192) } });
+  emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "x".repeat(
+  process.env.PI_FAKE_OVERSIZED_UPDATE === "1" ? 10 * 1024 * 1024 + 1
+    : process.env.PI_FAKE_LARGE_LEGAL_EVENT === "1" ? 2 * 1024 * 1024
+      : 8192) } });
   const fixturePath = String.fromCharCode(47, 112, 114, 105, 118, 97, 116, 101, 47, 102, 105, 120, 116, 117, 114, 101);
   const outputCase = process.env.PI_FAKE_OUTPUT_CASE;
   const text = outputCase === "private-then-safe"

@@ -98,6 +98,8 @@ test("Pi progress does not preserve repeated raw thinking snapshots", () => {
   assert.equal(pi.observeLine("stdout", "bad").progress, false);
 });
 
+// The per-event cap is 10 MiB because a legal review answer is one JSONL event
+// and can exceed 1 MiB. This test still exercises the guard at that bound.
 test("Pi wrapper rejects malformed terminal events and oversized raw JSONL", async () => {
   const runtime = temp(); const cwd = temp();
   for (const env of [["PI_FAKE_MISSING_WILL_RETRY"], ["PI_FAKE_OVERSIZED_UPDATE"]]) {
@@ -132,4 +134,22 @@ test("Pi wrapper handles an unexecutable native CLI without an uncaught stdin er
   const execution = pi.start(provider({ command: "/definitely/not/a/pi-cli" }), temp(), "review", temp());
   const result = await execute(execution, { maxOutputBytes: 100_000, healthCheckIntervalMs: 10_000 });
   assert.equal(result.ok, false);
+});
+
+test("Pi accepts a legal JSONL event larger than 1 MiB under the default per-event cap", async () => {
+  // Regression: the answer to a review is a single JSONL event. The cap used to
+  // be 1 MiB, so a large-but-valid event was rejected as a protocol violation
+  // ("Pi emitted an event larger than 1048576 bytes"), the provider exited 1,
+  // and the broker reported PROVIDER_OUTPUT_INVALID.
+  const runtime = temp(); const cwd = temp();
+  const old = process.env.PI_FAKE_LARGE_LEGAL_EVENT;
+  process.env.PI_FAKE_LARGE_LEGAL_EVENT = "1";
+  try {
+    const execution = pi.start(provider(), cwd, "review", runtime);
+    const result = await execute(execution, { maxOutputBytes: 64 * 1024 * 1024, maxPendingLineBytes: 64 * 1024 * 1024, healthCheckIntervalMs: 10_000 });
+    assert.equal(result.stderr.includes("larger than"), false);
+    assert.equal(result.ok, true);
+  } finally {
+    if (old === undefined) delete process.env.PI_FAKE_LARGE_LEGAL_EVENT; else process.env.PI_FAKE_LARGE_LEGAL_EVENT = old;
+  }
 });
