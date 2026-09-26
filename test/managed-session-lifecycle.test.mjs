@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
 import { validateConfig } from "../lib/config.mjs";
-import { cleanup, isAlive, readRuntime, updateRuntime } from "../lib/runtime.mjs";
+import { cleanup, createRuntime, currentOwnerIdentity, ensureRuntimeGuardian, processIdentity, readRuntime, reapRuntimeIfOwnerDead, updateRuntime, workerIdentityMatches } from "../lib/runtime.mjs";
 
 const fake = path.resolve("test/fake-cli.mjs");
 const slow = path.resolve("test/slow-cli.mjs");
@@ -33,10 +33,85 @@ function config(root, sources, providers, tiers = [Object.keys(providers)]) {
 }
 function provider(command, extra = {}) { return { enabled: true, command, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [], ...extra }; }
 function request(attachment, prompt = "review", continuation = null, allowlist = ["kimi"]) { return { version: 4, host_provider: "codex", required_result_protocol: "workflowhub-result.v2", provider_allowlist: allowlist, prompt, continuation, attachments: attachment }; }
+function sigtermIgnoringProvider(root) {
+  const command = path.join(root, "sigterm-ignoring-provider.mjs");
+  const ready = path.join(root, "provider-sigterm-handler-ready");
+  // Provider adapters append their native CLI flags after the configured
+  // command. A shell script ignores those positional arguments and traps
+  // SIGTERM, while its sleep child is replaceable. The ready marker lets the
+  // test avoid racing a signal against handler installation.
+  const quotedReady = `'${ready.replaceAll("'", "'\\''")}'`;
+  fs.writeFileSync(command, `#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' "$$" > ${quotedReady}\nwhile :; do /bin/sleep 10; done\n`, { mode: 0o700 });
+  fs.chmodSync(command, 0o700);
+  return { command, ready };
+}
+function heldProviderUntilRelease(root) {
+  const command = path.join(root, "held-provider-until-release.sh");
+  const ready = path.join(root, "held-provider-ready");
+  const release = path.join(root, "held-provider-release");
+  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const script = [
+    "#!/bin/sh",
+    "printf 'ready\\n' > " + quote(ready),
+    "while [ ! -e " + quote(release) + " ]; do /bin/sleep 0.01; done",
+    "exec " + quote(process.execPath) + " " + quote(slowSuccess) + " \"$@\"",
+    "",
+  ].join("\n");
+  fs.writeFileSync(command, script, { mode: 0o700 });
+  fs.chmodSync(command, 0o700);
+  return { command, ready, release };
+}
+function hideManagedManagerIdentityOnce(root, providerReady) {
+  const directory = path.join(root, "ps-shim"); fs.mkdirSync(directory, { mode: 0o700 });
+  const command = path.join(directory, "ps"); const hidden = path.join(directory, "manager-identity-hidden");
+  const quoted = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  fs.writeFileSync(command, `#!/bin/sh
+pid=""
+for arg do pid="$arg"; done
+target_parent=$(/bin/ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+if [ "$pid" != "$PPID" ] && [ "$target_parent" = "$PPID" ]; then
+  attempt=0
+  target=""
+  while [ "$attempt" -lt 300 ]; do
+    target=$(/bin/ps -o command= -p "$pid" 2>/dev/null)
+    case "$target" in *managed-session-manager.mjs*) break ;; esac
+    /bin/sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  case "$target" in
+    *managed-session-manager.mjs*)
+      if [ ! -e ${quoted(hidden)} ]; then
+        attempt=0
+        while [ ! -e ${quoted(providerReady)} ] && [ "$attempt" -lt 300 ]; do /bin/sleep 0.01; attempt=$((attempt + 1)); done
+        if [ -e ${quoted(providerReady)} ]; then printf '%s\\n' "$pid" > ${quoted(hidden)}; exit 1; fi
+      fi
+      ;;
+  esac
+fi
+exec /bin/ps "$@"
+`, { mode: 0o700 });
+  fs.chmodSync(command, 0o700);
+  return { directory, hidden };
+}
 async function terminal(broker, runtimeId, timeout = 4_000) {
   const until = Date.now() + timeout;
   while (Date.now() < until) { const value = broker.managedStatus(runtimeId); if (value.state === "terminal") return value; await delay(20); }
   assert.fail("managed review did not finish");
+}
+async function removeTempTree(root) {
+  const makeDirectoriesWritable = (directory) => {
+    if (!fs.existsSync(directory)) return;
+    fs.chmodSync(directory, 0o700);
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) makeDirectoriesWritable(path.join(directory, entry.name));
+    }
+  };
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try { makeDirectoriesWritable(root); fs.rmSync(root, { recursive: true, force: true }); return; }
+    catch (error) { if (!['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error?.code)) throw error; await delay(25); }
+  }
+  makeDirectoriesWritable(root);
+  fs.rmSync(root, { recursive: true, force: true });
 }
 async function spawnedStart(configPath, requestPath, requestId) {
   const child = spawn(process.execPath, [caller, configPath, requestPath, requestId], { stdio: ["ignore", "pipe", "pipe"] }); let text = "";
@@ -75,6 +150,111 @@ test("managed public status follows the current operation from starting through 
   const finished = await terminal(broker, start.runtime_id);
   assert.equal(finished.state, "terminal"); assert.equal(Object.hasOwn(finished, "group"), true);
   assert.equal(finished.group.providers[0].error.code, "CANCELLED");
+});
+
+test("managed health matches the WorkflowHub consumer contract", async () => {
+  const root = temp(); const material = source(root);
+  const providerIds = ["kimi", "claude-code"];
+  const value = config(root, [material], {
+    kimi: provider(slow),
+    "claude-code": provider(fake),
+  }, [providerIds]);
+  const broker = new Broker(value);
+  const review = request(material.attachment, "provider health", null, providerIds);
+  const start = broker.startManaged(review, "provider-health");
+  let finished;
+
+  function assertHealth(envelope, allowedStatuses) {
+    assert.ok(envelope.providers && typeof envelope.providers === "object" && !Array.isArray(envelope.providers));
+    assert.deepEqual(Object.keys(envelope.providers).sort(), [...providerIds].sort());
+    for (const id of providerIds) {
+      const health = envelope.providers[id];
+      assert.ok(health && typeof health === "object" && !Array.isArray(health));
+      assert.ok(allowedStatuses.includes(health.status), `${id} status ${health.status} is accepted by WorkflowHub`);
+      assert.equal(Object.hasOwn(health, "last_progress_at_ms"), true);
+      assert.ok(health.last_progress_at_ms === null
+        || (Number.isSafeInteger(health.last_progress_at_ms) && health.last_progress_at_ms >= 0));
+    }
+  }
+
+  try {
+    assert.ok(["starting", "running"].includes(start.state));
+    assert.equal(Object.hasOwn(start, "group"), false);
+    assertHealth(start, ["pending", "running", "completed"]);
+    assert.ok(["pending", "running"].includes(start.providers.kimi.status));
+
+    let state;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      state = readRuntime(root, start.runtime_id);
+      if (state.providers.kimi?.status === "running" && state.providers["claude-code"]?.status === "completed") break;
+      await delay(10);
+    }
+    assert.equal(state.providers.kimi?.status, "running");
+    assert.equal(state.providers["claude-code"]?.status, "completed");
+
+    const running = broker.managedStatus(start.runtime_id);
+    assert.equal(running.state, "running");
+    assert.equal(Object.hasOwn(running, "group"), false);
+    assertHealth(running, ["pending", "running", "completed", "failed", "cancelled"]);
+    assert.equal(running.providers.kimi.status, "running");
+    assert.equal(running.providers["claude-code"].status, "completed");
+
+    broker.cancelManaged(start.runtime_id);
+    finished = await terminal(broker, start.runtime_id);
+  } finally {
+    if (broker.managedStatus(start.runtime_id).state !== "terminal") broker.cancelManaged(start.runtime_id);
+    await terminal(broker, start.runtime_id);
+  }
+
+  assert.equal(finished.state, "terminal");
+  assert.equal(Object.hasOwn(finished, "providers"), false);
+  assert.equal(Object.hasOwn(finished, "group"), true);
+});
+
+test("managed health stays running without progress beyond ten minutes until the provider reaches terminal", async (t) => {
+  const root = temp(); const material = source(root); const held = heldProviderUntilRelease(root);
+  const value = config(root, [material], { kimi: provider(held.command) }); const broker = new Broker(value);
+  const start = broker.startManaged(request(material.attachment), "managed-health-no-deadline");
+  let finished = null;
+
+  try {
+    for (let attempt = 0; attempt < 300 && !fs.existsSync(held.ready); attempt += 1) await delay(10);
+    assert.equal(fs.existsSync(held.ready), true, "provider started and is holding without output");
+    let state;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      state = readRuntime(root, start.runtime_id);
+      if (state.managed.operations[0].state === "running" && state.providers.kimi?.status === "running") break;
+      await delay(10);
+    }
+    assert.equal(state.managed.operations[0].state, "running");
+    assert.equal(state.providers.kimi.status, "running");
+    const worker = state.providers.kimi.worker;
+    const lastProgressAt = state.providers.kimi.last_progress_at_ms;
+    assert.equal(lastProgressAt, null, "the provider has not emitted progress");
+
+    const beforeElapsedJump = Date.now();
+    t.mock.method(Date, "now", () => beforeElapsedJump + 600_001);
+    let afterElapsed;
+    try { afterElapsed = broker.managedStatus(start.runtime_id); }
+    finally { t.mock.restoreAll(); }
+
+    assert.equal(afterElapsed.state, "running");
+    assert.equal(afterElapsed.providers.kimi.status, "running");
+    assert.equal(afterElapsed.providers.kimi.last_progress_at_ms, lastProgressAt);
+    assert.equal(readRuntime(root, start.runtime_id).managed.operations[0].cancel_requested, false);
+    assert.equal(workerIdentityMatches(worker), true, "elapsed time must not stop the active provider");
+
+    fs.writeFileSync(held.release, "terminal\n");
+    finished = await terminal(broker, start.runtime_id);
+    assert.equal(finished.state, "terminal");
+    assert.equal(finished.group.providers[0].status, "completed");
+    assert.equal(finished.group.providers[0].output, "slow opinion");
+  } finally {
+    t.mock.restoreAll();
+    if (broker.managedStatus(start.runtime_id).state !== "terminal") broker.cancelManaged(start.runtime_id);
+    if (!finished) await terminal(broker, start.runtime_id);
+    await removeTempTree(root);
+  }
 });
 
 test("CLI exposes public managed start, status, and provider-free cancel", async () => {
@@ -122,15 +302,379 @@ test("managed cancel is the only provider stop path and publishes a terminal can
   assert.equal(finished.group.providers[0].status, "cancelled"); assert.equal(finished.group.providers[0].error.code, "CANCELLED");
 });
 
-test("lost manager publishes SESSION_MANAGER_LOST without signalling a healthy provider, then explicit cancel stops it", async () => {
+test("lost manager reaps the orphaned provider before publishing SESSION_MANAGER_LOST", async () => {
   const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(slow) }); const broker = new Broker(value);
   const start = broker.startManaged(request(material.attachment), "manager-lost"); let state;
   for (let attempt = 0; attempt < 100; attempt += 1) { state = readRuntime(root, start.runtime_id); if (state.managed.operations[0].manager && state.providers.kimi?.worker) break; await delay(10); }
-  assert.ok(state.managed.operations[0].manager?.pid); const providerPid = state.providers.kimi.pid; assert.equal(process.kill(state.managed.operations[0].manager.pid, "SIGTERM"), true);
-  await delay(30); const lost = broker.managedStatus(start.runtime_id); assert.equal(lost.state, "terminal"); assert.equal(lost.group.providers[0].error.code, "SESSION_MANAGER_LOST"); assert.equal(isAlive(providerPid), true);
-  assert.throws(() => broker.cancel(start.runtime_id, "kimi"), { code: "MANAGED_CANCEL_REQUIRED" });
-  const cancelled = broker.cancelManaged(start.runtime_id); assert.equal(cancelled.group.providers[0].error.code, "CANCELLED");
-  for (let attempt = 0; attempt < 100 && isAlive(providerPid); attempt += 1) await delay(10); assert.equal(isAlive(providerPid), false);
+  const manager = state.managed.operations[0].manager; const worker = state.providers.kimi.worker;
+  assert.ok(manager?.pid); assert.equal(process.kill(manager.pid, "SIGTERM"), true);
+  let lost = null; const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    lost = broker.managedStatus(start.runtime_id);
+    if (lost.state === "terminal") { assert.equal(workerIdentityMatches(worker), false); break; }
+    assert.equal(lost.state, "running"); await delay(25);
+  }
+  assert.ok(lost?.state === "terminal");
+  assert.equal(lost.group.providers[0].error.code, "SESSION_MANAGER_LOST");
+  assert.equal(workerIdentityMatches(worker), false);
+  assert.equal(readRuntime(root, start.runtime_id).providers.kimi.cleanup_status, "confirmed");
+});
+
+test("managed start stays nonterminal when manager PID identity is unavailable after provider start", async () => {
+  const root = temp(); const material = source(root); const fakeProvider = sigtermIgnoringProvider(root);
+  const shim = hideManagedManagerIdentityOnce(root, fakeProvider.ready);
+  const value = config(root, [material], { kimi: provider(fakeProvider.command) }); const broker = new Broker(value);
+  const originalPath = process.env.PATH; let start = null; let manager = null; let worker = null; let guardian = null;
+  try {
+    process.env.PATH = [shim.directory, originalPath ?? ""].join(path.delimiter);
+    start = broker.startManaged(request(material.attachment), "manager-identity-query-race");
+    process.env.PATH = originalPath;
+
+    assert.equal(fs.existsSync(shim.hidden), true, "the test hides only the spawned manager's exact ps identity");
+    assert.notEqual(start.state, "terminal", "an unverified child PID is not proof of manager loss");
+    assert.equal(Object.hasOwn(start, "group"), false);
+    const providerPid = Number(fs.readFileSync(fakeProvider.ready, "utf8").trim());
+    worker = processIdentity(providerPid);
+    const managerPid = Number(fs.readFileSync(shim.hidden, "utf8").trim());
+    manager = processIdentity(managerPid);
+    const state = readRuntime(root, start.runtime_id);
+    assert.ok(worker && workerIdentityMatches(worker), "provider is physically active even if the parent has not read back its provider record yet");
+    assert.ok(manager && workerIdentityMatches(manager), "the exact managed-session-manager remains alive");
+    assert.equal(workerIdentityMatches(worker), true);
+    assert.equal(workerIdentityMatches(manager), true);
+  } finally {
+    process.env.PATH = originalPath;
+    if (start) {
+      try { guardian = JSON.parse(fs.readFileSync(path.join(root, start.runtime_id, ".guardian", "owner.json"), "utf8")); } catch {}
+    }
+    if (guardian && workerIdentityMatches(guardian)) { try { process.kill(guardian.pid, "SIGKILL"); } catch {} }
+    if (manager && workerIdentityMatches(manager)) { try { process.kill(manager.pid, "SIGKILL"); } catch {} }
+    if (worker && workerIdentityMatches(worker)) { try { process.kill(-worker.pid, "SIGKILL"); } catch {} }
+    for (let attempt = 0; attempt < 100 && guardian && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+    for (let attempt = 0; attempt < 100 && manager && workerIdentityMatches(manager); attempt += 1) await delay(10);
+    for (let attempt = 0; attempt < 100 && worker && workerIdentityMatches(worker); attempt += 1) await delay(10);
+    await removeTempTree(root);
+  }
+});
+
+test("managed manager loss stays nonterminal until a SIGTERM-ignoring worker is gone", async () => {
+  const root = temp(); const material = source(root); const fakeProvider = sigtermIgnoringProvider(root);
+  const value = config(root, [material], { kimi: provider(fakeProvider.command) }); const broker = new Broker(value);
+  const configPath = path.join(root, "config.json"); fs.writeFileSync(configPath, JSON.stringify(value));
+  const cliStatus = async (runtimeId) => {
+    const result = await callCli(["status", `--config=${configPath}`, `--runtime-id=${runtimeId}`]);
+    assert.equal(result.code, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  let runtimeId = null; let manager = null; let worker = null; let guardian = null;
+
+  try {
+    const start = broker.startManaged(request(material.attachment), "manager-lost-sigterm-ignored"); runtimeId = start.runtime_id;
+    let state;
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      state = readRuntime(root, runtimeId);
+      if (state.managed.operations[0].manager && state.providers.kimi?.worker && state.providers.kimi.status === "running" && fs.existsSync(fakeProvider.ready)) break;
+      await delay(10);
+    }
+    manager = state.managed.operations[0].manager; worker = state.providers.kimi.worker;
+    assert.ok(worker && workerIdentityMatches(worker));
+    assert.equal(process.kill(manager.pid, "SIGTERM"), true);
+    for (let attempt = 0; attempt < 100 && workerIdentityMatches(manager); attempt += 1) await delay(10);
+    assert.equal(workerIdentityMatches(manager), false, "manager SIGTERM should be confirmed before checking provider cleanup");
+
+    let duringCleanup;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      // Each call launches a fresh CLI process. Its in-memory escalation
+      // state disappears on exit; the existing detached guardian must own
+      // the TERM -> KILL window across these status invocations.
+      duringCleanup = await cliStatus(runtimeId);
+      state = readRuntime(root, runtimeId);
+      if (state.providers.kimi.cleanup_status === "cleanup_pending") break;
+      await delay(10);
+    }
+    assert.equal(duringCleanup.state, "running", JSON.stringify({ response: duringCleanup, provider: state.providers.kimi, worker_alive: workerIdentityMatches(worker) }));
+    assert.equal(workerIdentityMatches(worker), true);
+    assert.equal(state.providers.kimi.status, "running");
+    assert.equal(state.providers.kimi.orphan, true);
+    assert.equal(state.providers.kimi.cleanup_status, "cleanup_pending");
+    const guardianPath = path.join(root, runtimeId, ".guardian", "owner.json");
+    guardian = JSON.parse(fs.readFileSync(guardianPath, "utf8"));
+    assert.equal(workerIdentityMatches(guardian), true, "existing guardian remains alive to own escalation");
+
+    await delay(250);
+    duringCleanup = await cliStatus(runtimeId);
+    assert.equal(duringCleanup.state, "running");
+    assert.equal(workerIdentityMatches(worker), true, "worker must survive the SIGTERM grace period");
+
+    const deadline = Date.now() + 12_000; let terminalResult = null;
+    while (Date.now() < deadline) {
+      const current = await cliStatus(runtimeId);
+      if (current.state === "terminal") {
+        assert.equal(workerIdentityMatches(worker), false, "terminal manager-loss result must follow exact worker exit");
+        terminalResult = current; break;
+      }
+      assert.equal(current.state, "running");
+      await delay(50);
+    }
+    assert.ok(terminalResult, "SIGKILL escalation should eventually let manager-loss cleanup finish");
+    assert.equal(workerIdentityMatches(worker), false);
+    assert.equal(terminalResult.group.providers[0].error.code, "SESSION_MANAGER_LOST");
+    state = readRuntime(root, runtimeId);
+    assert.equal(state.providers.kimi.status, "failed");
+    assert.equal(state.providers.kimi.cleanup_status, "confirmed");
+    for (let attempt = 0; attempt < 150 && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+    assert.equal(workerIdentityMatches(guardian), false, "guardian exits after confirmed worker cleanup");
+  } finally {
+    if (manager && workerIdentityMatches(manager)) process.kill(manager.pid, "SIGKILL");
+    if (worker && workerIdentityMatches(worker)) process.kill(worker.pid, "SIGKILL");
+    if (runtimeId) {
+      const guardianPath = path.join(root, runtimeId, ".guardian", "owner.json");
+      try { guardian = JSON.parse(fs.readFileSync(guardianPath, "utf8")); } catch { guardian = null; }
+      for (let attempt = 0; attempt < 150 && guardian && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+      if (guardian && workerIdentityMatches(guardian)) process.kill(guardian.pid, "SIGKILL");
+      for (let attempt = 0; attempt < 100 && worker && workerIdentityMatches(worker); attempt += 1) await delay(10);
+      for (let attempt = 0; attempt < 100 && manager && workerIdentityMatches(manager); attempt += 1) await delay(10);
+      for (let attempt = 0; attempt < 100 && guardian && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+      for (let attempt = 0; attempt < 100 && fs.existsSync(path.join(root, runtimeId, ".guardian")); attempt += 1) await delay(10);
+    }
+    await removeTempTree(root);
+  }
+});
+
+test("expiry cleanup retains an orphan directory while its exact worker is cleanup-pending", async () => {
+  const root = temp(); const fakeProvider = sigtermIgnoringProvider(root);
+  const runtime = createRuntime(root, 24, "codex"); let worker = null; let guardian = null;
+
+  try {
+    const child = spawn(fakeProvider.command, [], { detached: true, stdio: "ignore" }); child.unref();
+    worker = processIdentity(child.pid);
+    for (let attempt = 0; attempt < 100 && (!workerIdentityMatches(worker) || !fs.existsSync(fakeProvider.ready)); attempt += 1) await delay(10);
+    assert.ok(worker && workerIdentityMatches(worker));
+    updateRuntime(root, runtime.runtime_id, (state) => ({
+      ...state,
+      expires_at_ms: 0,
+      owner: { ...currentOwnerIdentity(), pid: 999_999_999, started: "confirmed-dead-owner", started_at_ms: 1 },
+      providers: { kimi: { provider: "kimi", status: "running", pid: worker.pid, worker, started_at_ms: Date.now(), process_alive_at_ms: Date.now(), last_progress_at_ms: null } },
+    }));
+    assert.equal(ensureRuntimeGuardian(root, runtime.runtime_id), true);
+
+    let removed = cleanup(root, 24);
+    assert.equal(removed.includes(runtime.runtime_id), false);
+    let state = readRuntime(root, runtime.runtime_id);
+    assert.equal(state.providers.kimi.status, "running");
+    assert.equal(state.providers.kimi.cleanup_status, "cleanup_pending");
+    assert.equal(workerIdentityMatches(worker), true);
+    guardian = JSON.parse(fs.readFileSync(path.join(root, runtime.runtime_id, ".guardian", "owner.json"), "utf8"));
+    assert.equal(workerIdentityMatches(guardian), true);
+
+    await delay(250);
+    removed = cleanup(root, 24);
+    assert.equal(removed.includes(runtime.runtime_id), false, "TTL cannot remove the runtime before exact worker exit");
+    assert.equal(fs.existsSync(path.join(root, runtime.runtime_id, "state.json")), true);
+    assert.equal(workerIdentityMatches(worker), true);
+
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline && workerIdentityMatches(worker)) await delay(50);
+    assert.equal(workerIdentityMatches(worker), false, "owner-loss guardian should escalate TERM to KILL");
+    reapRuntimeIfOwnerDead(root, runtime.runtime_id);
+    state = readRuntime(root, runtime.runtime_id);
+    assert.equal(state.providers.kimi.status, "failed");
+    assert.equal(state.providers.kimi.cleanup_status, "confirmed");
+    for (let attempt = 0; attempt < 150 && guardian && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+    assert.equal(workerIdentityMatches(guardian), false, "guardian should stop after confirmed cleanup");
+    removed = cleanup(root, 24);
+    assert.equal(removed.includes(runtime.runtime_id), true, "expired runtime can be removed after cleanup is confirmed");
+  } finally {
+    if (worker && workerIdentityMatches(worker)) process.kill(worker.pid, "SIGKILL");
+    if (guardian && workerIdentityMatches(guardian)) process.kill(guardian.pid, "SIGKILL");
+    for (let attempt = 0; attempt < 100 && worker && workerIdentityMatches(worker); attempt += 1) await delay(10);
+    for (let attempt = 0; attempt < 100 && guardian && workerIdentityMatches(guardian); attempt += 1) await delay(10);
+    for (let attempt = 0; attempt < 100 && fs.existsSync(path.join(root, runtime.runtime_id, ".guardian")); attempt += 1) await delay(10);
+    await removeTempTree(root);
+  }
+});
+
+test("expired cleanup preserves a parsed runtime when orphan reaper persistence fails", async () => {
+  const root = temp(); const fakeProvider = sigtermIgnoringProvider(root); const runtime = createRuntime(root, 24, "codex");
+  let worker = null; const statePath = path.join(root, runtime.runtime_id, "state.json"); const originalRenameSync = fs.renameSync;
+  try {
+    const child = spawn(fakeProvider.command, [], { detached: true, stdio: "ignore" }); child.unref();
+    worker = processIdentity(child.pid);
+    for (let attempt = 0; attempt < 100 && (!workerIdentityMatches(worker) || !fs.existsSync(fakeProvider.ready)); attempt += 1) await delay(10);
+    assert.ok(worker && workerIdentityMatches(worker));
+    updateRuntime(root, runtime.runtime_id, (state) => ({
+      ...state,
+      expires_at_ms: 0,
+      owner: { ...currentOwnerIdentity(), pid: 999_999_999, started: "confirmed-dead-owner", started_at_ms: 1 },
+      providers: { kimi: { provider: "kimi", status: "running", pid: worker.pid, worker, orphan: false, cleanup_status: "cleanup_pending", dispatch_status: "dispatched", started_at_ms: Date.now() } },
+    }));
+
+    fs.renameSync = function (source, destination, ...args) {
+      if (path.resolve(String(destination)) === statePath) throw Object.assign(new Error("simulated runtime state write failure"), { code: "EIO" });
+      return originalRenameSync.call(this, source, destination, ...args);
+    };
+    const removed = cleanup(root, -1); // force the stale-file fallback if the catch path permits deletion
+    assert.equal(removed.includes(runtime.runtime_id), false, "a parsed live/pending runtime must survive a reaper write failure");
+    assert.equal(fs.existsSync(statePath), true);
+    assert.equal(readRuntime(root, runtime.runtime_id).providers.kimi.cleanup_status, "cleanup_pending");
+    assert.equal(workerIdentityMatches(worker), true);
+  } finally {
+    fs.renameSync = originalRenameSync;
+    if (worker && workerIdentityMatches(worker)) { try { process.kill(-worker.pid, "SIGKILL"); } catch {} }
+    for (let attempt = 0; attempt < 100 && worker && workerIdentityMatches(worker); attempt += 1) await delay(10);
+    await removeTempTree(root);
+  }
+});
+
+test("manager loss preserves a completed sibling for v2 and v3 while marking only the live route orphaned", async () => {
+  for (const protocol of ["workflowhub-result.v2", "workflowhub-result.v3"]) {
+    const root = temp(); const material = source(root);
+    const value = config(root, [material], {
+      "claude-code": provider(fake),
+      kimi: provider(slow),
+    }, [["claude-code", "kimi"]]);
+    const broker = new Broker(value);
+    const review = request(material.attachment, "preserve completed sibling", null, ["claude-code", "kimi"]);
+    review.required_result_protocol = protocol;
+    review.review_mode = "single_round";
+    const start = broker.startManaged(review, `manager-lost-sibling-${protocol}`);
+    let state;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      state = readRuntime(root, start.runtime_id);
+      if (state.providers["claude-code"]?.status === "completed" && state.providers.kimi?.status === "running") break;
+      await delay(10);
+    }
+    assert.equal(state.providers["claude-code"]?.status, "completed");
+    assert.equal(state.providers.kimi?.status, "running");
+    const providerWorker = state.providers.kimi.worker;
+    assert.ok(state.managed.operations[0].manager?.pid);
+    assert.equal(process.kill(state.managed.operations[0].manager.pid, "SIGTERM"), true);
+    let lost = null; const managerLossDeadline = Date.now() + 10_000;
+    while (Date.now() < managerLossDeadline) {
+      lost = broker.managedStatus(start.runtime_id);
+      if (lost.state === "terminal") { assert.equal(workerIdentityMatches(providerWorker), false); break; }
+      assert.equal(lost.state, "running"); await delay(25);
+    }
+    assert.ok(lost?.state === "terminal");
+    const members = Object.fromEntries(lost.group.providers.map((item) => [item.identity?.provider ?? item.provider, item]));
+    assert.equal(members["claude-code"].status, "completed");
+    assert.equal(members.kimi.error.code, "SESSION_MANAGER_LOST");
+    assert.equal(lost.group.outcome, protocol === "workflowhub-result.v2" ? "completed" : "partial");
+    const reaped = readRuntime(root, start.runtime_id).providers.kimi;
+    assert.equal(reaped.status, "failed");
+    assert.equal(reaped.dispatch_status, "dispatched_unavailable");
+    assert.equal(reaped.orphan, true);
+    assert.equal(reaped.cleanup_status, "confirmed");
+    assert.equal(workerIdentityMatches(providerWorker), false);
+  }
+});
+
+test("manager loss publishes a terminal result from the operation snapshot when its job file is missing", async () => {
+  const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(slow) }); const broker = new Broker(value);
+  let manager = null; let worker = null; let guardian = null; let runtimeId = null;
+
+  try {
+    const start = broker.startManaged(request(material.attachment), "manager-lost-job-missing"); runtimeId = start.runtime_id;
+    let state;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      state = readRuntime(root, runtimeId);
+      if (state.managed.operations[0].manager && state.providers.kimi?.worker && state.providers.kimi.status === "running") break;
+      await delay(10);
+    }
+    const operation = state.managed.operations[0]; manager = operation.manager; worker = state.providers.kimi.worker;
+    assert.ok(manager && workerIdentityMatches(manager));
+    assert.ok(worker && workerIdentityMatches(worker));
+    assert.equal(process.kill(manager.pid, "SIGTERM"), true);
+    for (let attempt = 0; attempt < 100 && workerIdentityMatches(manager); attempt += 1) await delay(10);
+    assert.equal(workerIdentityMatches(manager), false, "the exact manager identity is confirmed gone");
+    fs.rmSync(path.join(root, runtimeId, "managed", "operations", operation.operation_id + ".json"));
+
+    let terminalResult = null; let statusError = null; const until = Date.now() + 10_000;
+    while (Date.now() < until) {
+      try {
+        const current = broker.managedStatus(runtimeId);
+        if (current.state === "terminal") { terminalResult = current; break; }
+        assert.equal(current.state, "running");
+      } catch (error) { statusError = error; break; }
+      await delay(25);
+    }
+    assert.equal(statusError, null, statusError?.message);
+    assert.ok(terminalResult, "confirmed manager loss must reach a public terminal state without the private job file");
+    assert.equal(workerIdentityMatches(worker), false, "the terminal state follows confirmed provider cleanup");
+    assert.equal(terminalResult.group.providers[0].error.code, "SESSION_MANAGER_LOST");
+    assert.equal(readRuntime(root, runtimeId).providers.kimi.cleanup_status, "confirmed");
+  } finally {
+    if (manager && workerIdentityMatches(manager)) process.kill(manager.pid, "SIGKILL");
+    if (worker && workerIdentityMatches(worker)) { try { process.kill(-worker.pid, "SIGKILL"); } catch {} }
+    if (runtimeId) {
+      try { guardian = JSON.parse(fs.readFileSync(path.join(root, runtimeId, ".guardian", "owner.json"), "utf8")); } catch {}
+    }
+    if (guardian && workerIdentityMatches(guardian)) process.kill(guardian.pid, "SIGKILL");
+    await removeTempTree(root);
+  }
+});
+
+test("manager-loss terminal fallback rejects corrupt or identity-mismatched job snapshots", async () => {
+  const cases = [
+    { name: "corrupt-json", expectedCode: "MANAGED_JOB_INVALID", rewrite: () => "{\n" },
+    { name: "runtime-id-mismatch", expectedCode: "MANAGED_JOB_IDENTITY_MISMATCH", rewrite: (job) => JSON.stringify({ ...job, runtime_id: "different-runtime" }) },
+    { name: "operation-id-mismatch", expectedCode: "MANAGED_JOB_IDENTITY_MISMATCH", rewrite: (job) => JSON.stringify({ ...job, operation_id: "different-operation" }) },
+  ];
+  const outcomes = [];
+
+  for (const scenario of cases) {
+    const root = temp(); const material = source(root); const value = config(root, [material], { kimi: provider(slow) }); const broker = new Broker(value);
+    let manager = null; let worker = null; let guardian = null; let runtimeId = null;
+    const killIfStillMatching = (identity, pid = identity?.pid) => {
+      if (!identity || !workerIdentityMatches(identity)) return;
+      try { process.kill(pid, "SIGKILL"); }
+      catch (error) { if (error?.code !== "ESRCH") throw error; }
+    };
+    try {
+      const start = broker.startManaged(request(material.attachment), "manager-lost-job-" + scenario.name); runtimeId = start.runtime_id;
+      let state;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        state = readRuntime(root, runtimeId);
+        if (state.managed.operations[0].manager && state.providers.kimi?.worker && state.providers.kimi.status === "running") break;
+        await delay(10);
+      }
+      const operation = state.managed.operations[0]; manager = operation.manager; worker = state.providers.kimi.worker;
+      assert.ok(manager && workerIdentityMatches(manager));
+      assert.ok(worker && workerIdentityMatches(worker));
+      assert.equal(process.kill(manager.pid, "SIGTERM"), true);
+      for (let attempt = 0; attempt < 100 && workerIdentityMatches(manager); attempt += 1) await delay(10);
+      assert.equal(workerIdentityMatches(manager), false, "the exact manager identity is confirmed gone");
+
+      const jobPath = path.join(root, runtimeId, "managed", "operations", operation.operation_id + ".json");
+      assert.equal(fs.existsSync(jobPath), true, "the private job snapshot exists before corruption");
+      const job = scenario.name === "corrupt-json" ? null : JSON.parse(fs.readFileSync(jobPath, "utf8"));
+      fs.writeFileSync(jobPath, scenario.rewrite(job));
+
+      let terminalResult = null; let statusError = null; const until = Date.now() + 10_000;
+      while (Date.now() < until) {
+        try {
+          const current = broker.managedStatus(runtimeId);
+          if (current.state === "terminal") { terminalResult = current; break; }
+          assert.equal(current.state, "running");
+        } catch (error) { statusError = error; break; }
+        await delay(25);
+      }
+      outcomes.push({ name: scenario.name, expectedCode: scenario.expectedCode, actualCode: statusError?.code ?? null, terminal: terminalResult !== null, operationState: readRuntime(root, runtimeId).managed.operations[0].state });
+    } finally {
+      killIfStillMatching(manager);
+      killIfStillMatching(worker, worker && -worker.pid);
+      if (runtimeId) {
+        try { guardian = JSON.parse(fs.readFileSync(path.join(root, runtimeId, ".guardian", "owner.json"), "utf8")); }
+        catch (error) { if (error?.code !== "ENOENT") throw error; }
+      }
+      killIfStillMatching(guardian);
+      await removeTempTree(root);
+    }
+  }
+
+  assert.deepEqual(outcomes.map(({ actualCode }) => actualCode), cases.map(({ expectedCode }) => expectedCode), JSON.stringify(outcomes));
+  assert.deepEqual(outcomes.map(({ terminal }) => terminal), [false, false, false], JSON.stringify(outcomes));
+  assert.deepEqual(outcomes.map(({ operationState }) => operationState), ["running", "running", "running"], JSON.stringify(outcomes));
 });
 
 test("fast managed completion preserves its terminal group", async () => {

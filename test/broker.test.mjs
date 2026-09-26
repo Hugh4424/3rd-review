@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { Broker } from "../lib/broker.mjs";
@@ -22,6 +23,13 @@ function config(root, tiers = [["claude-code", "kimi", "codex", "opencode"]]) {
   return validateConfig({ version: 4, runtime: { root, ttl_hours: 24, max_prompt_bytes: 10000, max_output_bytes: 100000, liveness_interval_ms: 5 }, tiers, providers: Object.fromEntries(ids.map((id) => [id, { enabled: true, command: fake, model: null, effort: null, thinking: null, auth: { type: "native" }, env: [] }])) });
 }
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), "3rd-review-v4-test-")); }
+function fileOnlyAttachment(value) {
+  const root = temp(); const name = "review.md"; const contents = "bounded route test material";
+  fs.writeFileSync(path.join(root, name), contents);
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  value.attachment_roots = [{ root, sources: [name] }];
+  return { root, delivery: "file_only", manifest: { version: 1, bundle_id: `route-test-${sha256.slice(0, 12)}`, entries: [{ source: name, destination: name, size: Buffer.byteLength(contents), sha256, embed: false }] } };
+}
 async function eventually(check, timeoutMs = 3_000) { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 20)); } assert.fail("condition did not become true"); }
 
 test("legacy elapsed-time configuration is rejected", () => {
@@ -50,6 +58,149 @@ test("config keeps usable tiers when dormant providers or duplicate routes exist
 
   value.tiers = [["unknown-provider"]];
   assert.throws(() => validateConfig(value), /references unknown provider/);
+});
+
+test("active provider survives elapsed execution time and remains explicitly cancellable", async (t) => {
+  const runtime = temp();
+  const value = config(runtime, [["kimi"]]);
+  value.providers.kimi.command = slow;
+  let providerPid = null;
+  const broker = new Broker(value);
+  const existingRuntimes = new Set(fs.readdirSync(runtime));
+  const execution = broker.run({ version: 4, host_provider: "codex", prompt: "remain active until cancelled", continuation: null });
+  const runtimeId = fs.readdirSync(runtime).find((candidate) => !existingRuntimes.has(candidate));
+
+  try {
+    assert.ok(runtimeId, "run should create one runtime synchronously");
+    await eventually(() => {
+      const provider = readRuntime(runtime, runtimeId).providers?.kimi;
+      if (provider?.status !== "running") return false;
+      providerPid = provider.pid;
+      return true;
+    });
+    const beforeJump = Date.now();
+    t.mock.method(Date, "now", () => beforeJump + 600_001);
+    let afterElapsed;
+    let aliveAfterElapsed;
+    try {
+      assert.ok(Date.now() - beforeJump > 600_000);
+      afterElapsed = readRuntime(runtime, runtimeId).providers.kimi;
+      aliveAfterElapsed = isAlive(providerPid);
+    } finally {
+      t.mock.restoreAll();
+    }
+    const cancelled = broker.cancel(runtimeId, "kimi");
+    const result = await execution;
+    const member = result.providers.find((item) => item.provider === "kimi");
+
+    assert.deepEqual({
+      status_after_elapsed: afterElapsed.status,
+      alive_after_elapsed: aliveAfterElapsed,
+      explicit_cancelled: cancelled.cancelled,
+      final_status: member?.status,
+      final_error: member?.error?.code,
+    }, {
+      status_after_elapsed: "running",
+      alive_after_elapsed: true,
+      explicit_cancelled: true,
+      final_status: "cancelled",
+      final_error: "CANCELLED",
+    });
+  } finally {
+    t.mock.restoreAll();
+    if (runtimeId) {
+      try {
+        if (readRuntime(runtime, runtimeId).providers?.kimi?.status === "running") broker.shutdown();
+      } catch {}
+    }
+    await execution.catch(() => {});
+  }
+});
+
+test("explicit cancel stops an active provider", async () => {
+  const runtime = temp();
+  const value = config(runtime, [["kimi"]]);
+  value.providers.kimi.command = slow;
+  const broker = new Broker(value);
+  const existingRuntimes = new Set(fs.readdirSync(runtime));
+  const execution = broker.run({ version: 4, host_provider: "codex", prompt: "stop only when explicitly cancelled", continuation: null });
+  const runtimeId = fs.readdirSync(runtime).find((candidate) => !existingRuntimes.has(candidate));
+
+  try {
+    assert.ok(runtimeId, "run should create one runtime synchronously");
+    await eventually(() => readRuntime(runtime, runtimeId).providers?.kimi?.status === "running");
+    const cancelled = broker.cancel(runtimeId, "kimi");
+    const result = await execution;
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(result.providers[0].status, "cancelled");
+    assert.equal(result.providers[0].error.code, "CANCELLED");
+  } finally {
+    if (runtimeId) {
+      try {
+        if (readRuntime(runtime, runtimeId).providers?.kimi?.status === "running") broker.shutdown();
+      } catch {}
+    }
+    await execution.catch(() => {});
+  }
+});
+
+test("direction flow material without review_flow fails before provider dispatch", async () => {
+  const runtime = temp();
+  const source = temp();
+  const flow = {
+    version: "direction-review.v1",
+    public_request_count: 1,
+    steps: [
+      { id: "reconstruct", visible: ["raw_requirement", "objective_facts"], hidden_until: "reveal" },
+      { id: "reveal", after: ["reconstruct"], visible: ["current_selection", "alternatives", "selection_rationale", "key_assumptions", "independent_reconstruction"] },
+      { id: "challenge", after: ["reveal"], visible: ["revealed_choice", "independent_reconstruction"], output: "findings" },
+    ],
+    output: { one_logical_fact: true, one_provider_result: true },
+  };
+  fs.writeFileSync(path.join(source, "direction_flow.json"), `${JSON.stringify(flow)}\n`);
+  fs.writeFileSync(path.join(source, "manifest.json"), "{}\n");
+  const entries = ["direction_flow.json", "manifest.json"].map((name) => {
+    const bytes = fs.readFileSync(path.join(source, name));
+    return { source: name, destination: name, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), embed: false };
+  });
+  const value = config(runtime, [["kimi"]]);
+  value.attachment_roots = [{ root: source, sources: ["direction_flow.json", "manifest.json"] }];
+  const starts = [];
+  const broker = new Broker(value, { onStart: () => starts.push(true) });
+
+  await assert.rejects(() => broker.run({
+    version: 4,
+    host_provider: "codex",
+    required_result_protocol: "workflowhub-result.v3",
+    provider_allowlist: ["kimi"],
+    review_mode: "single_round",
+    prompt: "review the supplied direction flow",
+    continuation: null,
+    attachments: { root: source, delivery: "file_only", manifest: { version: 1, bundle_id: "direction-flow-missing-request", entries } },
+  }), { code: "MATERIAL_INCOMPLETE" });
+  assert.deepEqual(starts, []);
+});
+
+test("immediate provider failure preserves a successful sibling and v3 keeps deadline_ms null", async () => {
+  const runtime = temp();
+  const value = config(runtime, [["kimi", "claude-code"]]);
+  value.providers.kimi.command = providerFailure;
+  value.providers["claude-code"].command = fake;
+  const attachments = fileOnlyAttachment(value);
+  const broker = new Broker(value);
+  const result = await broker.run({
+    version: 4, host_provider: "opencode", required_result_protocol: "workflowhub-result.v3",
+    provider_allowlist: ["kimi", "claude-code"], prompt: "parallel provider failure", review_mode: "single_round", continuation: null, attachments,
+  });
+  const members = Object.fromEntries(result.providers.map((item) => [item.identity.provider, item]));
+  assert.equal(result.outcome, "partial");
+  assert.equal(members.kimi.status, "failed");
+  assert.equal(members.kimi.error.code, "PROVIDER_HEALTH_FAILED");
+  assert.equal(members["claude-code"].status, "completed");
+  assert.ok(result.providers.every((item) => item.deadline_ms === null));
+  const persisted = readRuntime(value.runtime.root, result.runtime_id).providers.kimi;
+  assert.equal(persisted.status, "failed");
+  assert.equal(persisted.error.code, "PROVIDER_HEALTH_FAILED");
 });
 
 test("default route runs every heterologous provider in its first tier", async () => {
@@ -158,28 +309,15 @@ test("preserves the original OpenCode no-terminal error when recovery fails", as
   assert.equal(recovery.recovery_error.code, "PROVIDER_NO_TERMINAL_RESULT"); assert.ok(recovery.recovery_raw_output_refs.raw_stdout_ref);
 });
 
-test("provider terminal recovery stays within its scoped recovery budget", async () => {
+test("provider terminal recovery completes without an elapsed-time cutoff", async () => {
   const root = temp(); const value = config(root, [["opencode"]]);
   value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "deadline";
-  const result = await new Broker(value, { terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
+  const result = await new Broker(value).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
   const state = readRuntime(root, result.runtime_id); const provider = state.providers.opencode;
   assert.equal(result.providers[0].status, "completed");
   assert.equal(provider.attempts.length, 2);
   assert.equal(provider.attempts[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
   assert.equal(provider.attempts[1].error, null);
-});
-
-test("bounded terminal recovery fails closed when the resumed provider never terminates", async () => {
-  const root = temp(); const value = config(root, [["opencode"]]);
-  value.providers.opencode.command = terminalRecovery; value.providers.opencode.model = "recovery-hang";
-  const result = await new Broker(value, { terminalRecoveryTimeoutMs: 20, terminationGraceMs: 10 }).run({ version: 4, host_provider: "codex", prompt: "review", continuation: null });
-  assert.equal(result.providers[0].status, "failed");
-  assert.equal(result.providers[0].error.code, "PROVIDER_NO_TERMINAL_RESULT");
-  const state = readRuntime(root, result.runtime_id); const recovery = state.providers.opencode.terminal_recovery;
-  assert.equal(recovery.recovered, undefined);
-  assert.equal(recovery.recovery_error.code, "PROVIDER_NO_TERMINAL_RESULT");
-  assert.ok(recovery.recovery_raw_output_refs.raw_stdout_ref);
-  assert.ok(state.providers.opencode.attempts[1].duration_ms < 500);
 });
 
 test("does not recover an OpenCode terminal failure without a session id", async () => {
